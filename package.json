@@ -1,0 +1,23 @@
+{
+  "name": "streamer-llm",
+  "version": "1.0.0",
+  "description": "Just a Node.js interface to a chat completion API to create responses and (optionally) send them to a TTS service",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Prolix OCs",
+  "license": "ISC",
+  "dependencies": {
+    "@llm-tools/embedjs": "^0.1.7",
+    "@llm-tools/embedjs-hnswlib": "^0.1.7",
+    "@llm-tools/embedjs-ollama": "^0.1.7",
+    "@zilliz/milvus2-sdk-node": "^2.4.9",
+    "ansi-colors-es6": "^5.0.0",
+    "axios": "^1.7.7",
+    "fastify": "^5.0.0",
+    "fs-extra": "^11.2.0",
+    "moment": "^2.30.1"
+  }
+}
