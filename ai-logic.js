@@ -21,9 +21,7 @@ const intelligenceSchema = (userId) => {
             {
                 name: 'embedding',
                 data_type: DataType.FloatVector,
-                type_params: {
-                    dim: 1024
-                },
+                dim: 1024,
                 is_primary_key: false,
                 auto_id: false,
             },
@@ -63,9 +61,7 @@ const chatSchema = (userId) => {
             {
                 name: 'embedding',
                 data_type: DataType.FloatVector,
-                type_params: {
-                    dim: 1024
-                },
+                dim: 1024,
                 is_primary_key: false,
                 auto_id: false,
             },
@@ -126,9 +122,7 @@ const voiceSchema = (userId) => {
             {
                 name: 'embedding',
                 data_type: DataType.FloatVector,
-                type_params: {
-                    dim: 1024
-                },
+                dim: 1024,
                 is_primary_key: false,
                 auto_id: false,
             },
@@ -204,7 +198,7 @@ async function returnCollectionSchema(collection, userId) {
 const authTokens = await returnAPIKeys()
 
 async function createCollection(collection, userId) {
-    logger.log('Milvus', `Recreating collection '${collection}' from scratch...`)
+    logger.log('Milvus', `Recreating collection '${collection}' from scratch... for ${userId}`)
     try {
         const schema = await returnCollectionSchema(collection, userId)
         const response = await client.createCollection(schema);
