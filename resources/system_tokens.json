@@ -1,0 +1,26 @@
+{
+    "mistral": {
+        "controlToken": true,
+        "tokens": {
+            "controlOpen": "<s>",
+            "controlClose": "</s>",
+            "systemOpen": "[INST]",
+            "systemClose": "[/INST]",
+            "assistantOpen": "[INST]",
+            "assistantClose": "[/INST]",
+            "userOpen": "[INST]",
+            "userClose": "[/INST]"
+        }
+    },
+    "qwen": {
+        "controlToken": false,
+        "tokens": {
+            "systemOpen": "<im_start>system",
+            "systemClose": "<im_end>",
+            "assistantOpen": "<im_start>assistant",
+            "assistantClose": "<im_end>",
+            "userOpen": "<im_start>user",
+            "userClose": "<im_end>"
+        }
+    }
+}

@@ -1,0 +1,30 @@
+[
+    {
+        "display_name": "Player Name",
+        "email": "player@player.com",
+        "user_id": "player1",
+        "player_name": "Player",
+        "socials": {
+            "ttv": "Player_TTV",
+            "tt": "Player_TT",
+            "yt": "Player YT"
+        },
+        "commands_list": [
+            "!discord",
+            "!socials",
+            "!specs",
+            "!changegame",
+            "!changetitle"
+        ],
+        "tts_enabled": true,
+        "bot_twitch": "@AiTwitchHandle",
+        "speaker_file": "voice_path/",
+        "rvc_model": "RVC_MODEL/RVC_Model.pth",
+        "rvc_pitch": "0",
+        "bot_name": "AiBot",
+        "role": "ADMIN",
+        "api_token": "",
+        "api_token_type": "Bearer",
+        "is_local": true
+    }
+]
