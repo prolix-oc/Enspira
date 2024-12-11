@@ -74,7 +74,6 @@ const contextPrompt = async (message, promptData) => {
         instructionTemplate = instructionTemplate.split(placeholder).join(value);
     }
     const tokenCount = await promptTokenCount(instructionTemplate, process.env.LLM_MODEL_TYPE)
-    fs.writeFileSync(`./sample_prompt_${process.env.LLM_MODEL_TYPE}.txt`, instructionTemplate)
     logger.log('LLM', `Prompt is using ${sysPromptCount + userPromptCount} of your available ${process.env.MAX_TOKEN_COUNT} tokens.`);
     return instructionTemplate;
 }
@@ -139,7 +138,6 @@ const contextPromptChat = async (promptData, message, userID) => {
     for (const [placeholder, value] of Object.entries(postProcessReplacements)) {
         instructionTemplate = instructionTemplate.split(placeholder).join(value);
     }
-    fs.writeFileSync(`./sample_prompt_${process.env.LLM_MODEL_TYPE}_chat.txt`, instructionTemplate)
     const promptWithSamplers = await formChatRequestBody(instructionTemplate, message, promptData.user)
     const sysPromptCount = await promptTokenCount(instructionTemplate, process.env.LLM_MODEL_TYPE)
     const userPromptCount = await promptTokenCount(message, process.env.LLM_MODEL_TYPE)
@@ -200,7 +198,6 @@ const eventPromptChat = async (message, userId) => {
     for (const [placeholder, value] of Object.entries(postProcessReplacements)) {
         instructionTemplate = instructionTemplate.split(placeholder).join(value);
     }
-    fs.writeFileSync(`./sample_prompt_${process.env.LLM_MODEL_TYPE}_event.txt`, instructionTemplate)
     const promptWithSamplers = await formChatRequestBody(instructionTemplate, message)
     const sysPromptCount = await promptTokenCount(instructionTemplate, process.env.LLM_MODEL_TYPE)
     const userPromptCount = await promptTokenCount(message, process.env.LLM_MODEL_TYPE)
@@ -227,7 +224,6 @@ const queryPrompt = async (message, userId) => {
     for (const [placeholder, value] of Object.entries(replacements)) {
         instructionTemplate = instructionTemplate.split(placeholder).join(value);
     }
-    fs.writeFileSync('./sample_query_prompt.txt', instructionTemplate)
     const sysPromptCount = await promptTokenCount(instructionTemplate, process.env.QUERY_MODEL_TYPE)
     const userPromptCount = await promptTokenCount(message, process.env.QUERY_MODEL_TYPE)
     logger.log('LLM', `Prompt is using ${sysPromptCount + userPromptCount} of your available ${process.env.QUERY_MAX_TOKENS} tokens.`);

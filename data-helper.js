@@ -54,10 +54,8 @@ const resultsReranked = async (contextBody, message, userId, requiresSearch = fa
                 const content = item.text_content || item.summary;
                 if (content) {
                     resultsRaw.push(content);
-                    //logger.log('Embedding', 'Pushing document over.');
                 }
             }
-            logger.log('Reranker', `Documents sent: ${resultsRaw.length}`);
             logger.log('Embedding', 'Asking rerank helper to optimize...');
             const rerankOptimized = await rerankString(message, userId);
             const rerankData = {
@@ -65,9 +63,6 @@ const resultsReranked = async (contextBody, message, userId, requiresSearch = fa
                 query: rerankOptimized,
                 documents: resultsRaw
             };
-
-            const fileName = `./sample-post-${requiresSearch ? 'context' : 'chat'}.txt`;
-            fs.writeFileSync(fileName, JSON.stringify(rerankData, null, 2));
 
             var rerankedMissed = 0;
             var rerankProcessed = [];
@@ -87,15 +82,11 @@ const resultsReranked = async (contextBody, message, userId, requiresSearch = fa
                 maxContentLength: Infinity,
                 maxBodyLength: Infinity
             });
-            const fileEnding = randomBytes(12).toString("hex")
-            fs.writeFileSync(`./sample-rerank-${fileEnding}.txt`, JSON.stringify(response.data.results));
             logger.log('Embedding', `Rerank finished. Sorting results.`);
             const rerankedArray = response.data.results;
-            logger.log('Reranker', `Documents received: ${rerankedArray.length}`);
 
             for (const item of rerankedArray) {
                 if (item.relevance_score > 0.5) {
-                    logger.log('Embedding', `Matched a document with high score.`);
                     const indexNum = parseInt(item.index);
                     rerankProcessed.push(resultsRaw[indexNum]);
                 } else {
@@ -104,7 +95,7 @@ const resultsReranked = async (contextBody, message, userId, requiresSearch = fa
             }
 
             if (rerankProcessed.length < 6) {
-                logger.log('Embedding', `Not enough high-scoring matches, taking top 5 results.`);
+                logger.log('Embedding', `Not enough high-scoring matches, taking top 6 results.`);
                 rerankProcessed = rerankedArray
                     .slice(0, 6)
                     .map(item => resultsRaw[parseInt(item.index)]);
@@ -131,7 +122,7 @@ const resultsReranked = async (contextBody, message, userId, requiresSearch = fa
 };
 
 async function startWebResults(message, userId) {
-    logger.log('LLM', `Starting web search for ${message}`)
+    logger.log('LLM', `Starting web search for '${message}'`)
     var searchedResults = ""
     const query = await inferSearchParam(message, userId)
     if (query === "pass") {
@@ -200,8 +191,6 @@ const pullFromWeb = async (urls) => {
             if (article) {
                 const content = `- From the web page ${link.url}:\n${cleanContentWithNewlines(article.textContent)}\n`;
                 pageContentText += content;
-                fs.appendFileSync('./sample-scrape.txt', content);
-                logger.log('Augment', `Successfully pulled the page contents for "${link.url}".`);
             } else {
                 logger.log('Augment', `Could not parse content from "${link.url}".`);
             }
@@ -242,9 +231,11 @@ const getEmotionRanking = (emotions) => {
     const getEmotionDescription = (label) => {
         switch (label) {
             case "curious":
+                return "a quizzical and curious vibe";
             case "surprise":
+                return "shock and awe";
             case "think":
-                return "curiosity or wonder";
+                return "curiosity";
             case "cheeky":
                 return "cheeky banter";
             case "grumpy":
@@ -262,6 +253,7 @@ const getEmotionRanking = (emotions) => {
             case "impatient":
                 return "frustration";
             case "energetic":
+                return "an electrifying energy"
             case "joy":
                 return "an uplifting and vibrant energy";
             case "serious":
@@ -273,8 +265,9 @@ const getEmotionRanking = (emotions) => {
             case "love":
                 return "a heartfelt or warm sentiment";
             case "confuse":
+                return "a puzzled demeanor"
             case "suspicious":
-                return "a puzzled or doubtful tone";
+                return "a doubtful tone";
             case "sadness":
                 return "melancholy";
             default:

@@ -198,7 +198,7 @@ async function returnCollectionSchema(collection, userId) {
 const authTokens = await returnAPIKeys()
 
 async function createCollection(collection, userId) {
-    logger.log('Milvus', `Recreating collection '${collection}' from scratch... for ${userId}`)
+    logger.log('Milvus', `Recreating collection '${collection}' from scratch for ${userId}...`)
     try {
         const schema = await returnCollectionSchema(collection, userId)
         const response = await client.createCollection(schema);
@@ -288,21 +288,15 @@ async function findRelevantChats(message, user, userId, topK = 10) {
     try {
         const created = await checkAndCreateCollection(process.env.CHAT_COLLECTION, userId)
         if (!created) {
-            logger.log('Milvus', "It's fucked.")
             return false;
         } else {
-            const loadCollect = await loadCollectionIfNeeded(process.env.VOICE_COLLECTION, userId);
-            logger.log('Milvus', "We loaded the fucker " + loadCollect)
-            logger.log('Milvus', "It's unfucked.")
+            const loadCollect = await loadCollectionIfNeeded(process.env.CHAT_COLLECTION, userId);
         }
         const messageEmbedding = await getMessageEmbedding(message);
-        logger.log('Milvus', `Message embedding dimension: ${messageEmbedding.length}`);
         const collectionSchema = await getCollectionSchema(process.env.CHAT_COLLECTION, userId);
 
-        logger.log('Milvus', `Schema loaded.`);
 
         const embeddingField = collectionSchema.fields.find(field => field.name === 'embedding');
-        logger.log('Milvus', `Found relevant embeddings.`)
         const expectedDim = embeddingField && embeddingField.type_params[0] ? parseInt(embeddingField.type_params[0].value) : undefined;
 
         if (expectedDim === undefined) {
@@ -310,15 +304,12 @@ async function findRelevantChats(message, user, userId, topK = 10) {
             return;
         }
 
-        logger.log('Milvus', `Expected Dimension: ${expectedDim}`);
-
         if (messageEmbedding.length !== expectedDim) {
             logger.log('Milvus', `Dimension mismatch: expected ${expectedDim}, got ${messageEmbedding.length}.`);
             return;
         }
 
         const chatSearchResponse = await searchDocumentsInMilvus(messageEmbedding, `${process.env.CHAT_COLLECTION}`, 'text_content', topK, userId);
-        logger.log('Milvus', `Found these results: ${JSON.stringify(chatSearchResponse.results)}`)
         return chatSearchResponse.results
 
     } catch (error) {
@@ -332,12 +323,9 @@ async function findRelevantDocuments(message, userId, topK = 10) {
         logger.log('Milvus', `Collection ${process.env.INTELLIGENCE_COLLECTION}_${userId} does not exist.`);
         const created = await checkAndCreateCollection(process.env.INTELLIGENCE_COLLECTION, userId)
         if (!created) {
-            logger.log('Milvus', "It's fucked.")
             return false;
         } else {
-            const loadCollect = await loadCollectionIfNeeded(process.env.INTELLIGENCE_COLLECTION, userId);
-            logger.log('Milvus', "We loaded the fucker " + loadCollect)
-            logger.log('Milvus', "It's unfucked.")
+            await loadCollectionIfNeeded(process.env.INTELLIGENCE_COLLECTION, userId);
         }
     }
     try {
@@ -348,13 +336,9 @@ async function findRelevantDocuments(message, userId, topK = 10) {
         }
 
         const messageEmbedding = await getMessageEmbedding(message);
-        logger.log('Milvus', `Message embedding dimension: ${messageEmbedding.length}`);
         const collectionSchema = await getCollectionSchema(process.env.INTELLIGENCE_COLLECTION, userId);
 
-        logger.log('Milvus', `Schema loaded.`);
-
         const embeddingField = collectionSchema.fields.find(field => field.name === 'embedding');
-        logger.log('Milvus', `Found embeddings field.`)
         const expectedDim = embeddingField && embeddingField.type_params[0] ? parseInt(embeddingField.type_params[0].value) : undefined;
 
         if (expectedDim === undefined) {
@@ -362,10 +346,8 @@ async function findRelevantDocuments(message, userId, topK = 10) {
             return;
         }
 
-        logger.log('Milvus', `Expected Dimension: ${expectedDim}`);
-
         if (messageEmbedding.length !== expectedDim) {
-            logger.log('Milvus', `Dimension mismatch: expected ${expectedDim}, got ${messageEmbedding.length}.`);
+            logger.log('Milvus', `Dimension mismatch: expected ${expectedDim} dimensions, got ${messageEmbedding.length}.`);
             return;
         }
 
@@ -382,12 +364,9 @@ async function findRelevantVoiceInMilvus(message, userId, topK = 5) {
         logger.log('Milvus', `Collection ${process.env.INTELLIGENCE_COLLECTION}_${userId} does not exist.`);
         const created = await checkAndCreateCollection(process.env.VOICE_COLLECTION, userId)
         if (!created) {
-            logger.log('Milvus', "It's fucked.")
             return false;
         } else {
-            const loadCollect = await loadCollectionIfNeeded(process.env.VOICE_COLLECTION, userId);
-            logger.log('Milvus', "We loaded the fucker " + loadCollect)
-            logger.log('Milvus', "It's unfucked.")
+            await loadCollectionIfNeeded(process.env.VOICE_COLLECTION, userId);
         }
     }
     try {
@@ -398,21 +377,15 @@ async function findRelevantVoiceInMilvus(message, userId, topK = 5) {
         }
 
         const messageEmbedding = await getMessageEmbedding(message);
-        logger.log('Milvus', `Message embedding dimension: ${messageEmbedding.length}`);
         const collectionSchema = await getCollectionSchema(process.env.INTELLIGENCE_COLLECTION, userId);
 
-        logger.log('Milvus', `Schema loaded.`);
-
         const embeddingField = collectionSchema.fields.find(field => field.name === 'embedding');
-        logger.log('Milvus', `Found relevant embeddings.`)
         const expectedDim = embeddingField && embeddingField.type_params[0] ? parseInt(embeddingField.type_params[0].value) : undefined;
 
         if (expectedDim === undefined) {
             logger.log('Milvus', 'Could not retrieve the expected dimension for the embedding field.');
             return;
         }
-
-        logger.log('Milvus', `Expected Dimension: ${expectedDim}`);
 
         if (messageEmbedding.length !== expectedDim) {
             logger.log('Milvus', `Dimension mismatch: expected ${expectedDim}, got ${messageEmbedding.length}.`);
@@ -433,15 +406,12 @@ async function insertVectorsToMilvus(data, collection, userId) {
         logger.log('Milvus', `Collection ${collection} does not exist.`);
         const created = await checkAndCreateCollection(process.env.INTELLIGENCE_COLLECTION, userId)
         if (!created) {
-            logger.log('Milvus', "It's fucked.")
             return false;
         } else {
             const loadCollect = await loadCollectionIfNeeded(collection, userId);
-            logger.log('Milvus', "We loaded the fucker " + loadCollect)
-            logger.log('Milvus', "It's unfucked.")
         }
     } else {
-        logger.log('Milvus', `Collection '${collection}_${userId}' is available.`);
+        logger.log('Milvus', `Collection '${collection}_${userId}' is now available.`);
     }
 
     try {
@@ -486,7 +456,7 @@ async function insertVectorsToMilvus(data, collection, userId) {
                     collection_name: `${collection}_${userId}`,
                     fields_data: uniqueFieldsData
                 });
-                logger.log('Milvus Std', `Inserted data.`);
+                logger.log('Milvus', `Inserted data.`);
             }
 
         }
@@ -512,12 +482,9 @@ async function insertAugmentVectorsToMilvus(vectors, content, relational, userId
         logger.log('Milvus', `Collection '${process.env.INTELLIGENCE_COLLECTION}_${userId}' does not exist.`);
         const created = await checkAndCreateCollection(process.env.INTELLIGENCE_COLLECTION, userId)
         if (!created) {
-            logger.log('Milvus', "It's fucked.")
             return false;
         } else {
-            const loadCollect = await loadCollectionIfNeeded(process.env.INTELLIGENCE_COLLECTION, userId);
-            logger.log('Milvus', "We loaded the fucker " + loadCollect)
-            logger.log('Milvus', "It's unfucked.")
+            await loadCollectionIfNeeded(process.env.INTELLIGENCE_COLLECTION, userId);
         }
     } else {
         logger.log('Milvus', `Collection '${process.env.INTELLIGENCE_COLLECTION}_${userId}' is available.`);
@@ -568,7 +535,6 @@ async function retrieveWebContext(urls, query, subject, userId) {
         }
     })
 
-    logger.log('LLM', `Summary response: ${JSON.stringify(completion.choices, null, "  ")}, error: ${JSON.stringify(completion.error, null, "  ")}`)
     const fullVectors = await getMessageEmbedding(query)
     const makeSummary = `### Summary of ${query}:\n${completion.choices[0].message.content}`
     const doneAug = await insertAugmentVectorsToMilvus(fullVectors, makeSummary, subject, userId)
@@ -629,7 +595,6 @@ async function insertChatVectorsToMilvus(vectors, message, sumText, response, us
         collection_name: `${process.env.CHAT_COLLECTION}_${userId}`,
         output_fields: ['count(*)']
     });
-    logger.log('Milvus Chat', `Received chat embedding has ${vectors.length} indexes`)
     const fieldsData = [{
         embedding: vectors,
         username: user,
@@ -693,7 +658,7 @@ async function insertVoiceVectorsIntoMilvus(vectors, summary, message, response,
             logger.log('Milvus Chat', `Could not spawn collection '${process.env.VOICE_COLLECTION}_${userId}'`)
             return false;
         } else {
-            const loadCollect = await loadCollectionIfNeeded(process.env.VOICE_COLLECTION, userId);
+            await loadCollectionIfNeeded(process.env.VOICE_COLLECTION, userId);
             logger.log('Milvus Chat', `Successfully loaded collection '${process.env.VOICE_COLLECTION}_${userId}'`)
         }
     }
@@ -855,7 +820,6 @@ async function processFiles(directory, userId) {
 }
 
 async function respondWithContext(message, username, userID) {
-    logger.log('System', `Made it to the base of it.`)
     const rawContext = await findRelevantDocuments(message, userID, 10)
     const voiceCtx = await findRelevantVoiceInMilvus(message, userID, 3)
     const chatHistory = await findRelevantChats(message, username, userID, 3)
@@ -890,7 +854,6 @@ async function rerankString(message, userId) {
     })
     const promptRerank = await rerankPrompt(message, userId)
     const response = await openai.chat.completions.create(promptRerank)
-    logger.log('LLM', `Rerank model responded: ${response.choices[0].message.content}`)
     return response.choices[0].message.content
 }
 
@@ -930,8 +893,6 @@ async function respondWithVoice(message, userId) {
             const audioUrl = `http://${process.env.PUBLIC_IP}:7851${res.data.output_file_url}`
             return audioUrl
         }
-        logger.log('Voice', `Generation from AllTalk successful.`)
-        //await audioPlayer.playAudioOnDevice(audioUrl, process.env.AUDIO_PLAYBACK_DEVICE)
     } else {
         console.error(`Request failed with: ${res.data}`)
     }
@@ -1018,7 +979,6 @@ async function addVoiceMessageAsVector(sumString, message, username, date, respo
 
 async function respondToEvent(event, userId) {
     const eventMessage = await returnTwitchEvent(event, userId)
-    logger.log('System', `Got done eventing: ${eventMessage}`)
     const instructPrompt = await eventPromptChat(eventMessage, userId)
 
     const openai = new OpenAI({
@@ -1086,7 +1046,7 @@ async function checkEndpoint(endpoint, key, modelName) {
     })
     if (endpoint === process.env.EMBEDDING_ENDPOINT) {
         if (process.env.EMBEDDING_API_KEY_TYPE === "infinity") {
-            const response = await axios.get('http://172.20.20.5:7997/models')
+            const response = await axios.get(`${process.env.EMBEDDING_ENDPOINT}/models`)
             if (response.data.data.id === modelName) {
                 return true;
             } else {

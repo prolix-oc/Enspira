@@ -152,7 +152,6 @@ async function checkForAuth(token) {
     var validObject = {}
     for await (const object of allTokens) {
         if (token.trim() === object.api_token) {
-            logger.log('API', `Valid token!`)
             validObject = object;
         }
     }

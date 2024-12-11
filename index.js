@@ -49,7 +49,6 @@ fastify.post('/voicereq', async (request, reply) => {
       const now = moment();
       const formattedDate = now.format('MMMM Do [at] h:mmA');
       const finalResp = await aiHelper.findRelevantVoiceInMilvus(data.message, authObject.player_name, authObject.user_id)
-      logger.log('API', `Got the voice message: ${data.message}`)
       logger.log('Server', `${process.env.USER_NAME} sent a voice message: ${data.message}`)
       if (finalResp !== "") {
         const voiceData = await aiHelper.respondToDirectVoice(data.message, authObject.user_id)
@@ -122,7 +121,6 @@ fastify.post('/chatreq', async (request, response) => {
           }
         }
       } else {
-        logger.log('API', 'Message fell into command match.')
         return { response: "OK" }
       }
     } else if (!(await containsCharacterName(data.message, authObject.user_id)) && !(await containsCharacterName(data.user, authObject.user_id))) {
@@ -154,11 +152,9 @@ fastify.post('/chatreq', async (request, response) => {
           }
         }
       } else {
-        logger.log('API', 'message fell into command match')
         return { response: "OK" }
       }
     } else {
-      logger.log('API', 'message from bot.')
       return { response: "OK" }
     }
   }
@@ -194,7 +190,7 @@ fastify.post('/eventreq', async (request, response) => {
   } else {
     const data = request.body
     var finalResp = ""
-    logger.log('Server', `A Twitch event fired, Type: ${data.eventType}`)
+    logger.log('Server', `A Twitch event fired for ${authObject.user_id}, type: ${data.eventType}`)
     finalResp = await aiHelper.respondToEvent(data, authObject.user_id)
     if (finalResp !== "" || finalResp !== undefined) {
       if (authObject.tts_enabled) {
