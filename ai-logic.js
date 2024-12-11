@@ -896,19 +896,12 @@ async function rerankString(message, userId) {
 
 async function respondWithoutContext(message) {
     const instruct = await promptWithBody(false, message, null);
-    const res = await axios({
-        method: "POST",
-        data: instruct,
-        headers: {
-            "x-api-key": process.env.TABBY_API_KEY
-        },
-        url: process.env.TABBY_API_BASE + "/completions",
+    const openai = new OpenAI({
+        baseURL: process.env.CHAT_COMPLETION_URL,
+        apiKey: process.env.CHAT_COMPLETION_KEY
     })
-    if (res.status == 200) {
-        return replyStripped(res.data.choices[0].text, userId)
-    } else {
-        return "null"
-    }
+    const response = await openai.chat.completions.create(instruct)
+    return replyStripped(response.choices[0].message.content, userId)
 }
 
 async function respondWithVoice(message, userId) {
@@ -934,7 +927,7 @@ async function respondWithVoice(message, userId) {
             const audioUrl = `${process.env.ALLTALK_BASE}${res.data.output_file_url}`;
             return audioUrl
         } else {
-            const audioUrl = `http://70.185.191.91:7851${res.data.output_file_url}`
+            const audioUrl = `http://${process.env.PUBLIC_IP}:7851${res.data.output_file_url}`
             return audioUrl
         }
         logger.log('Voice', `Generation from AllTalk successful.`)

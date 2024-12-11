@@ -341,7 +341,7 @@ const nonContextPrompt = async (message) => {
 
 async function formRequestBody(prompt) {
     var chatCompleteBody = {
-        model: process.env.TABBY_MODEL_NAME,
+        model: process.env.CHAT_COMPLETION_MODEL,
         prompt: prompt,
         max_tokens: process.env.LLM_MAX_TOKENS,
         generate_window: process.env.LLM_MAX_TOKENS,

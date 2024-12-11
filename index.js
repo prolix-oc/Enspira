@@ -223,7 +223,7 @@ async function preflightChecks() {
     llmStatuses: {
       allTalkIsOnline: allTalkRes.status == 200 ? true : false,
       embeddingIsOnline: await aiHelper.checkEndpoint(process.env.EMBEDDING_ENDPOINT, process.env.EMBEDDING_API_KEY, process.env.EMBEDDING_MODEL),
-      llmIsOnline: await aiHelper.checkEndpoint(process.env.TABBY_API_BASE, process.env.TABBY_API_KEY, process.env.TABBY_API_MODEL),
+      llmIsOnline: await aiHelper.checkEndpoint(process.env.CHAT_COMPLETION_URL, process.env.CHAT_COMPLETION_KEY, process.env.CHAT_COMPLETION_MODEL),
       summaryIsOnline: await aiHelper.checkEndpoint(process.env.SUMMARY_ENDPOINT, process.env.SUMMARY_API_KEY, process.env.SUMMARY_MODEL),
       queryIsOnline: await aiHelper.checkEndpoint(process.env.QUERY_ENDPOINT, process.env.QUERY_API_KEY, process.env.QUERY_MODEL),
       conversionIsOnline: await aiHelper.checkEndpoint(process.env.CONVERSION_ENDPOINT, process.env.CONVERSION_API_KEY, process.env.CONVERSION_MODEL)
