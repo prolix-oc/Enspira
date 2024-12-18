@@ -7001,12 +7001,8 @@
     "special_tokens": {
       "<s>": {
         "id": "<s>",
-        "ids": [
-          1
-        ],
-        "tokens": [
-          "<s>"
-        ]
+        "ids": [1],
+        "tokens": ["<s>"]
       }
     }
   },

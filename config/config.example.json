@@ -1,0 +1,121 @@
+{
+  "server": {
+    "authFilePath": "./auth/auth_keys.json",
+    "port": 3002,
+    "authRequired": true,
+    "endpoints": {
+      "external": "::",
+      "internal": "::"
+    }
+  },
+  "brave": {
+    "apiKey": ""
+  },
+  "milvus": {
+    "collections": {
+      "intelligence": "",
+      "voice": "",
+      "chat": "",
+      "user": ""
+    },
+    "endpoint": "",
+    "localTextDirectory": "./data"
+  },
+  "twitch": {
+    "maxChatsToSave": 40,
+    "maxCharLimit": 500
+  },
+  "models": {
+    "summary": {
+      "enabled": true,
+      "endpoint": "",
+      "apiKeyType": "oai",
+      "apiKey": "",
+      "model": "",
+      "modelType": "",
+      "maxTokens": 0
+    },
+    "query": {
+      "endpoint": "",
+      "apiKeyType": "",
+      "apiKey": "",
+      "model": "",
+      "modelType": "",
+      "maxTokens": 0
+    },
+    "chat": {
+      "endpoint": "",
+      "apiKeyType": "",
+      "apiKey": "",
+      "model": "",
+      "modelType": "",
+      "maxTokens": 0
+    },
+    "embedding": {
+      "endpoint": "",
+      "apiKey": "",
+      "apiKeyType": "",
+      "model": "",
+      "rerankingModel": "",
+      "classifyModel": ""
+    },
+    "conversion": {
+      "endpoint": "",
+      "apiKey": "",
+      "apiKeyType": "",
+      "model": "",
+      "modelType": "",
+      "maxTokens": 0
+    },
+    "rerank": {
+      "endpoint": "",
+      "apiKey": "",
+      "apiKeyType": "",
+      "model": "",
+      "modelType": "",
+      "maxTokens": 0
+    },
+    "moderator": {
+      "endpoint": "",
+      "apiKey": "",
+      "apiKeyType": "",
+      "model": "",
+      "modelType": "",
+      "maxTokens": 0
+    }
+  },
+  "samplers": {
+    "topK": 0,
+    "maxTokens": 0,
+    "generateWindow": 0,
+    "tokenHealing": true,
+    "speculativeNgram": true,
+    "topP": 1.0,
+    "topA": 0.0,
+    "typicalP": 1.0,
+    "minP": 0.0,
+    "temperature": 0.0,
+    "minTokens": 0,
+    "mirostat": false,
+    "mirostatMode": 0,
+    "repetitionPenalty": 1.0,
+    "bannedStrings": [],
+    "xtcThreshold": 0.0,
+    "xtcProbability": 0.0
+  },
+  "alltalk": {
+    "ttsEnabled": true,
+    "ttsGenEndpoint": {
+      "internal": "",
+      "external": ""
+    },
+    "ttsServeEndpoint": {
+      "internal": "",
+      "external": ""
+    },
+    "healthcheck": {
+      "internal": "",
+      "external": ""
+    }
+  }
+}

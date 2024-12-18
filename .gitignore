@@ -131,3 +131,10 @@ dist
 .pnp.*
 data/*
 world_info/*
+instructs/*
+resources/*
+.prettierrc
+*.json
+!*.example.json
+*.key
+*.crt
