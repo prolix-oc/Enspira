@@ -7,19 +7,34 @@ import {
 } from "../prompt-helper.js";
 import { checkForAuth, updateUserParameter } from "../api-helper.js";
 import { maintainVoiceContext } from "../data-helper.js";
-import * as twitchHelper from "../twitch_helper.js";
+import * as twitchHelper from "../twitch-helper.js";
 import moment from "moment";
 import fastifyFormbody from "@fastify/formbody";
 import cors from "@fastify/cors";
 import fastifyCompress from "@fastify/compress";
 
-const endPointDoc = [
-  { chat: "/chats", method: "POST" },
-  { voice: "/voice", method: "POST" },
-  { events: "/events", method: "POST" },
-  { tts: "/speak", method: "POST" },
-  { healthcheck: "/healthcheck", method: "GET" },
-];
+const endPointDoc = {
+  "chat": {
+    endpoint: "/v1/chats",
+    method: "POST"
+  },
+  "voice": {
+    endpoint: "/v1/voice",
+    method: "POST"
+  },
+  "event": {
+    endpoint: "/v1/events",
+    method: "POST"
+  },
+  "tts": {
+    endpoint: "/v1/speak",
+    method: "POST"
+  },
+  "healthcheck": {
+    endpoint: "/v1/healthcheck",
+    method: "GET"
+  }
+};
 
 const endPoints = {
   chat: "/chats",
@@ -177,13 +192,22 @@ async function routes(fastify, options) {
       const mentionsChar = await containsCharacterName(data.message, authObject.user_id)
       // Moved to separate function to prevent duplication error
       let moderationResult = null;
-      if (!fromBot || !isCharMessage) {
+      if (!fromBot && !isCharMessage) {
         moderationResult = await getModerationResult(
           data,
           authObject.user_id,
           strippedMessage,
           fromBot
         );
+      } else if (!fromBot && isCharMessage) {
+        moderationResult = await getModerationResult(
+          data,
+          authObject.user_id,
+          strippedMessage,
+          fromBot
+        );
+      } else if (fromBot && !isCharMessage) {
+        moderationResult["action"] = "safe";
       } else {
         moderationResult["action"] = "safe";
       }
@@ -196,7 +220,7 @@ async function routes(fastify, options) {
 
       if (
         (mentionsChar &&
-        !isCharMessage)
+          !isCharMessage)
       ) {
         // Process messages directed at the character when not sent by the character
         await handleChatMessage(
@@ -209,8 +233,8 @@ async function routes(fastify, options) {
           response,
         );
       } else if (
-        !(mentionsChar &&
-        !isCharMessage)
+        (!mentionsChar &&
+          !isCharMessage)
       ) {
         // Process other messages not directed at the character
         await handleNonChatMessage(
@@ -278,15 +302,26 @@ async function routes(fastify, options) {
       response.code(500).send({ error: error.message });
     }
   });
-  /**
-   * Handles health check requests.
-   * @param {object} request - The request object.
-   * @param {object} response - The response object.
-   * @returns {Promise<void>} - A promise that resolves when the response is sent.
-   */
+
   fastify.get(endPoints.healthcheck, async (request, response) => {
     logger.log("API", `Received healthcheck request from ${request.ip}`);
     response.code(200).send({ status: "up" });
+  });
+
+  fastify.get("/", async (request, response) => {
+    logger.log("API", `Request hit root (by accident?) from ${request.ip}`)
+    response.code(200).send({ error: "Please specify an endpoint before sending a request.", ...endPointDoc })
+  })
+  fastify.setErrorHandler((error, request, reply) => {
+    if (error instanceof fastify.errorCodes.FST_ERR_ROUTE_METHOD_NOT_SUPPORTED) {
+      reply.code(405).send({
+        error: "Method Not Allowed",
+        message: `HTTP method "${request.method}" is not supported for this route.`,
+        allowedMethods: reply.context.config.allowedMethods // List of allowed methods
+      });
+    } else {
+      reply.send(error);
+    }
   });
 }
 
@@ -334,16 +369,14 @@ async function handleChatMessage(
           );
         }
         if (finalResp) {
-          const contextString = `On ${formattedDate}, ${user} said in ${
-            user === authObject.player_name
-              ? "their own"
-              : `${authObject.player_name}'s`
-          } chat: "${strippedMessage}". You responded by saying: ${finalResp}`;
-          const summaryString = `On ${formattedDate}, ${user} said to you in ${
-            user === authObject.player_name
-              ? "their own"
-              : `${authObject.player_name}'s`
-          } chat: "${strippedMessage}". You responded by saying: ${finalResp}`;
+          const contextString = `On ${formattedDate}, ${user} said in ${user === authObject.player_name
+            ? "their own"
+            : `${authObject.player_name}'s`
+            } chat: "${strippedMessage}".`;
+          const summaryString = `On ${formattedDate}, ${user} said to you in ${user === authObject.player_name
+            ? "their own"
+            : `${authObject.player_name}'s`
+            } chat: "${strippedMessage}". You responded by saying: ${finalResp}`;
           await twitchHelper.maintainChatContext(
             contextString,
             authObject.user_id,
@@ -360,12 +393,12 @@ async function handleChatMessage(
           if (data.withVoice) {
             const ttsResponse = authObject.tts_enabled
               ? {
-                  response: finalResp,
-                  audio_url: await aiHelper.respondWithVoice(
-                    finalResp,
-                    authObject.user_id,
-                  ),
-                }
+                response: finalResp,
+                audio_url: await aiHelper.respondWithVoice(
+                  finalResp,
+                  authObject.user_id,
+                ),
+              }
               : { response: finalResp };
             response.send({ response: finalResp, ...ttsResponse });
           } else if (!data.withVoice || data.withVoice == null) {
@@ -377,6 +410,51 @@ async function handleChatMessage(
       } else {
         response.send({ ...moderationResult, moderation_action: "takeAction" });
       }
+    }
+  } else {
+    response.send({ response: "OK" });
+  }
+}
+
+async function handleGameUpdate(
+  data,
+  authObject,
+  gameData,
+  user
+) {
+  if (
+    (await twitchHelper.isCommandMatch(data.message, authObject.user_id)) ==
+    false
+  ) {
+    let finalResp;
+    finalResp = await aiHelper.respondWithContext(
+      strippedMessage,
+      user,
+      authObject.user_id,
+    );
+
+    if (finalResp) {
+      await twitchHelper.maintainChatContext(
+        contextString,
+        authObject.user_id,
+      );
+      logger.log("API", `Processing message as normal.`);
+      if (data.withVoice) {
+        const ttsResponse = authObject.tts_enabled
+          ? {
+            response: finalResp,
+            audio_url: await aiHelper.respondWithVoice(
+              finalResp,
+              authObject.user_id,
+            ),
+          }
+          : { response: finalResp };
+        response.send({ response: finalResp, ...ttsResponse });
+      } else if (!data.withVoice || data.withVoice == null) {
+        response.send({ response: finalResp });
+      }
+    } else {
+      response.send({ response: "error" });
     }
   } else {
     response.send({ response: "OK" });
@@ -400,15 +478,15 @@ async function handleEventMessage(data, authObject, response) {
 
     if (finalResp) {
       const ttsResponse = authObject.tts_enabled
-          ? {
-              response: finalResp,
-              audio_url: await aiHelper.respondWithVoice(
-                finalResp,
-                authObject.user_id,
-              ),
-            }
-          : { response: finalResp };
-        response.send({ ...ttsResponse });
+        ? {
+          response: finalResp,
+          audio_url: await aiHelper.respondWithVoice(
+            finalResp,
+            authObject.user_id,
+          ),
+        }
+        : { response: finalResp };
+      response.send({ ...ttsResponse });
     } else {
       response.send({ error: "Unsuccessful generation. Try again later." });
     }
@@ -429,14 +507,14 @@ async function handleEventMessage(data, authObject, response) {
 async function handleVoiceConversion(data, authObject, response) {
   const ttsResponse = authObject.tts_enabled
     ? {
-        audio_url: await aiHelper.respondWithVoice(
-          data.text,
-          authObject.user_id,
-        ),
-      }
+      audio_url: await aiHelper.respondWithVoice(
+        data.text,
+        authObject.user_id,
+      ),
+    }
     : {
-        error: "TTS not enabled for user.",
-      };
+      error: "TTS not enabled for user.",
+    };
   response.send({ ...ttsResponse });
 }
 
@@ -476,16 +554,14 @@ async function handleNonChatMessage(
             data,
             authObject.user_id,
           );
-          const contextString = `On ${formattedDate}, ${user} said in ${
-            user === authObject.player_name
-              ? "their own"
-              : `${authObject.player_name}'s`
-          } chat: "${strippedMessage}". You responded by saying: ${aiResp}`;
-          const summaryString = `On ${formattedDate}, ${user} said to you in ${
-            user === authObject.player_name
-              ? "their own"
-              : `${authObject.player_name}'s`
-          } chat: "${strippedMessage}". You responded by saying: ${aiResp}`;
+          const contextString = `On ${formattedDate}, ${user} said in ${user === authObject.player_name
+            ? "their own"
+            : `${authObject.player_name}'s`
+            } chat: "${strippedMessage}". You responded by saying: ${aiResp}`;
+          const summaryString = `On ${formattedDate}, ${user} said to you in ${user === authObject.player_name
+            ? "their own"
+            : `${authObject.player_name}'s`
+            } chat: "${strippedMessage}". You responded by saying: ${aiResp}`;
           await twitchHelper.maintainChatContext(
             contextString,
             authObject.user_id,
@@ -504,12 +580,12 @@ async function handleNonChatMessage(
           );
           const ttsResponse = authObject.tts_enabled
             ? {
-                response: aiResp,
-                audio_url: await aiHelper.respondWithVoice(
-                  aiResp,
-                  authObject.user_id,
-                ),
-              }
+              response: aiResp,
+              audio_url: await aiHelper.respondWithVoice(
+                aiResp,
+                authObject.user_id,
+              ),
+            }
             : { response: aiResp };
           response.send({ ...ttsResponse, moderator_action: moderationResult });
         } else {
@@ -520,16 +596,14 @@ async function handleNonChatMessage(
         }
       } else {
         if (moderationResult === "safe") {
-          const summaryString = `On ${formattedDate} ${user} said in ${
-            user === authObject.player_name
-              ? "their own"
-              : `${authObject.player_name}'s`
-          } Twitch chat: "${strippedMessage}"`;
-          const contextString = `On ${formattedDate}, ${user} said in ${
-            user === authObject.player_name
-              ? "their own"
-              : `${authObject.player_name}'s`
-          } chat: "${strippedMessage}"`;
+          const summaryString = `On ${formattedDate} ${user} said in ${user === authObject.player_name
+            ? "their own"
+            : `${authObject.player_name}'s`
+            } Twitch chat: "${strippedMessage}"`;
+          const contextString = `On ${formattedDate}, ${user} said in ${user === authObject.player_name
+            ? "their own"
+            : `${authObject.player_name}'s`
+            } chat: "${strippedMessage}"`;
           await twitchHelper.maintainChatContext(
             contextString,
             authObject.user_id,

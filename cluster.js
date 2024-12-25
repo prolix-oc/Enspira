@@ -317,16 +317,16 @@ if (cluster.isPrimary) {
           break;
         }
         const getSetValue = await retrieveConfigValue(query);
-        logger.log("System", `"${query}" is set to: ${getSetValue}`);
+        logger.log("System", `'${query}' is set to: ${typeof(getSetValue) === "object" ? `${JSON.stringify(getSetValue, {spaces:2})}`: `${getSetValue}`}`);
         break;
       case "set":
         var query = text.replace("set ", "").replace("set", "");
         var choices = query.split(' ')
         const didSave = await saveConfigValue(choices[0], choices[1])
         didSave ?
-        logger.log("Config", `Value '${choices[1]}' for parameter ${choices[0]} saved.`) 
+        logger.log("Config", `Value '${choices[1]}' for parameter '${choices[0]}' saved.`) 
         :
-        logger.log("Config", `Value '${choices[1]}' for parameter ${choices[0]} failed to save.`)
+        logger.log("Config", `Value '${choices[1]}' for parameter '${choices[0]}' failed to save.`)
         break;
       case "augment":
         logger.log("System", `Sending augmentation request...`);

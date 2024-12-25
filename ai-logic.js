@@ -25,8 +25,9 @@ import {
   rerankPrompt,
   fixTTSString,
   summaryPrompt,
+  sendChatCompletionRequest
 } from "./prompt-helper.js";
-import { returnTwitchEvent } from "./twitch_helper.js";
+import { returnTwitchEvent } from "./twitch-helper.js";
 import { resultsReranked, pullFromWeb } from "./data-helper.js";
 import { returnAuthObject } from "./api-helper.js";
 import { retrieveConfigValue } from "./config-helper.js";
@@ -843,11 +844,13 @@ async function upsertIntelligenceToMilvus(data, collection, userId) {
         "Milvus",
         `Upserted ${data.length} items into ${collection}_${userId}`,
       );
+      return true
     } else {
       logger.log(
         "Milvus",
         `Failed to upsert data into ${collection}_${userId}. Reason: ${upsertResponse.status.reason}`,
       );
+      return false
     }
   } catch (error) {
     logger.log("Milvus", `Error upserting data: ${error}`);
@@ -985,18 +988,13 @@ async function retrieveWebContext(urls, query, subject, userId) {
     }
 
     const instruct = await summaryPrompt(pageContents);
-    const openai = new OpenAI({
-      baseURL: await retrieveConfigValue("models.summary.endpoint"),
-      apiKey: await retrieveConfigValue("models.summary.apiKey"),
-    });
-    const completion = await openai.chat.completions.create(instruct);
 
-    const summaryOutput = `### Summary of ${subject}:\n${completion.choices[0].message.content}`;
+    const chatTask = await sendChatCompletionRequest(instruct, await retrieveConfigValue("models.summary"))
 
-    // Get embedding for the subject
+    const summaryOutput = `### Summary of ${subject}:\n${chatTask.response}`;
+
     const embeddingArray = await getMessageEmbedding(subject);
 
-    // Prepare data for upsertion
     const upsertData = [
       {
         relation: subject,
@@ -1013,7 +1011,7 @@ async function retrieveWebContext(urls, query, subject, userId) {
     );
 
     if (upsertResult) {
-      logger.log("Augment", `Stored summary for '${subject}' into vector DB.`);
+      logger.log("Augment", `Stored summary for '${subject}' into vector DB. Generation time: ${chatTask.tokensPerSecond}`);
       return summaryOutput;
     } else {
       logger.log(
@@ -1090,22 +1088,18 @@ async function searchBraveAPI(query, freshness) {
 async function inferSearchParam(query, userId) {
   try {
     var instruct = await queryPrompt(query, userId);
-    const openai = new OpenAI({
-      baseURL: await retrieveConfigValue("models.query.endpoint"),
-      apiKey: await retrieveConfigValue("models.query.apiKey"),
-    });
-    const completion = await openai.chat.completions.create(instruct);
-    const responseContent = completion.choices[0].message.content.trim();
+
+    const chatTask = await sendChatCompletionRequest(instruct, await retrieveConfigValue("models.query"))
 
     if (
-      !responseContent.includes(";") ||
-      responseContent.toLowerCase() === "pass"
+      !chatTask.response.includes(";") ||
+      chatTask.response.toLowerCase() === "pass"
     ) {
       logger.log("LLM", `Query builder opted out of search for this query.`);
       return "pass";
     } else {
-      logger.log("LLM", `Returned optimized search param: ${responseContent}`);
-      return responseContent;
+      logger.log("LLM", `Returned optimized search param: '${chatTask.response}'. Time to generate: ${chatTask.tokensPerSecond}t/s`);
+      return chatTask.response;
     }
   } catch (error) {
     logger.log("LLM", `Error inferring search parameter: ${error}`);
@@ -1361,42 +1355,42 @@ async function checkAndCreateCollection(collection, userId) {
  * @param {object} fileContent - The content of the file to be vectorized.
  * @returns {Promise<object>} - An object containing the relation, content, filename, and position.
  */
-async function sendFileForVectorization(fileContent) {
-  try {
-    const vectorInstruct = await fs.readFile(
-      "./instructs/helpers/convert.prompt",
-      "utf-8",
-    );
-    const openai = new OpenAI({
-      baseURL: await retrieveConfigValue("models.conversion.endpoint"),
-      apiKey: await retrieveConfigValue("models.conversion.apiKey"),
-    });
+// async function sendFileForVectorization(fileContent) {
+//   try {
+//     const vectorInstruct = await fs.readFile(
+//       "./instructs/helpers/convert.prompt",
+//       "utf-8",
+//     );
+//     const openai = new OpenAI({
+//       baseURL: await retrieveConfigValue("models.conversion.endpoint"),
+//       apiKey: await retrieveConfigValue("models.conversion.apiKey"),
+//     });
 
-    const completion = await openai.chat.completions.create({
-      model: await retrieveConfigValue("models.conversion.model"),
-      messages: [
-        {
-          role: "system",
-          content: vectorInstruct,
-        },
-        {
-          role: "user",
-          content: JSON.stringify(fileContent.content),
-        },
-      ],
-    });
-    const returnArray = completion.choices[0].message.content.split(";");
-    return {
-      relation: returnArray[0],
-      content: fileContent.content,
-      filename: returnArray[1],
-      position: fileContent.position,
-    };
-  } catch (error) {
-    logger.log("Vectorization", `Error vectorizing file content: ${error}`);
-    return null; // Indicate failure
-  }
-}
+//     const completion = await openai.chat.completions.create({
+//       model: await retrieveConfigValue("models.conversion.model"),
+//       messages: [
+//         {
+//           role: "system",
+//           content: vectorInstruct,
+//         },
+//         {
+//           role: "user",
+//           content: JSON.stringify(fileContent.content),
+//         },
+//       ],
+//     });
+//     const returnArray = completion.choices[0].message.content.split(";");
+//     return {
+//       relation: returnArray[0],
+//       content: fileContent.content,
+//       filename: returnArray[1],
+//       position: fileContent.position,
+//     };
+//   } catch (error) {
+//     logger.log("Vectorization", `Error vectorizing file content: ${error}`);
+//     return null; // Indicate failure
+//   }
+// }
 
 /**
  * Compares local and remote documents and determines necessary actions (insert, update, delete).
@@ -1614,32 +1608,26 @@ async function respondWithContext(message, username, userID) {
       apiKey: await retrieveConfigValue("models.chat.apiKey"),
     });
     const body = await contextPromptChat(promptData, message, userID);
-    const response = await openai.chat.completions.create(body);
-    const aiResp = response.choices[0].message.content;
-    return await replyStripped(aiResp, userID);
+
+    const chatTask = await sendChatCompletionRequest(body, await retrieveConfigValue("models.chat"))
+
+    logger.log("System", `Generated textual character response in ${chatTask.tokensPerSecond}t/s`) 
+    return await replyStripped(chatTask.response, userID);
   } catch (error) {
     console.error("Error calling resultsReranked:", error);
   }
 }
 
 async function rerankString(message, userId) {
-  const openai = new OpenAI({
-    baseURL: await retrieveConfigValue("models.rerank.endpoint"),
-    apiKey: await retrieveConfigValue("models.rerank.apiKey"),
-  });
   const promptRerank = await rerankPrompt(message, userId);
-  const response = await openai.chat.completions.create(promptRerank);
-  return response.choices[0].message.content;
+  const chatTask = await sendChatCompletionRequest(promptRerank, await retrieveConfigValue("models.rerank"))
+  return chatTask.response;
 }
 
 async function respondWithoutContext(message, userId) {
   const instruct = await nonContextChatPrompt(message, userId);
-  const openai = new OpenAI({
-    baseURL: await retrieveConfigValue("models.chat.endpoint"),
-    apiKey: await retrieveConfigValue("models.chat.apiKey"),
-  });
-  const response = await openai.chat.completions.create(instruct);
-  return replyStripped(response.choices[0].message.content, userId);
+  const chatTask = await sendChatCompletionRequest(instruct, await retrieveConfigValue("models.chat"))
+  return replyStripped(chatTask.response);
 }
 
 async function respondWithVoice(message, userId) {
@@ -1662,7 +1650,7 @@ async function respondWithVoice(message, userId) {
   voiceForm.append("output_file_timestamp", "true");
   voiceForm.append("autoplay", "false");
   voiceForm.append("temperature", "0.80");
-  voiceForm.append("repetition_penalty", "2");
+  voiceForm.append("repetition_penalty", "2.0");
 
   const res = await axios.post(
     new URL(await retrieveConfigValue("alltalk.ttsGenEndpoint.internal")),
@@ -1683,7 +1671,9 @@ async function respondWithVoice(message, userId) {
 }
 
 async function respondToDirectVoice(message, userId, withVoice = false) {
+  const fixedAcro = await fixTTSString(message);
   const userObj = await returnAuthObject(userId);
+  
   try {
     const [voiceCtx, rawContext] = await Promise.all([
       findRelevantVoiceInMilvus(message, userId, 3),
@@ -1704,19 +1694,14 @@ async function respondToDirectVoice(message, userId, withVoice = false) {
       user: userObj.player_name,
     };
 
-    const openai = new OpenAI({
-      baseURL: await retrieveConfigValue("models.chat.model"),
-      apiKey: await retrieveConfigValue("models.chat.apiKey"),
-    });
-
     const body = await contextPromptChat(promptData, message, userId);
-    const response = await openai.chat.completions.create(body);
-    const aiResp = response.choices[0].message.content;
-    const strippedResp = await replyStripped(aiResp, userId);
+    const chatTask = await sendChatCompletionRequest(body, await retrieveConfigValue("models.chat"))
+    logger.log("LLM", `Generated textual response to voice message. Time to generate: ${chatTask.tokensPerSecond}t/s`)
+    const strippedResp = await replyStripped(chatTask.response, userId);
     const userObj = await returnAuthObject(userId);
     if (withVoice) {
       const voiceForm = new FormData();
-      voiceForm.append("text_input", `${strippedResp}`);
+      voiceForm.append("text_input", fixedAcro.fixedString);
       voiceForm.append("text_filtering", "standard");
       voiceForm.append("character_voice_gen", userObj.speaker_file);
       voiceForm.append("narrator_enabled", "false");
@@ -1727,7 +1712,9 @@ async function respondToDirectVoice(message, userId, withVoice = false) {
       voiceForm.append("output_file_name", userObj.user_id);
       voiceForm.append("output_file_timestamp", "true");
       voiceForm.append("autoplay", "false");
-      voiceForm.append("temperature", "0.8");
+      voiceForm.append("temperature", "0.80");
+      voiceForm.append("repetition_penalty", "2.0");
+
 
       const res = await axios.post(
         `${await retrieveConfigValue("alltalk.ttsGenEndpoint.internal")}`,
@@ -1838,14 +1825,10 @@ async function respondToEvent(event, userId) {
   const eventMessage = await returnTwitchEvent(event, userId);
   const instructPrompt = await eventPromptChat(eventMessage, userId);
 
-  const openai = new OpenAI({
-    baseURL: await retrieveConfigValue("models.chat.endpoint"),
-    apiKey: await retrieveConfigValue("models.chat.apiKey"),
-  });
-
-  const response = await openai.chat.completions.create(instructPrompt);
+  const chatTask = await sendChatCompletionRequest(instructPrompt, await retrieveConfigValue("models.chat"))
+  logger.log("LLM", `Generated event response. Time to generate: ${chatTask.tokensPerSecond}t/s`)
   const strippedResponse = await replyStripped(
-    response.choices[0].message.content,
+    chatTask.response,
     userId,
   );
   return strippedResponse;
@@ -1865,13 +1848,6 @@ async function checkMilvusHealth() {
   return isUp.isHealthy;
 }
 
-/**
- * Drops a specified collection in Milvus.
- *
- * @param {string} collection - The name of the collection to drop.
- * @param {string} userId - The ID of the user associated with the collection.
- * @returns {Promise<boolean>} - True if the collection was dropped successfully, false otherwise.
- */
 /**
  * Drops specified collection(s) in Milvus based on the provided parameters.
  * Supports dropping a single collection for a user, all collections of a type for a user,

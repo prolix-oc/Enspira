@@ -5,7 +5,6 @@ import { join } from "path";
 import * as aiHelper from "./ai-logic.js";
 import {
   initAllAPIs,
-  loadAPIKeys,
   returnAPIKeys
 } from "./api-helper.js";
 import { preloadAllTokenizers } from "./token-helper.js";
@@ -15,6 +14,7 @@ import routes from './routes/v1.js';
 const fastify = Fastify({
   trustProxy: true,
   http2: true,
+  methodNotAllowed: true,
   https: {
     allowHTTP1: true,
     key: fs.readFileSync(join(process.cwd(), "self_signed.key")),
@@ -26,6 +26,74 @@ const fastify = Fastify({
 
 fastify.register(routes, {
   prefix: "/api/v1",
+});
+
+const endPointDoc = {
+  "chat": {
+    endpoint: "/v1/chats",
+    method: "POST"
+  },
+  "voice": {
+    endpoint: "/v1/voice",
+    method: "POST"
+  },
+  "event": {
+    endpoint: "/v1/events",
+    method: "POST"
+  },
+  "tts": {
+    endpoint: "/v1/speak",
+    method: "POST"
+  },
+  "healthcheck": {
+    endpoint: "/v1/healthcheck",
+    method: "GET"
+  }
+};
+
+const endPointDocBase = {
+  "chat": {
+    endpoint: "/api/v1/chats",
+    method: "POST"
+  },
+  "voice": {
+    endpoint: "/api/v1/voice",
+    method: "POST"
+  },
+  "event": {
+    endpoint: "/api/v1/events",
+    method: "POST"
+  },
+  "tts": {
+    endpoint: "/api/v1/speak",
+    method: "POST"
+  },
+  "healthcheck": {
+    endpoint: "/api/v1/healthcheck",
+    method: "GET"
+  }
+};
+
+fastify.all("/api", async (request, response) => {
+  logger.log("API", `Received base route request from ${request.ip}`)
+  response.code(200).send({error: "Please select a valid endpoint before sending a request", ...endPointDoc })
+})
+
+fastify.all("/", async (request, response) => {
+  logger.log("API", `Received base route request from ${request.ip}`)
+  response.code(200).send({error: "Please select a valid endpoint before sending a request", ...endPointDocBase })
+})
+
+fastify.setErrorHandler((error, request, reply) => {
+  if (error instanceof Fastify.errorCodes.FST_ERR_ROUTE_METHOD_NOT_SUPPORTED) {
+    reply.code(405).send({
+      error: "Method Not Allowed",
+      message: `HTTP method "${request.method}" is not supported for this route.`,
+      allowedMethods: reply.context.config.allowedMethods // List of allowed methods
+    });
+  } else {
+    reply.send(error);
+  }
 });
 
 /**

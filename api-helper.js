@@ -376,35 +376,55 @@ const funFact = async () => {
       return await randomNumbersFact()
     case 4:
       return await randomDogFact()
+    default:
+      return "One of the websites decided to break. Instead of sharing a provided fun fact from the system, talk about your favorite safe-for-work and appropriate fun fact about your favorite person."
   }
 };
 
 const blackRandomFact = async () => {
-  const response = await axios.get(
-    "https://rest.blackhistoryapi.io/fact/random", { headers: {"x-api-key": ""}}
-  );
-  return response.data.Results.text;
+  try {
+    const response = await axios.get(
+      "https://rest.blackhistoryapi.io/fact/random", { headers: {"x-api-key": "aW5mb1dlZCBEZWMgMTggMjAyNCAwOD"}}
+    );
+    return response.data.Results.text;
+  } catch (err) {
+    logger.log("System", "Unable to get random fact from BlackHistoryAPI")
+  }
+
 };
 
 const randomCatFact = async () => {
-  const response = await axios.get(
-    "https://meowfacts.herokuapp.com/"
-  );
-  return response.data.data[0];
+  try {
+    const response = await axios.get(
+      "https://meowfacts.herokuapp.com/"
+    );
+    return response.data.data[0];
+  } catch (err) {
+    logger.log("System", "Unable to get random fact from MeowFacts")
+  }
 };
 
 const randomDogFact = async () => {
-  const response = await axios.get(
-    "http://dog-api.kinduff.com/api/facts?number=1"
-  );
-  return response.data.facts[0];
+  try {
+    const response = await axios.get(
+      "http://dog-api.kinduff.com/api/facts?number=1"
+    );
+    return response.data.facts[0];
+  } catch (err) {
+    logger.log("System", "Unable to get random fact from DogApi")
+  }
 };
 
 const randomNumbersFact = async () => {
-  const response = await axios.get(
-    "http://numbersapi.com/random?json",
-  );
-  return response.data.text
+  try {
+    const response = await axios.get(
+      "http://numbersapi.com/random?json",
+    );
+    return response.data.text
+  } catch (err) {
+    logger.log("System", "Unable to get random fact from NumbersApi")
+  }
+
 }
 
 async function initAllAPIs() {

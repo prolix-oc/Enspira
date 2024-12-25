@@ -43,7 +43,7 @@ export const preloadAllTokenizers = () => {
 
 };
 
-export const getTokenizerJson = (model) => tokenizerJsons[model];
+export const getTokenizerJson = async (model) => tokenizerJsons[model];
 
 export const getPromptCount = async (
   systemPrompt,
@@ -51,7 +51,7 @@ export const getPromptCount = async (
   modelType,
   contextPrompt = "",
 ) => {
-  const tokenizerJson = getTokenizerJson(modelType);
+  const tokenizerJson = await getTokenizerJson(modelType);
   if (!tokenizerJson) {
     logger.log(
       "Tokenizer",
@@ -72,6 +72,35 @@ export const getPromptCount = async (
       userEncoded.getLength() +
       contextEncoded.getLength();
     return tokenCount;
+  } catch (error) {
+    logger.log(
+      "error",
+      `Error during tokenization for model ${modelType}: ${error.message}`,
+    );
+  }
+};
+
+export const getPromptTokens = async (
+  requestBody,
+  modelType
+) => {
+  const tokenizerJson = await getTokenizerJson(modelType);
+  if (!tokenizerJson) {
+    logger.log(
+      "Tokenizer",
+      `Tokenizer not found for model type: ${modelType}`,
+      "err",
+    );
+  }
+  try {
+    const tokenizer = await Tokenizer.fromString(tokenizerJson);
+
+    let totalTokens = 0
+    for await (const message of requestBody.messages) {
+      const messageContent = await tokenizer.encode(message.content)
+      totalTokens += messageContent.getLength()
+    }
+    return totalTokens;
   } catch (error) {
     logger.log(
       "error",

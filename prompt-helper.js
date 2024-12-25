@@ -1,10 +1,53 @@
 import fs from "fs-extra";
 import moment from "moment";
-import { socialMedias, returnTwitchEvent } from "./twitch_helper.js";
+import { socialMedias, returnTwitchEvent } from "./twitch-helper.js";
 import { interpretEmotions } from "./data-helper.js";
 import { returnAuthObject } from "./api-helper.js";
-import { getPromptCount } from "./token-helper.js";
+import { getPromptTokens } from "./token-helper.js";
 import { retrieveConfigValue } from "./config-helper.js";
+import { ChatRequestBody, ToolRequestBody } from "./oai-requests.js";
+import OpenAI from "openai";
+
+/**
+ * Performs an OpenAI chat completion request and measures performance.
+ *
+ * @param {object} requestBody - The request body to send to the OpenAI API.
+ * @param {object} modelConfig - The configuration for the chosen model.
+ * @returns {Promise<object>} An object containing the response content and tokens per second.
+ */
+async function sendChatCompletionRequest(requestBody, modelConfig) {
+  const openai = new OpenAI({
+      baseURL: modelConfig.endpoint,
+      apiKey: modelConfig.apiKey,
+  });
+
+  const startTime = process.hrtime();
+  let endTime;
+  let timeElapsed;
+
+  try {
+      const response = await openai.chat.completions.create(requestBody);
+
+      endTime = process.hrtime(startTime); // Calculate elapsed time
+      timeElapsed = (endTime[0] * 1e9 + endTime[1]) / 1e9;
+
+      const completionTokens = response.usage.completion_tokens;
+      const tokensPerSecond = completionTokens / timeElapsed;
+
+      return {
+          response: response.choices[0].message.content,
+          tokensPerSecond: tokensPerSecond.toFixed(2),
+      };
+  } catch (error) {
+      logger.log(
+          "API",
+          `OpenAI chat completion error: ${error}; Model Config: ${JSON.stringify(
+              modelConfig,
+          )}`,
+      );
+      return { error: error.message };
+  }
+}
 
 /**
  * Generates a prompt for model moderation based on a message and user ID.
@@ -30,17 +73,16 @@ const moderatorPrompt = async (message, userId) => {
   };
 
   const instructionTemplate = replacePlaceholders(instructTemplate, replacements);
-  const promptWithSamplers = await formToolRequestBody(
+  const promptWithSamplers = await new ToolRequestBody(
     instructionTemplate,
     await retrieveConfigValue("models.moderator.model"),
     message
-  );
+  )
 
   logger.log(
     "LLM",
-    `Prompt is using ${await getPromptCount(
-      instructionTemplate,
-      message,
+    `Prompt is using ${await getPromptTokens(
+      promptWithSamplers,
       await retrieveConfigValue("models.moderator.modelType")
     )} of your available ${await retrieveConfigValue("models.moderator.maxTokens")} tokens.`
   );
@@ -82,24 +124,8 @@ const contextPromptChat = async (promptData, message, userID) => {
 
   const sentiment = await interpretEmotions(message);
   logger.log("LLM", `Analysis of emotions: ${sentiment}`);
+  const user = promptData.user
 
-  let userInfoString = `\n\n## Information about Who Messaged You\n`;
-  if (promptData.user) {
-    const user = promptData.user;
-    if (user.gender) {
-      userInfoString += `- The user's gender is ${user.gender}.\n`;
-    }
-    if (user.age) {
-      userInfoString += `- The user is ${user.age} years old.\n`;
-    }
-    if (user.residence) {
-      userInfoString += `- The user's residence is ${user.residence}.\n`;
-    }
-  } else {
-    userInfoString += "- No additional user information available.\n";
-  }
-
-  // **1. Corrected Replacements Object (Including Character Card):**
   const replacements = {
     "{{datetime}}": `\n- The date and time where you and ${currentAuthObject.player_name} live is currently: ${timeStamp}`,
     "{{ctx}}": `\n\n## Additional Information:\nExternal context relevant to the conversation:\n${promptData.relContext}`,
@@ -127,21 +153,18 @@ const contextPromptChat = async (promptData, message, userID) => {
     }'s Twitch chat. Use these messages to keep up with the current conversation:\n${
       fileContents.twitch_chat
     }`,
-    "{{emotion}}": `\n\n## Current Emotional Assessment of Message:\n- ${sentiment}`,
-    // ** Include user information string, be sure that your template includes this tag:
-    "{{user_info}}": userInfoString, 
+    "{{emotion}}": `\n\n## Current Emotional Assessment of Message:\n- ${sentiment}`
   };
 
   const postProcessReplacements = {
     "{{player}}": currentAuthObject.player_name,
     "{{char}}": currentAuthObject.bot_name,
     "{{char_limit}}": await retrieveConfigValue("twitch.maxCharLimit"),
-    "{{user}}": promptData.user, // This should probably be JSON.stringify(promptData.user) to include all user fields, or you can customize it
+    "{{user}}": promptData.user,
     "{{socials}}": await socialMedias(userID),
-    "{{soc_tiktok}}": await socialMedias(userID, "tiktok"),
+    "{{soc_tiktok}}": await socialMedias(userID, "tt"),
   };
 
-  // 2. Properly use replacePlaceholders on both templates:
   const instructionTemplate = replacePlaceholders(instructTemplate, {
     ...replacements,
     ...postProcessReplacements,
@@ -151,20 +174,18 @@ const contextPromptChat = async (promptData, message, userID) => {
     ...postProcessReplacements,
   });
 
-  const promptWithSamplers = await formChatRequestBody(
+  const promptWithSamplers = await new ChatRequestBody(
     instructionTemplate,
     dynamicTemplate,
     message,
-    promptData.user
-  );
+    user
+  )
 
   logger.log(
     "LLM",
-    `Prompt is using ${await getPromptCount(
-      instructTemplate,
-      message,
-      await retrieveConfigValue("models.chat.modelType"),
-      dynamicTemplate
+    `Prompt is using ${await getPromptTokens(
+      promptWithSamplers,
+      await retrieveConfigValue("models.chat.modelType")
     )} of your available ${await retrieveConfigValue(
       "models.chat.maxTokens"
     )} tokens.`
@@ -243,8 +264,6 @@ const eventPromptChat = async (message, userId) => {
     "{{socials}}": await socialMedias(userId),
   };
 
-  // 3. Properly use replacePlaceholders:
-  // Apply replacements to both templates
   const instructionTemplate = replacePlaceholders(
     instructTemplate,
     {...replacements, ...postProcessReplacements} // Merge replacements for easier use
@@ -254,19 +273,17 @@ const eventPromptChat = async (message, userId) => {
     {...replacements, ...postProcessReplacements} // Merge replacements for easier use
   );
 
-  const promptWithSamplers = await formChatRequestBody(
+  const promptWithSamplers = await new ChatRequestBody(
     instructionTemplate,
     dynamicTemplate,
     message
-  );
+  )
 
   logger.log(
     "LLM",
-    `Prompt is using ${await getPromptCount(
-      instructionTemplate,
-      message,
-      await retrieveConfigValue("models.chat.modelType"),
-      dynamicTemplate
+    `Prompt is using ${await getPromptTokens(
+      promptWithSamplers,
+      await retrieveConfigValue("models.chat.modelType")
     )} of your available ${await retrieveConfigValue(
       "models.chat.maxTokens"
     )} tokens.`
@@ -298,17 +315,16 @@ const queryPrompt = async (message, userId) => {
   };
 
   const instructionTemplate = replacePlaceholders(instructTemplate, replacements);
-  const promptWithSamplers = await formToolRequestBody(
+  const promptWithSamplers = await new ToolRequestBody(
     instructionTemplate,
     await retrieveConfigValue("models.query.model"),
     message
-  );
+  )
 
   logger.log(
     "LLM",
-    `Prompt is using ${await getPromptCount(
-      instructionTemplate,
-      message,
+    `Prompt is using ${await getPromptTokens(
+      promptWithSamplers,
       await retrieveConfigValue("models.query.modelType")
     )} of your available ${await retrieveConfigValue("models.query.maxTokens")} tokens.`
   );
@@ -336,17 +352,16 @@ const rerankPrompt = async (message, userId) => {
   };
 
   const instructionTemplate = replacePlaceholders(instructTemplate, replacements);
-  const promptWithSamplers = await formToolRequestBody(
+  const promptWithSamplers = await new ToolRequestBody(
     instructionTemplate,
     await retrieveConfigValue("models.rerank.model"),
     message
-  );
+  )
 
   logger.log(
     "LLM",
-    `Prompt is using ${await getPromptCount(
-      instructionTemplate,
-      message,
+    `Prompt is using ${await getPromptTokens(
+      promptWithSamplers,
       await retrieveConfigValue("models.rerank.modelType")
     )} of your available ${await retrieveConfigValue("models.rerank.maxTokens")} tokens.`
   );
@@ -359,20 +374,18 @@ const summaryPrompt = async (textContent) => {
     "utf-8"
   );
 
-  const promptWithSamplers = await formToolRequestBody(
+  const promptWithSamplers = await new ToolRequestBody(
     instructTemplate,
     await retrieveConfigValue("models.summary.model"),
-    textContent,
-    1.0,
-    1.0
-  );
+    textContent
+  )
+
   logger.log(
     "LLM",
-    `Prompt is using ${await getPromptCount(
-      instructTemplate,
-      textContent,
+    `Prompt is using ${await getPromptTokens(
+      promptWithSamplers,
       await retrieveConfigValue("models.summary.modelType")
-    )} of your available ${await retrieveConfigValue("models.query.maxTokens")} tokens.`
+    )} of your available ${await retrieveConfigValue("models.summary.maxTokens")} tokens.`
   );
   return promptWithSamplers;
 };
@@ -416,101 +429,6 @@ async function readPromptFiles(userId, fileNames) {
 }
 
 /**
- * Forms a request body for tool-related operations with specific parameters.
- *
- * @param {string} prompt - The prompt for the tool.
- * @param {string} model - The model to be used.
- * @param {string} message - The message for the tool.
- * @param {number} [temp=0.6] - The temperature parameter.
- * @param {number} [top_p=0.9] - The top-p parameter.
- * @returns {Promise<object>} - The request body for the tool operation.
- */
-async function formToolRequestBody(
-  prompt,
-  model,
-  message,
-  temp = 0.6,
-  top_p = 0.9
-) {
-  return {
-    model: model,
-    messages: [
-      {
-        role: "system",
-        content: prompt,
-      },
-      {
-        role: "user",
-        content: message,
-      },
-    ],
-    temperature: temp,
-    top_p: top_p,
-  };
-}
-
-/**
- * Forms a request body for chat completion with specific parameters.
- *
- * @param {string} prompt - The prompt for the chat completion.
- * @param {string} context - Additional context for the chat.
- * @param {string} message - The user message.
- * @param {string} [user=""] - The user identifier.
- * @returns {Promise<object>} - The request body for chat completion.
- */
-async function formChatRequestBody(prompt, context, message, user = "") {
-  const userFrom =
-    user === "" ? message : `${user} sends the following message: ${message}`;
-
-  const messages = [
-    {
-      role: "system",
-      content: prompt,
-    },
-  ];
-
-  if (context) {
-    messages.push({
-      role: "user",
-      content: context,
-    });
-  }
-
-  messages.push({
-    role: "assistant",
-    content:
-      "I understand. I'll keep the provided rules, character information, and given context in mind when responding to the next user message.",
-  });
-
-  messages.push({
-    role: "user",
-    content: userFrom,
-  });
-
-  return {
-    model: await retrieveConfigValue("models.chat.model"),
-    messages: messages,
-    max_tokens: await retrieveConfigValue("samplers.maxTokens"),
-    generate_window: await retrieveConfigValue("samplers.generateWindow"),
-    stream: false,
-    speculative_ngram: await retrieveConfigValue("samplers.speculativeNgram"),
-    token_healing: true,
-    top_k: await retrieveConfigValue("samplers.topK"),
-    min_p: await retrieveConfigValue("samplers.minP"),
-    xtc_threshold: await retrieveConfigValue("samplers.xtcThreshold"),
-    xtc_probability: await retrieveConfigValue("samplers.xtcProbabilty"),
-    top_p: await retrieveConfigValue("samplers.topP"),
-    typical_p: await retrieveConfigValue("samplers.typicalP"),
-    dry_base: await retrieveConfigValue("samplers.dryBase"),
-    dry_allowed_length: await retrieveConfigValue("samplers.dryLength"),
-    dry_multiplier: await retrieveConfigValue("samplers.dryMultiplier"),
-    min_tokens: await retrieveConfigValue("samplers.minTokens"),
-    repetition_penalty: await retrieveConfigValue("samplers.repetitionPenalty"),
-    temperature: await retrieveConfigValue("samplers.temperature"),
-  };
-}
-
-/**
  * Strips specific patterns and extra whitespace from a message.
  *
  * @param {string} message - The message to be stripped.
@@ -519,15 +437,18 @@ async function formChatRequestBody(prompt, context, message, user = "") {
  */
 const replyStripped = async (message, userId) => {
   const userObj = await returnAuthObject(userId);
-  return message
-    .replace(/(\r\n|\n|\r)/gm, " ")
-    .replace(new RegExp(`${userObj.bot_name}:\\s?`, "g"), "")
-    .replace(/\(500 characters\)/g, "")
-    .replace(/\\/g, "")
-    .replace(/\*[^*]*\*/g, "")
-    .replace(/\s+/g, " ")
-    .replace(/^["']|["']$/g, "")
-    .trim();
+  let formatted = message
+    .replace(/(\r\n|\n|\r)/gm, " ") // Replace newlines with spaces
+    .replace(new RegExp(`${userObj.bot_name}:\\s?`, "g"), "") // Remove bot's name
+    .replace(/\(500 characters\)/g, "") // Remove (500 characters)
+    .replace(/\\/g, "") // Remove backslashes
+    .replace(/\s+/g, " "); // Replace multiple spaces with single space
+
+  // Remove unmatched quotes ONLY at the beginning or end of the string
+  formatted = formatted.replace(/^["'](?=[^"']*$)/, ""); // Remove leading quote if no matching quote
+  formatted = formatted.replace(/(?<!["'])["']$/, ""); // Remove trailing quote if no matching quote
+
+  return formatted.trim();
 };
 
 /**
@@ -654,4 +575,5 @@ export {
   rerankPrompt,
   eventPromptChat,
   containsCharacterName,
+  sendChatCompletionRequest
 };

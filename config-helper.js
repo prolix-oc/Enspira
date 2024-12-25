@@ -2,6 +2,8 @@ import fs from "fs-extra";
 import path from "path";
 import { fileURLToPath } from "url";
 import { dirname } from "path";
+import levenshtein from "fast-levenshtein";
+import { config } from "process";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
@@ -14,13 +16,15 @@ let originalConfigTypes = {}; // Store original data types
  * @returns {Promise<void>}
  */
 async function loadConfig() {
+  if (configCache) return configCache;  // Prevent loading if already loaded
+  
   try {
-    configCache = await fs.readJSON(configFilePath);
-    storeOriginalTypes(configCache); // Store original types on load
-    return true
-  } catch (error) {
-    configCache = {}; // Initialize with an empty object on error
-    return false
+    configCache = await fs.readJSON(configFilePath)
+    await storeOriginalTypes(configCache)
+    return configCache
+  } catch (err) {
+    configCache = {}
+    return configCache;
   }
 }
 
@@ -33,22 +37,13 @@ async function loadConfig() {
 function convertValueToOriginalType(value, originalType) {
   switch (originalType) {
     case "number":
-      if (!isNaN(value)) {
-        return parseFloat(value);
-      }
-      throw new TypeError(`Invalid number format: ${value}`);
+      return parseFloat(value);
     case "boolean":
-      if (value.toLowerCase() === "true") {
-        return true;
-      }
-      if (value.toLowerCase() === "false") {
-        return false;
-      }
-      throw new TypeError(`Invalid boolean format: ${value}`);
+      return value === "true" || value === "1" || value === 1 || value === true;
     case "string":
       return value;
     default:
-      throw new TypeError(`Unsupported type conversion: ${originalType}`);
+      return value;
   }
 }
 
@@ -129,50 +124,68 @@ async function saveConfigValue(path, userInput) {
   obj[key] = convertedValue;
 
   try {
-    await saveConfigToDisk();
+    await saveConfigToDisk()
+    await reloadConfig()
     return true;
   } catch (error) {
     return false;
   }
 }
-function storeOriginalTypes(obj, parentKey = "") {
+
+async function storeOriginalTypes(obj, parentKey = "") {
   for (const key in obj) {
     const value = obj[key];
     const fullPath = parentKey ? `${parentKey}.${key}` : key;
 
     if (typeof value === "object" && value !== null) {
-      storeOriginalTypes(value, fullPath);
+      await storeOriginalTypes(value, fullPath);
     } else {
       originalConfigTypes[fullPath] = typeof value;
     }
   }
 }
 
-/**
- * Retrieves a value from the configuration using a dot notation path.
- * @param {string} path - The path to the desired value (e.g., "samplers.topK").
- * @returns {any} - The value at the specified path, or undefined if not found.
- */
+async function reloadConfig() {
+  configCache = null;
+  await loadConfig();
+}
+
+
 /**
  * Retrieves a value from the configuration using a dot notation path.
  * @param {string} path - The path to the desired value (e.g., "samplers.topK").
  * @returns {Promise<any>} - A promise that resolves to the value at the specified path, or undefined if not found.
  */
 async function retrieveConfigValue(path) {
-  if (!configCache) {
-    await loadConfig(); // Ensure keys are loaded and types are stored
-  }
-
+  await reloadConfig();
   const pathParts = path.split(".");
   let value = configCache;
   for (const part of pathParts) {
     if (value[part] === undefined) {
-      return undefined;
+      return undefined; // Value not found
     }
     value = value[part];
   }
-  return value;
+  if (typeof value === "object" && value !== null) {
+    return value;
+  }
+  // Get the original type from the stored types
+  const originalType = originalConfigTypes[path];
+
+  // Convert the value to the original type if possible
+  if (originalType) {
+      try {
+          return convertValueToOriginalType(value, originalType);
+      } catch (error) {
+          logger.log("Config", `Error converting config value to original type: ${error}`);
+          return value;
+      }
+  } else {
+      // If no original type is found, return the value as is
+      return value;
+  }
 }
+
 
 /**
  * Writes the current configuration to disk.

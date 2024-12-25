@@ -1,6 +1,6 @@
 import fs from "fs-extra";
 import { join } from "path";
-import { funFact, returnAuthObject } from "./api-helper.js";
+import { funFact, returnAuthObject, updateUserParameter } from "./api-helper.js";
 import { moderatorPrompt } from "./prompt-helper.js";
 import moment from "moment";
 import OpenAI from "openai";
@@ -54,7 +54,7 @@ async function returnTwitchEvent(eventThing, userId) {
  * @returns {Promise<void>}
  */
 async function maintainChatContext(newLine, userID) {
-  const userObj = returnAuthObject(userID)
+  const userObj = await returnAuthObject(userID)
   const chatContextPath = join(
     process.cwd(),
     `/world_info/${userID}/twitch_chat.txt`,
@@ -73,6 +73,39 @@ async function maintainChatContext(newLine, userID) {
   }
 
   await fs.writeFile(chatContextPath, currentLines.join("\n") + "\n");
+}
+
+/**
+ * Maintains a chat context file by adding new lines and ensuring the file doesn't exceed a specified size.
+ *
+ * @param {string} newStatLine - The new line of game info to add to the match context.
+ * @param {string} userID - The ID of the user associated with the chat context.
+ * @returns {Promise<void>}
+ */
+async function addGameStatline(newStatLine, userID) {
+  const userObj = returnAuthObject(userID)
+  const chatContextPath = join(
+    process.cwd(),
+    `/world_info/${userID}/recent_games.txt`,
+  );
+
+  await fs.ensureFile(chatContextPath);
+
+  const currentLines = (await fs.readFile(chatContextPath, "utf-8"))
+    .split("\n")
+    .filter(Boolean);
+
+  currentLines.push("- " + newLine);
+
+  if (currentLines.length > userObj.max_chats) {
+    currentLines.shift();
+  }
+
+  await fs.writeFile(chatContextPath, currentLines.join("\n") + "\n");
+}
+
+async function changeCurrentlyPlayingGame(gameName, userID) {
+  await updateUserParameter(userID, "game_playing", gameName)
 }
 
 /**
