@@ -366,7 +366,7 @@ async function checkForAuth(token) {
 }
 
 const funFact = async () => {
-  const pickOne = Math.floor(Math.random() * 4) + 1
+  const pickOne = Math.floor(Math.random() * 5) + 1
   switch (pickOne) {
     case 1:
       return await blackRandomFact()
@@ -376,15 +376,17 @@ const funFact = async () => {
       return await randomNumbersFact()
     case 4:
       return await randomDogFact()
+    case 5:
+      return await randomUselessFact()
     default:
-      return "One of the websites decided to break. Instead of sharing a provided fun fact from the system, talk about your favorite safe-for-work and appropriate fun fact about your favorite person."
+      return "One of the websites decided to take a break. Instead of sharing a provided fun fact from one of these sites, talk about your favorite safe-for-work and stream-appropriate fact about your favorite person."
   }
 };
 
 const blackRandomFact = async () => {
   try {
     const response = await axios.get(
-      "https://rest.blackhistoryapi.io/fact/random", { headers: {"x-api-key": "aW5mb1dlZCBEZWMgMTggMjAyNCAwOD"}}
+      "https://rest.blackhistoryapi.io/fact/random", { headers: {"x-api-key": await retrieveConfigValue("funFacts.key")}}
     );
     return response.data.Results.text;
   } catch (err) {
@@ -398,11 +400,23 @@ const randomCatFact = async () => {
     const response = await axios.get(
       "https://meowfacts.herokuapp.com/"
     );
+    return response.data.text;
+  } catch (err) {
+    logger.log("System", "Unable to get random fact from UselessFacts")
+  }
+};
+
+const randomUselessFact = async () => {
+
+  try {
+    const response = await axios.get(
+      "https://uselessfacts.jsph.pl/api/v2/facts/random?language=en"
+    );
     return response.data.data[0];
   } catch (err) {
     logger.log("System", "Unable to get random fact from MeowFacts")
   }
-};
+}
 
 const randomDogFact = async () => {
   try {
