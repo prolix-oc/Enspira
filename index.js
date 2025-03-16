@@ -2,7 +2,10 @@ import axios from "axios";
 import fs from "fs-extra";
 import Fastify from "fastify";
 import { join } from "path";
+import { audioRoutes } from './routes/audio.js';
+import { processAudio, scheduleCleanup } from './audio-processor.js';
 import * as aiHelper from "./ai-logic.js";
+import path from "path";
 import {
   initAllAPIs,
   returnAPIKeys
@@ -22,10 +25,6 @@ const fastify = Fastify({
   },
   logger: false,
   requestTimeout: 30000,
-});
-
-fastify.register(routes, {
-  prefix: "/api/v1",
 });
 
 const endPointDoc = {
@@ -76,13 +75,67 @@ const endPointDocBase = {
 
 fastify.all("/api", async (request, response) => {
   logger.log("API", `Received base route request from ${request.ip}`)
-  response.code(200).send({error: "Please select a valid endpoint before sending a request", ...endPointDoc })
+  response.code(200).send({ error: "Please select a valid endpoint before sending a request", ...endPointDoc })
 })
 
 fastify.all("/", async (request, response) => {
   logger.log("API", `Received base route request from ${request.ip}`)
-  response.code(200).send({error: "Please select a valid endpoint before sending a request", ...endPointDocBase })
+  response.code(200).send({ error: "Please select a valid endpoint before sending a request", ...endPointDocBase })
 })
+
+fastify.post('/v1/audio/outputs', async (request, reply) => {
+  const { fileURL } = request.body;
+
+  if (!fileURL) {
+    return reply.code(400).send({ error: 'Missing fileURL parameter' });
+  }
+
+  try {
+    // Download and process the audio (using the code from previous example)
+    const axios = await import('axios');
+    const fs = await import('fs/promises');
+
+    // Create temp directory
+    const tempDir = path.join(process.cwd(), 'temp');
+    await fs.mkdir(tempDir, { recursive: true }).catch(() => { });
+    const tempFilePath = path.join(tempDir, `tts_${Date.now()}.wav`);
+
+    // Download the file from the URL
+    const response = await axios.default({
+      method: 'GET',
+      url: fileURL,
+      responseType: 'arraybuffer'
+    });
+
+    // Save the file to the temp directory
+    await fs.writeFile(tempFilePath, Buffer.from(response.data));
+
+    // Process the audio file
+    const processedFilePath = await processAudio(tempFilePath, {
+      preset: request.body.preset || 'clarity',
+      outputDir: 'final'
+    });
+
+    // Clean up temp file
+    await fs.unlink(tempFilePath).catch(() => { });
+
+    // Get just the filename from the path
+    const filename = path.basename(processedFilePath);
+
+    // Return the URL to access the processed file
+    return {
+      success: true,
+      audioUrl: `/audio/${filename}`,
+      filename: filename
+    };
+  } catch (error) {
+    request.log.error(error);
+    return reply.code(500).send({
+      error: 'Failed to process audio',
+      message: error.message
+    });
+  }
+});
 
 fastify.setErrorHandler((error, request, reply) => {
   if (error instanceof Fastify.errorCodes.FST_ERR_ROUTE_METHOD_NOT_SUPPORTED) {
@@ -147,7 +200,20 @@ async function preflightChecks() {
  * @returns {Promise<void>} - A promise that resolves when the server starts listening.
  */
 async function launchRest() {
+
   const portNum = await retrieveConfigValue("server.port");
+  await fastify.register(routes, {
+    prefix: "/v1",
+  });
+
+  await fastify.register(audioRoutes, {
+    outputDir: 'final',
+    prefix: '/files/audio',
+    addContentDisposition: true
+  });
+
+  scheduleCleanup(path.join(process.cwd(), 'final'), 5, 24);
+
   try {
     await fastify.listen({
       port: portNum,
@@ -180,8 +246,8 @@ async function initializeApp() {
   ];
   await loadConfig();
 
-  for (const user of allUsers) {
-    for (const collectionName of collectionNames) {
+  for await (const user of allUsers) {
+    for await (const collectionName of collectionNames) {
       try {
         const collectionExists = await aiHelper.checkAndCreateCollection(
           collectionName,

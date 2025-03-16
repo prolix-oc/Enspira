@@ -1,68 +1,159 @@
 import fs from "fs-extra";
 import moment from "moment";
-import { socialMedias, returnTwitchEvent } from "./twitch-helper.js";
+import { socialMedias } from "./twitch-helper.js";
 import { interpretEmotions } from "./data-helper.js";
 import { returnAuthObject } from "./api-helper.js";
-import { getPromptTokens } from "./token-helper.js";
+import { getPromptTokens, getOutputTokens, tokenizedFromRemote, promptTokenizedFromRemote } from "./token-helper.js";
 import { retrieveConfigValue } from "./config-helper.js";
-import { ChatRequestBody, ToolRequestBody } from "./oai-requests.js";
+import { returnRecentChats } from "./ai-logic.js";
+import { ChatRequestBody, ChatRequestBodyCoT, ToolRequestBody, QueryRequestBody, ModerationRequestBody, SummaryRequestBody } from "./oai-requests.js";
+import { jsonrepair } from 'jsonrepair'
 import OpenAI from "openai";
+import { performance } from "node:perf_hooks";
 
-/**
- * Performs an OpenAI chat completion request and measures performance.
- *
- * @param {object} requestBody - The request body to send to the OpenAI API.
- * @param {object} modelConfig - The configuration for the chosen model.
- * @returns {Promise<object>} An object containing the response content and tokens per second.
- */
-async function sendChatCompletionRequest(requestBody, modelConfig) {
-  const openai = new OpenAI({
-      baseURL: modelConfig.endpoint,
-      apiKey: modelConfig.apiKey,
-  });
+const templateCache = {};
 
-  const startTime = process.hrtime();
-  let endTime;
-  let timeElapsed;
-
+async function getTemplate(filePath) {
+  if (templateCache[filePath]) {
+    return templateCache[filePath];
+  }
   try {
-      const response = await openai.chat.completions.create(requestBody);
-
-      endTime = process.hrtime(startTime); // Calculate elapsed time
-      timeElapsed = (endTime[0] * 1e9 + endTime[1]) / 1e9;
-
-      const completionTokens = response.usage.completion_tokens;
-      const tokensPerSecond = completionTokens / timeElapsed;
-
-      return {
-          response: response.choices[0].message.content,
-          tokensPerSecond: tokensPerSecond.toFixed(2),
-      };
+    const content = await fs.readFile(filePath, "utf-8");
+    templateCache[filePath] = content;
+    return content;
   } catch (error) {
-      logger.log(
-          "API",
-          `OpenAI chat completion error: ${error}; Model Config: ${JSON.stringify(
-              modelConfig,
-          )}`,
-      );
-      return { error: error.message };
+    logger.log("Files", `Error reading template file ${filePath}: ${error}`);
+    throw error;
   }
 }
 
-/**
- * Generates a prompt for model moderation based on a message and user ID.
- *
- * @param {string} message - The message to moderate.
- * @param {string} userId - The ID of the user.
- * @returns {Promise<object>} - The prompt with samplers for moderation.
- */
+export async function sendChatCompletionRequest(requestBody, modelConfig) {
+  const openai = new OpenAI({
+    baseURL: modelConfig.endpoint,
+    apiKey: modelConfig.apiKey,
+  });
+
+  const startTime = performance.now();
+  let firstTokenTimeElapsed = null;
+  let backendStartTime;
+  let fullResponse = "";
+
+  try {
+    const stream = await openai.chat.completions.create({
+      ...requestBody,
+      stream: true,
+    });
+
+    for await (const part of stream) {
+      const content = part.choices[0]?.delta?.content;
+      if (content) {
+        if (firstTokenTimeElapsed === null) {
+          // Calculate time to first token in seconds
+          firstTokenTimeElapsed = (performance.now() - startTime) / 1000;
+          // Start backend timer after first token arrives
+          backendStartTime = performance.now();
+        }
+        fullResponse += content;
+      }
+    }
+
+    // Calculate backend processing time in seconds
+    const backendTimeElapsed = (performance.now() - backendStartTime) / 1000;
+
+    // Tokenize the full response using the remote service
+    const generatedTokens = await tokenizedFromRemote(fullResponse, modelConfig.modelType);
+    let backendTokensPerSecond = 0;
+    if (backendTimeElapsed > 0 && generatedTokens > 0) {
+      backendTokensPerSecond = (generatedTokens / backendTimeElapsed).toFixed(2);
+    }
+
+    return {
+      response: fullResponse,
+      timeToFirstToken: firstTokenTimeElapsed ? firstTokenTimeElapsed.toFixed(3) : null,
+      tokensPerSecond: backendTokensPerSecond,
+    };
+  } catch (error) {
+    logger.log(
+      "API",
+      `OpenAI chat completion error: ${error}; Model Config: ${JSON.stringify(modelConfig)}`
+    );
+    return { error: error.message };
+  }
+}
+
+
+export async function sendChatCompletionRequestCoT(requestBody, modelConfig) {
+  const openai = new OpenAI({
+    baseURL: modelConfig.endpoint,
+    apiKey: modelConfig.apiKey,
+  });
+
+  const startTime = performance.now();
+  let firstTokenTimeElapsed = null;
+  let backendStartTime;
+  let fullResponse = "";
+
+  try {
+    const stream = await openai.chat.completions.create(requestBody);
+
+    for await (const part of stream) {
+      const content = part.choices[0]?.delta?.content;
+      if (content) {
+        if (firstTokenTimeElapsed === null) {
+          firstTokenTimeElapsed = (performance.now() - startTime) / 1000;
+          backendStartTime = performance.now();
+        }
+        fullResponse += content;
+      }
+    }
+
+    const backendTimeElapsed = (performance.now() - backendStartTime) / 1000;
+    const generatedTokens = await tokenizedFromRemote(fullResponse, modelConfig.modelType);
+    let backendTokensPerSecond = 0;
+    if (backendTimeElapsed > 0 && generatedTokens > 0) {
+      backendTokensPerSecond = (generatedTokens / backendTimeElapsed).toFixed(2);
+    }
+
+    let formattedResponse;
+    let thoughtsArray = [];
+    let fullOutput = null;
+    try {
+      const fixedResponse = jsonrepair(fullResponse);
+      formattedResponse = JSON.parse(fixedResponse);
+      if (formattedResponse.thoughts) {
+        for (const thought of formattedResponse.thoughts) {
+          if (thought !== "") thoughtsArray.push(thought);
+        }
+      }
+      fullOutput = formattedResponse.final_response;
+    } catch (parseError) {
+      logger.log(
+        "API",
+        `Error parsing JSON response: ${parseError}; Response: ${fullResponse}`,
+        "error"
+      );
+      return { error: `Error parsing JSON: ${parseError.message}`, rawResponse: fullResponse };
+    }
+
+    return {
+      response: fullOutput,
+      thoughtProcess: thoughtsArray,
+      timeToFirstToken: firstTokenTimeElapsed ? firstTokenTimeElapsed.toFixed(2) : null,
+      tokensPerSecond: backendTokensPerSecond,
+    };
+  } catch (error) {
+    logger.log(
+      "API",
+      `OpenAI chat completion error: ${error}; Model Config: ${JSON.stringify(modelConfig)}`
+    );
+    return { error: error.message };
+  }
+}
+
 const moderatorPrompt = async (message, userId) => {
   const userObject = await returnAuthObject(userId);
-  const instructTemplate = await fs.readFile(
-    `./instructs/helpers/moderation.prompt`,
-    "utf-8"
-  );
-
+  const instructTemplate = await getTemplate("./instructs/helpers/moderation.prompt");
+  
   const replacements = {
     "{{player}}": userObject.player_name,
     "{{char}}": userObject.bot_name,
@@ -73,17 +164,15 @@ const moderatorPrompt = async (message, userId) => {
   };
 
   const instructionTemplate = replacePlaceholders(instructTemplate, replacements);
-  const promptWithSamplers = await new ToolRequestBody(
+  const promptWithSamplers = await ModerationRequestBody.create(
     instructionTemplate,
     await retrieveConfigValue("models.moderator.model"),
     message
   )
-
   logger.log(
     "LLM",
-    `Prompt is using ${await getPromptTokens(
-      promptWithSamplers,
-      await retrieveConfigValue("models.moderator.modelType")
+    `Moderation prompt is using ${await promptTokenizedFromRemote(
+      promptWithSamplers.messages,
     )} of your available ${await retrieveConfigValue("models.moderator.maxTokens")} tokens.`
   );
   return promptWithSamplers;
@@ -99,10 +188,7 @@ const moderatorPrompt = async (message, userId) => {
  */
 const contextPromptChat = async (promptData, message, userID) => {
   const currentAuthObject = await returnAuthObject(userID);
-  const instructTemplate = await fs.readFile(
-    `./instructs/system.prompt`,
-    "utf-8"
-  );
+  const instructTemplate = await getTemplate(`./instructs/system_cot.prompt`);
   const dynamicPrompt = await fs.readFile(
     `./instructs/dynamic.prompt`,
     "utf-8"
@@ -137,22 +223,18 @@ const contextPromptChat = async (promptData, message, userID) => {
     "{{player_info}}": `\n\n## Information about ${currentAuthObject.player_name}:\nThis is pertinent information regarding ${currentAuthObject.player_name} that you should always remember.\n${fileContents.player_info}`,
     "{{lore}}": `\n\n## World Information:\nUse this information to reflect the world and context around ${currentAuthObject.bot_name}:\n${fileContents.world_lore}`,
     "{{scene}}": `\n\n## Scenario:\n${fileContents.scenario}`,
-    "{{weather}}": `\n\n${
-      currentAuthObject.weather ? fileContents.weather : ""
-    }`,
+    "{{weather}}": `\n\n${currentAuthObject.weather ? fileContents.weather : ""
+      }`,
     "{{voice}}": `\n## Previous Voice Interactions:\nNon-exhaustive list of prior vocal interactions you've had with ${currentAuthObject.player_name}:\n${promptData.relVoice}`,
     "{{recent_voice}}": `\n\n## Current Voice Conversations with ${currentAuthObject.player_name}:\nUp to the last ${await retrieveConfigValue(
       "twitch.maxChatsToSave"
-    )} voice messages are provided to you. Use these voice messages to help you keep up with the current conversation:\n${
-      fileContents.voice_messages
-    }`,
+    )} voice messages are provided to you. Use these voice messages to help you keep up with the current conversation:\n${fileContents.voice_messages
+      }`,
     "{{recent_chat}}": `\n\n## Current Messages from Chat:\nUp to the last ${await retrieveConfigValue(
       "twitch.maxChatsToSave"
-    )} messages are provided to you from ${
-      currentAuthObject.player_name
-    }'s Twitch chat. Use these messages to keep up with the current conversation:\n${
-      fileContents.twitch_chat
-    }`,
+    )} messages are provided to you from ${currentAuthObject.player_name
+      }'s Twitch chat. Use these messages to keep up with the current conversation:\n${await returnRecentChats(userID)
+      }`,
     "{{emotion}}": `\n\n## Current Emotional Assessment of Message:\n- ${sentiment}`
   };
 
@@ -174,7 +256,7 @@ const contextPromptChat = async (promptData, message, userID) => {
     ...postProcessReplacements,
   });
 
-  const promptWithSamplers = await new ChatRequestBody(
+  const promptWithSamplers = await ChatRequestBody.create(
     instructionTemplate,
     dynamicTemplate,
     message,
@@ -183,9 +265,92 @@ const contextPromptChat = async (promptData, message, userID) => {
 
   logger.log(
     "LLM",
-    `Prompt is using ${await getPromptTokens(
-      promptWithSamplers,
-      await retrieveConfigValue("models.chat.modelType")
+    `Chat prompt is using ${await promptTokenizedFromRemote(
+      promptWithSamplers.messages
+    )} of your available ${await retrieveConfigValue(
+      "models.chat.maxTokens"
+    )} tokens.`
+  );
+  return promptWithSamplers;
+};
+
+const contextPromptChatCoT = async (promptData, message, userID) => {
+  const currentAuthObject = await returnAuthObject(userID);
+  const instructTemplate = await getTemplate(`./instructs/system_cot.prompt`);
+  const dynamicPrompt = await getTemplate(`./instructs/dynamic.prompt`);
+
+  const timeStamp = moment().format("dddd, MMMM Do YYYY, [at] hh:mm A");
+
+  const fileContents = await readPromptFiles(userID, [
+    "character_personality",
+    "world_lore",
+    "scenario",
+    "character_card",
+    "weather",
+    "twitch_chat",
+    "rules",
+    "player_info",
+    "voice_messages",
+  ]);
+
+  const sentiment = await interpretEmotions(message);
+  logger.log("LLM", `Analysis of emotions: ${sentiment}`);
+  const user = promptData.user
+
+  const replacements = {
+    "{{datetime}}": `\nThe current date and time where you and ${currentAuthObject.player_name} live is currently: ${timeStamp}`,
+    "{{ctx}}": `\n\n## Additional Information:\nExternal context relevant to the conversation:\n${promptData.relContext}`,
+    "{{ruleset}}": `\n\n# Guidelines\n${fileContents.rules}`,
+    "{{chat}}": `\n## Other Relevant Chat Context:\nBelow are potentially relevant chat messages sent previously, that may be relevant to the conversation:\n${promptData.relChats}`,
+    "{{card}}": `\n\n## ${currentAuthObject.bot_name}'s Description:\n${fileContents.character_card}`,
+    "{{persona}}": `\n\n## ${currentAuthObject.bot_name}'s Personality:\n${fileContents.character_personality}`,
+    "{{player_info}}": `\n\n## Information about ${currentAuthObject.player_name}:\nThis is pertinent information regarding ${currentAuthObject.player_name} that you should always remember.\n${fileContents.player_info}`,
+    "{{lore}}": `\n\n## World Information:\nUse this information to reflect the world and context around ${currentAuthObject.bot_name}:\n${fileContents.world_lore}`,
+    "{{scene}}": `\n\n## Scenario:\n${fileContents.scenario}`,
+    "{{weather}}": `\n\n${currentAuthObject.weather ? fileContents.weather : ""
+      }`,
+    "{{voice}}": `\n## Previous Voice Interactions:\nNon-exhaustive list of prior vocal interactions you've had with ${currentAuthObject.player_name}:\n${promptData.relVoice}`,
+    "{{recent_voice}}": `\n\n## Current Voice Conversations with ${currentAuthObject.player_name}:\nUp to the last ${await retrieveConfigValue(
+      "twitch.maxChatsToSave"
+    )} voice messages are provided to you. Use these voice messages to help you keep up with the current conversation:\n${fileContents.voice_messages
+      }`,
+    "{{recent_chat}}": `\n\n## Current Messages from Chat:\nUp to the last ${await retrieveConfigValue(
+      "twitch.maxChatsToSave"
+    )} messages are provided to you from ${currentAuthObject.player_name
+      }'s Twitch chat. Use these messages to keep up with the current conversation:\n${await returnRecentChats(userID)
+      }`,
+    "{{emotion}}": `\n\n## Current Emotional Assessment of Message:\n- ${sentiment}`
+  };
+
+  const postProcessReplacements = {
+    "{{player}}": currentAuthObject.player_name,
+    "{{char}}": currentAuthObject.bot_name,
+    "{{char_limit}}": await retrieveConfigValue("twitch.maxCharLimit"),
+    "{{user}}": promptData.user,
+    "{{socials}}": await socialMedias(userID),
+    "{{soc_tiktok}}": await socialMedias(userID, "tt"),
+  };
+
+  const instructionTemplate = replacePlaceholders(instructTemplate, {
+    ...replacements,
+    ...postProcessReplacements,
+  });
+  const dynamicTemplate = replacePlaceholders(dynamicPrompt, {
+    ...replacements,
+    ...postProcessReplacements,
+  });
+
+  const promptWithSamplers = await ChatRequestBodyCoT.create(
+    instructionTemplate,
+    dynamicTemplate,
+    message,
+    user
+  )
+
+  logger.log(
+    "LLM",
+    `Thoughtful chat prompt is using ${await promptTokenizedFromRemote(
+      promptWithSamplers.messages
     )} of your available ${await retrieveConfigValue(
       "models.chat.maxTokens"
     )} tokens.`
@@ -207,14 +372,8 @@ const eventPromptChat = async (message, userId) => {
     `Doing eventing stuff for: ${userObject.player_name} and ${userId}`
   );
 
-  const instructTemplate = await fs.readFile(
-    `./instructs/system.prompt`,
-    "utf-8"
-  );
-  const dynamicPrompt = await fs.readFile(
-    "./instructs/dynamic.prompt",
-    "utf-8"
-  );
+  const instructTemplate = await getTemplate(`./instructs/system.prompt`);
+  const dynamicPrompt = await getTemplate("./instructs/dynamic.prompt");
 
   const timeStamp = moment().format("dddd, MMMM Do YYYY, [at] hh:mm A");
 
@@ -237,16 +396,13 @@ const eventPromptChat = async (message, userId) => {
     "{{persona}}": `\n\n## ${userObject.bot_name}'s Personality:\n${fileContents.character_personality}`,
     "{{lore}}": `\n\n## World Information:\nUse this information to reflect the world and context around ${userObject.bot_name}:\n${fileContents.world_lore}`,
     "{{scene}}": `\n\n## Scenario:\n${fileContents.scenario}`,
-    "{{weather}}": `\n\n${
-      userObject.weather ? fileContents.weather : ""
-    }`,
+    "{{weather}}": `\n\n${userObject.weather ? fileContents.weather : ""
+      }`,
     "{{recent_chat}}": `\n\n## Current Messages from Chat:\nUp to the last ${await retrieveConfigValue(
       "twitch.maxChatsToSave"
-    )} messages are provided to you from ${
-      userObject.player_name
-    }'s Twitch chat. Use these messages to keep up with the current conversation:\n${
-      fileContents.twitch_chat
-    }`,
+    )} messages are provided to you from ${userObject.player_name
+      }'s Twitch chat. Use these messages to keep up with the current conversation:\n${await returnRecentChats(userId)
+      }`,
     // Add the player info
     "{{player_info}}": `\n\n## Information about ${userObject.player_name}:\nThis is pertinent information regarding ${userObject.player_name} that you should always remember.\n${fileContents.player_info}`,
     // Remove the unused replacements that were causing duplication
@@ -266,24 +422,25 @@ const eventPromptChat = async (message, userId) => {
 
   const instructionTemplate = replacePlaceholders(
     instructTemplate,
-    {...replacements, ...postProcessReplacements} // Merge replacements for easier use
+    { ...replacements, ...postProcessReplacements } // Merge replacements for easier use
   );
   const dynamicTemplate = replacePlaceholders(
     dynamicPrompt,
-    {...replacements, ...postProcessReplacements} // Merge replacements for easier use
+    { ...replacements, ...postProcessReplacements } // Merge replacements for easier use
   );
 
-  const promptWithSamplers = await new ChatRequestBody(
+  const promptWithSamplers = await ChatRequestBody.create(
     instructionTemplate,
     dynamicTemplate,
     message
   )
 
+  await fs.writeJSON('./prompt-event.json', promptWithSamplers, { spaces: 2 })
+
   logger.log(
     "LLM",
-    `Prompt is using ${await getPromptTokens(
-      promptWithSamplers,
-      await retrieveConfigValue("models.chat.modelType")
+    `Event handler prompt is using ${await promptTokenizedFromRemote(
+      promptWithSamplers.messages
     )} of your available ${await retrieveConfigValue(
       "models.chat.maxTokens"
     )} tokens.`
@@ -300,10 +457,7 @@ const eventPromptChat = async (message, userId) => {
  */
 const queryPrompt = async (message, userId) => {
   const userObject = await returnAuthObject(userId);
-  const instructTemplate = await fs.readFile(
-    "./instructs/helpers/query.prompt",
-    "utf-8"
-  );
+  const instructTemplate = await getTemplate("./instructs/helpers/query.prompt");
   const timeStamp = moment().format("MM/DD/YY [at] HH:mm");
   const [dateString, timeString] = timeStamp.split(" at ");
 
@@ -312,10 +466,11 @@ const queryPrompt = async (message, userId) => {
     "{{query}}": message,
     "{{player}}": userObject.player_name,
     "{{socials}}": await socialMedias(userId),
+    "{{char}}": userObject.bot_name
   };
 
   const instructionTemplate = replacePlaceholders(instructTemplate, replacements);
-  const promptWithSamplers = await new ToolRequestBody(
+  const promptWithSamplers = await QueryRequestBody.create(
     instructionTemplate,
     await retrieveConfigValue("models.query.model"),
     message
@@ -323,9 +478,8 @@ const queryPrompt = async (message, userId) => {
 
   logger.log(
     "LLM",
-    `Prompt is using ${await getPromptTokens(
-      promptWithSamplers,
-      await retrieveConfigValue("models.query.modelType")
+    `Search query prompt is using ${await promptTokenizedFromRemote(
+      promptWithSamplers.messages
     )} of your available ${await retrieveConfigValue("models.query.maxTokens")} tokens.`
   );
   return promptWithSamplers;
@@ -341,10 +495,7 @@ const queryPrompt = async (message, userId) => {
 const rerankPrompt = async (message, userId) => {
   logger.log("Rerank", `Received message ${message}`);
   const userObject = await returnAuthObject(userId);
-  const instructTemplate = await fs.readFile(
-    "./instructs/helpers/rerank.prompt",
-    "utf-8"
-  );
+  const instructTemplate = await getTemplate("./instructs/helpers/rerank.prompt");
 
   const replacements = {
     "{{socials}}": await socialMedias(userId),
@@ -352,29 +503,25 @@ const rerankPrompt = async (message, userId) => {
   };
 
   const instructionTemplate = replacePlaceholders(instructTemplate, replacements);
-  const promptWithSamplers = await new ToolRequestBody(
+  const promptWithSamplers = await ToolRequestBody.create(
     instructionTemplate,
-    await retrieveConfigValue("models.rerank.model"),
+    await retrieveConfigValue("models.rerankTransform.model"),
     message
   )
 
   logger.log(
     "LLM",
-    `Prompt is using ${await getPromptTokens(
-      promptWithSamplers,
-      await retrieveConfigValue("models.rerank.modelType")
-    )} of your available ${await retrieveConfigValue("models.rerank.maxTokens")} tokens.`
+    `Reranking prompt is using ${await promptTokenizedFromRemote(
+      promptWithSamplers.messages
+    )} of your available ${await retrieveConfigValue("models.rerankTransform.maxTokens")} tokens.`
   );
   return promptWithSamplers;
 };
 
 const summaryPrompt = async (textContent) => {
-  const instructTemplate = await fs.readFile(
-    "./instructs/helpers/summary.prompt",
-    "utf-8"
-  );
+  const instructTemplate = await getTemplate("./instructs/helpers/summary.prompt");
 
-  const promptWithSamplers = await new ToolRequestBody(
+  const promptWithSamplers = await SummaryRequestBody.create(
     instructTemplate,
     await retrieveConfigValue("models.summary.model"),
     textContent
@@ -382,9 +529,8 @@ const summaryPrompt = async (textContent) => {
 
   logger.log(
     "LLM",
-    `Prompt is using ${await getPromptTokens(
-      promptWithSamplers,
-      await retrieveConfigValue("models.summary.modelType")
+    `Summary prompt is using ${await promptTokenizedFromRemote(
+      promptWithSamplers.messages
     )} of your available ${await retrieveConfigValue("models.summary.maxTokens")} tokens.`
   );
   return promptWithSamplers;
@@ -439,16 +585,15 @@ const replyStripped = async (message, userId) => {
   const userObj = await returnAuthObject(userId);
   let formatted = message
     .replace(/(\r\n|\n|\r)/gm, " ") // Replace newlines with spaces
-    .replace(new RegExp(`${userObj.bot_name}:\\s?`, "g"), "") // Remove bot's name
+    .replace(new RegExp(`${userObj.bot_name}:\\s?`, "g"), "") // Remove bot's name followed by a colon and optional space
     .replace(/\(500 characters\)/g, "") // Remove (500 characters)
     .replace(/\\/g, "") // Remove backslashes
-    .replace(/\s+/g, " "); // Replace multiple spaces with single space
+    .replace(/\s+/g, " "); // Replace multiple spaces with a single space
 
   // Remove unmatched quotes ONLY at the beginning or end of the string
-  formatted = formatted.replace(/^["'](?=[^"']*$)/, ""); // Remove leading quote if no matching quote
-  formatted = formatted.replace(/(?<!["'])["']$/, ""); // Remove trailing quote if no matching quote
+  formatted = formatted.replace(/^['"]|['"]$/g, ""); // Trim unmatched quotes at start and end
 
-  return formatted.trim();
+  return formatted.trim(); // Trim leading and trailing whitespace
 };
 
 /**
@@ -461,14 +606,20 @@ const fixTTSString = async (inputString) => {
   const acronymRegex = /\b([A-Z]{2,})(?!\w)/g;
   const jsRegex = /\.js\b/gi;
 
+  const exceptions = ["GOATs", "LOL", "LMAO"];
+
   let acronymCount = 0;
   let jsCount = 0;
 
   let transformedString = inputString.replace(acronymRegex, (match) => {
+    if (exceptions.includes(match)) {
+      return match; // Skip transformation for exceptions
+    }
+
     acronymCount++;
     let transformed =
       match.slice(0, -1).split("").join(".") + "." + match.slice(-1);
-    if (match.endsWith("S")) {
+    if (match.endsWith("S") && match.length > 2) {
       const base = match.slice(0, -1).split("").join(".");
       transformed = `${base}'s`;
     }
@@ -482,6 +633,7 @@ const fixTTSString = async (inputString) => {
 
   return { fixedString: transformedString, acronymCount, jsCount };
 };
+
 
 /**
  * Filters out character names from a message based on a regular expression.
@@ -571,9 +723,9 @@ export {
   filterCharacterFromMessage,
   queryPrompt,
   contextPromptChat,
+  contextPromptChatCoT,
   fixTTSString,
   rerankPrompt,
   eventPromptChat,
-  containsCharacterName,
-  sendChatCompletionRequest
+  containsCharacterName
 };

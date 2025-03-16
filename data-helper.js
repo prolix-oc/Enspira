@@ -2,6 +2,7 @@ import axios from "axios";
 import {
   inferSearchParam,
   searchBraveAPI,
+  searchSearXNG,
   retrieveWebContext,
   rerankString,
 } from "./ai-logic.js";
@@ -15,8 +16,9 @@ import { retrieveConfigValue } from './config-helper.js'
 const userAgentStrings = [
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.2227.0 Safari/537.36",
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.3497.92 Safari/537.36",
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Safari/605.1.1",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Herring/97.1.8280.8"
 ];
 
 /**
@@ -70,7 +72,8 @@ const resultsReranked = async (
   contextBody,
   message,
   userId,
-  requiresSearch = false
+  requiresSearch = false,
+  cotReturn = false
 ) => {
   try {
     if (!contextBody || !message) {
@@ -82,10 +85,20 @@ const resultsReranked = async (
       logger.log("Embedding", "No context body provided for reranking.");
       return "- No additional context provided for this section.";
     }
-
-    const resultsRaw = contextBody
-      .map((item) => item.text_content || item.summary)
-      .filter(Boolean);
+    let resultsRaw = []
+    let resultsTitle = []
+    if (!contextBody[0].relation) {
+      resultsRaw = contextBody
+        .map((item) => item.text_content || item.summary)
+        .filter(Boolean);
+      resultsTitle = contextBody
+        .map((item) => item.relation)
+        .filter(Boolean)
+    } else {
+      resultsRaw = contextBody
+        .map((item) => item.text_content || item.summary)
+        .filter(Boolean);
+    }
 
     if (resultsRaw.length === 0) {
       logger.log("Embedding", "No valid content found in context body.");
@@ -96,13 +109,13 @@ const resultsReranked = async (
     const rerankOptimized = await rerankString(message, userId);
 
     const rerankData = {
-      model: await retrieveConfigValue("models.embedding.rerankingModel"),
+      model: await retrieveConfigValue("models.rerank.model"),
       query: rerankOptimized,
       documents: resultsRaw,
     };
 
     logger.log("Embedding", `Starting rerank...`);
-    const response = await axios.post(`${await retrieveConfigValue("models.embedding.endpoint")}/rerank`, rerankData, {
+    const response = await axios.post(`${await retrieveConfigValue("models.rerank.endpoint")}/rerank`, rerankData, {
       headers: {
         "Content-Type": "application/json",
         "Accept-Encoding": "gzip, deflate, br",
@@ -116,13 +129,13 @@ const resultsReranked = async (
     let rerankedMissed = 0;
 
     let rerankProcessed = rerankedArray.filter((item) => {
-        if (item.relevance_score > 0.5) {
-          return true;
-        } else {
-          rerankedMissed++;
-          return false;
-        }
-      })
+      if (item.relevance_score > 0.5) {
+        return true;
+      } else {
+        rerankedMissed++;
+        return false;
+      }
+    })
       .map((item) => resultsRaw[parseInt(item.index)]);
 
     // Fallback to top results if not enough high-scoring matches
@@ -147,13 +160,31 @@ const resultsReranked = async (
         rerankProcessed.push(augmentResult);
       }
     }
-
-    return rerankProcessed.join("\n");
+    if (cotReturn) {
+      return rerankProcessed
+    } else {
+      return rerankProcessed.join("\n");
+    }
   } catch (error) {
     logger.log("Embedding", `Error in resultsReranked: ${error.stack}`);
     return "- Error processing information.\n";
   }
 };
+
+export async function axiosRequestWithRetry(config, attempts = 3, initialDelay = 1000) {
+  let delay = initialDelay;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await axios(config);
+    } catch (error) {
+      if (i === attempts - 1) {
+        throw error;
+      }
+      await new Promise(resolve => setTimeout(resolve, delay));
+      delay *= 2; // Exponential backoff
+    }
+  }
+}
 
 /**
  * Initiates a web search process for a given message and user ID.
@@ -165,21 +196,18 @@ const resultsReranked = async (
  * @returns {Promise<string>} - The result of the web context retrieval, or an empty string if no query is inferred.
  */
 async function startWebResults(message, userId) {
-  logger.log("LLM", `Starting web search for '${message}'`);
   const query = await inferSearchParam(message, userId);
 
-  if (query === "pass") {
-    logger.log("Search", "No additional query needed.");
+  if (query == false) {
     return "";
   }
 
-  const [searchQuery, subject, webQuery, freshness] = query.split(";");
-  const pmWebSearch = await searchBraveAPI(searchQuery, freshness);
-
+  const pmWebSearch = await searchSearXNG(query.searchTerm, query.freshness);
+  logger.log("LLM", `Starting web search for '${query.searchTerm}'`);
   const searchedResults = await retrieveWebContext(
     pmWebSearch,
-    webQuery.trim(),
-    subject.trim(),
+    query.searchTerm,
+    query.subject,
     userId
   );
 
@@ -196,10 +224,10 @@ async function startWebResults(message, userId) {
 const interpretEmotions = async (message) => {
   try {
     const classifyBody = {
-      model: await retrieveConfigValue("models.embedding.classifyModel"),
+      model: await retrieveConfigValue("models.classifier.model"),
       input: [message],
     };
-    const response = await axios.post(`${await retrieveConfigValue("models.embedding.endpoint")}/classify`, classifyBody);
+    const response = await axios.post(`${await retrieveConfigValue("models.classifier.endpoint")}/classify`, classifyBody);
     const results = response.data.data[0];
     let emotionsResult = getEmotionRanking(results);
     return emotionsResult;
@@ -228,7 +256,7 @@ const pullFromWeb = async (urls, subject) => {
         headers: {
           "User-Agent":
             userAgentStrings[
-              Math.floor(Math.random() * userAgentStrings.length)
+            Math.floor(Math.random() * userAgentStrings.length)
             ],
         },
         timeout: 10000,
@@ -256,10 +284,10 @@ const pullFromWeb = async (urls, subject) => {
       let content = "";
 
       if (index === 0) {
-        content += `# Start of documents\nSUBJECT MATTER: "${subject}"`;
-        content += `\n\n## From the web page "${link.url}":\n\n${cleanContent}`;
+        content += `# Start of documents related to the subject "${subject}"`;
+        content += `\n\n## From the web page "${link.source}", :\n\n${cleanContent}`;
       } else if (index === urls.length - 1) {
-        content += `\n\n## From the web page "${link.url}" in regards to the subject matter "${subject}":\n\n${cleanContent}`;
+        content += `\n\n## From the web page "${link.url}", titled "${link.title}":\n\n${cleanContent}`;
         content += `\n\n# End of documents`;
       } else {
         content += `\n\n## From the web page "${link.url}" in regards to the subject matter "${subject}":\n\n${cleanContent}`;
@@ -274,6 +302,40 @@ const pullFromWeb = async (urls, subject) => {
 
   const contents = await Promise.all(fetchPromises);
   const pageContentText = contents.filter(Boolean).join("\n\n");
+
+  return pageContentText;
+};
+
+const pullFromWebScraper = async (urls, subject) => {
+  if (!urls || urls.length === 0) {
+    logger.log("Augment", "No URLs provided for content extraction.");
+    return "";
+  }
+  const fetchPromises = urls.map(async (link) => { // Remove index, we don't need it for headers anymore
+    try {
+      const url = new URL(`${await retrieveConfigValue("server.externalScraper.endpoint")}/api/article`);
+      url.searchParams.set("cache", await retrieveConfigValue("server.externalScraper.caching"));
+      url.searchParams.set("resource", "document");
+      url.searchParams.set("device", await retrieveConfigValue("server.externalScraper.deviceType"));
+      url.searchParams.set("url", link.url);
+      url.searchParams.set("format", "json");
+
+      const response = await axios.get(url.toString());
+      const content = `## From the web page "${link.source}", titled "${link.title}":\n\n${response.data.textContent}`; // Format content for each page
+
+      return content; // Return the content for this URL
+    } catch (error) {
+      logger.log("Augment", `Error processing URL "${link.url}": ${error}`);
+      return ""; // Return empty string on error to be filtered later
+    }
+  });
+
+  const contents = await Promise.all(fetchPromises); // Wait for all requests to complete
+
+  // Construct the final page content text
+  let pageContentText = `# Start of documents related to the subject "${subject}"\n\n`; // Add initial header
+  const validContents = contents.filter(Boolean); // Filter out any empty strings (from errors)
+  pageContentText += validContents.join("\n\n"); // Join valid content with separators
 
   return pageContentText;
 };
@@ -376,4 +438,5 @@ export {
   maintainVoiceContext,
   resultsReranked,
   pullFromWeb,
+  pullFromWebScraper
 };

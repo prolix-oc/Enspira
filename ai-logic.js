@@ -1,11 +1,10 @@
 import axios from "axios";
 import fs from "fs-extra";
 import path from "path";
-import util from "util";
-import * as child_process from "child_process";
-import moment from "moment";
 import fetch from "node-fetch";
 import https from "https";
+import { performance } from "node:perf_hooks";
+import { processAudio } from './audio-processor.js';
 import {
   MilvusClient,
   DataType,
@@ -13,7 +12,7 @@ import {
   IndexType,
   ConsistencyLevelEnum,
   LoadState,
-  buildSearchParams,
+  buildSearchParams
 } from "@zilliz/milvus2-sdk-node";
 import OpenAI from "openai";
 import FormData from "form-data";
@@ -21,16 +20,19 @@ import {
   replyStripped,
   queryPrompt,
   contextPromptChat,
+  contextPromptChatCoT,
   eventPromptChat,
   rerankPrompt,
   fixTTSString,
-  summaryPrompt,
-  sendChatCompletionRequest
+  sendChatCompletionRequest,
+  sendChatCompletionRequestCoT
 } from "./prompt-helper.js";
+import { SummaryRequestBody } from "./oai-requests.js"
 import { returnTwitchEvent } from "./twitch-helper.js";
-import { resultsReranked, pullFromWeb } from "./data-helper.js";
+import { resultsReranked, pullFromWeb, pullFromWebScraper } from "./data-helper.js";
 import { returnAuthObject } from "./api-helper.js";
 import { retrieveConfigValue } from "./config-helper.js";
+import { fileURLToPath } from 'url';
 
 const intelligenceSchema = async (userId) => {
   return {
@@ -111,8 +113,7 @@ const chatSchema = async (userId) => {
       },
       {
         name: "time_stamp",
-        data_type: DataType.VarChar,
-        max_length: 256,
+        data_type: DataType.Int64,
         is_primary_key: false,
         auto_id: false,
       },
@@ -125,6 +126,11 @@ const chatSchema = async (userId) => {
         metric_type: MetricType.JACCARD,
         params: { nlist: 2048 },
       },
+      {
+        field_name: "time_stamp",
+        index_name: "idx_time_stamp",
+        index_type: IndexType.RANGE
+      }
     ],
   };
 };
@@ -241,12 +247,13 @@ const userSchema = async (userId) => {
   };
 };
 
-const now = moment();
-const execute = util.promisify(child_process.exec);
 const milvusDatabaseUrl = await retrieveConfigValue("milvus.endpoint")
 const client = new MilvusClient({
   address: milvusDatabaseUrl,
 });
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 /**
  * Returns the appropriate schema for a given collection and user ID.
@@ -373,47 +380,57 @@ async function loadCollectionIfNeeded(collectionName, userId) {
   }
 }
 
-/**
- * Generates embeddings for a given message using a specified model.
- * @param {string|string[]} message - The message or array of messages to embed.
- * @returns {Promise<number[]|number[][]>} - The generated embeddings.
- */
-async function getMessageEmbedding(message) {
+export function validateEmbeddingDimension(embedding, expectedDim) {
+  const requiredBytes = expectedDim / 8; // assuming embedding is a Buffer of bytes
+  if (embedding.length !== requiredBytes) {
+    throw new Error(
+      `Dimension mismatch: expected ${expectedDim} bits (${requiredBytes} bytes), but got ${embedding.length} bytes.`
+    );
+  }
+}
+
+export async function axiosRequestWithRetry(config, attempts = 3, initialDelay = 1000) {
+  let delay = initialDelay;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await axios(config);
+    } catch (error) {
+      if (i === attempts - 1) {
+        throw error;
+      }
+      await new Promise(resolve => setTimeout(resolve, delay));
+      delay *= 2; // Exponential backoff
+    }
+  }
+}
+
+export async function getMessageEmbedding(message) {
   const embeddingData = {
     input: Array.isArray(message) ? message : [message],
     model: await retrieveConfigValue("models.embedding.model"),
   };
   try {
-    const response = await axios.post(
-      `${await retrieveConfigValue("models.embedding.endpoint")}/embeddings`,
-      embeddingData,
-      {
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${await retrieveConfigValue("models.embedding.apiKey")}`,
-        },
+    const config = {
+      method: "post",
+      url: `${await retrieveConfigValue("models.embedding.endpoint")}/embeddings`,
+      data: embeddingData,
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${await retrieveConfigValue("models.embedding.apiKey")}`,
       },
-    );
+      timeout: 30000,
+    };
+    const response = await axiosRequestWithRetry(config, 3, 1000);
     const embeddingResp = response.data.data;
-    if (embeddingResp.length > 1) {
-      return embeddingResp.map((item) => item.embedding);
-    } else {
-      return embeddingResp[0].embedding;
-    }
+    return embeddingResp.length > 1
+      ? embeddingResp.map(item => item.embedding)
+      : embeddingResp[0].embedding;
   } catch (error) {
     logger.log("System", `Error generating embedding: ${error}`);
+    throw error;
   }
 }
 
-/**
- * Searches documents in a Milvus collection.
- * @param {number[]} queryEmbedding - The query embedding.
- * @param {string} collectionName - The name of the collection.
- * @param {string} textParam - The output field for text content.
- * @param {number} limit - The maximum number of results to return.
- * @param {string} userId - The user ID.
- * @returns {Promise<object>} - The search response from Milvus.
- */
 async function searchDocumentsInMilvus(
   queryEmbedding,
   collectionName,
@@ -427,6 +444,7 @@ async function searchDocumentsInMilvus(
   }
 
   try {
+    const startTime = performance.now();
     const searchParams = {
       collection_name: `${collectionName}_${userId}`,
       data: queryEmbedding,
@@ -441,11 +459,15 @@ async function searchDocumentsInMilvus(
       consistency_level: ConsistencyLevelEnum.Strong,
     };
 
+    const timeElapsed = (performance.now() - startTime) / 1000;
+    logger.log(
+      "DB Metrics",
+      `Vector search took ${timeElapsed.toFixed(3)} seconds for query in collection "${collectionName}".`,
+    );
     const searchResponse = await client.search(searchParams);
     return searchResponse;
   } catch (error) {
     logger.log("Milvus", `Error searching in Milvus: ${error}`);
-    throw error;
   }
 }
 
@@ -489,25 +511,8 @@ async function findRelevantChats(message, user, userId, topK = 10) {
     const embeddingField = collectionSchema.fields.find(
       (field) => field.name === "embedding",
     );
-    const expectedDim = embeddingField?.type_params.find(
-      (param) => param.key === "dim",
-    )?.value;
-
-    if (!expectedDim) {
-      logger.log(
-        "Milvus",
-        "Could not retrieve the expected dimension for the embedding field.",
-      );
-      return [];
-    }
-
-    if (binaryEmbedding.length !== parseInt(expectedDim / 8)) {
-      logger.log(
-        "Milvus",
-        `Dimension mismatch: expected ${expectedDim}, got ${messageEmbedding.length}.`,
-      );
-      return [];
-    }
+    const expectedDim = parseInt(embeddingField?.type_params.find(param => param.key === "dim")?.value);
+    validateEmbeddingDimension(binaryEmbedding, expectedDim)
 
     const chatSearchResponse = await searchDocumentsInMilvus(
       binaryEmbedding,
@@ -520,6 +525,40 @@ async function findRelevantChats(message, user, userId, topK = 10) {
   } catch (error) {
     logger.log("Milvus", `Error in findRelevantChats: ${error}`);
     return []; // Return empty array on error
+  }
+}
+
+async function returnRecentChats(userId, fromConsole = false) {
+  const userObj = await returnAuthObject(userId);
+  const collection = `${await retrieveConfigValue("milvus.collections.chat")}_${userId}`;
+  try {
+    const startTime = performance.now();
+    const queryResult = await client.query({
+      collection_name: collection,
+      output_fields: ["raw_msg", "username", "time_stamp"],
+      limit: userObj.max_chats,
+      consistency_level: "Strong",
+    });
+    logger.log("Milvus", `Got these results: ${JSON.stringify(queryResult)}`);
+    const sortedResults = queryResult.data.sort(
+      (a, b) => a.time_stamp - b.time_stamp,
+    );
+    const formattedResults = sortedResults
+      .map(
+        (item) =>
+          `- ${item.username} sent the following message in ${userObj.player_name}'s Twitch channel: ${item.raw_msg}`,
+      )
+      .join("\n");
+    const timeElapsed = (performance.now() - startTime) / 1000;
+    logger.log("DB Metrics", `Recent chats took ${timeElapsed.toFixed(3)} seconds for query.`);
+    if (fromConsole) {
+      return { chatList: formattedResults, executionTime: timeElapsed };
+    } else {
+      return formattedResults;
+    }
+  } catch (error) {
+    logger.log("Milvus", `Error in findRecentChats: ${error}`);
+    return [];
   }
 }
 
@@ -572,25 +611,8 @@ async function findRelevantDocuments(message, userId, topK = 10) {
     const embeddingField = collectionSchema.fields.find(
       (field) => field.name === "embedding",
     );
-    const expectedDim = embeddingField?.type_params.find(
-      (param) => param.key === "dim",
-    )?.value;
-
-    if (!expectedDim) {
-      logger.log(
-        "Milvus",
-        "Could not retrieve the expected dimension for the embedding field.",
-      );
-      return [];
-    }
-
-    if (binaryEmbedding.length !== parseInt(expectedDim / 8)) {
-      logger.log(
-        "Milvus",
-        `Dimension mismatch: expected ${expectedDim}, got ${messageEmbedding.length}.`,
-      );
-      return [];
-    }
+    const expectedDim = parseInt(embeddingField?.type_params.find(param => param.key === "dim")?.value);
+    validateEmbeddingDimension(binaryEmbedding, expectedDim)
 
     const searchResponse = await searchDocumentsInMilvus(
       binaryEmbedding,
@@ -599,7 +621,6 @@ async function findRelevantDocuments(message, userId, topK = 10) {
       topK,
       userId,
     );
-
     return searchResponse.results;
   } catch (error) {
     logger.log("Milvus", `Error in findRelevantDocuments: ${error}`);
@@ -656,25 +677,8 @@ async function findRelevantVoiceInMilvus(message, userId, topK = 5) {
     const embeddingField = collectionSchema.fields.find(
       (field) => field.name === "embedding",
     );
-    const expectedDim = embeddingField?.type_params.find(
-      (param) => param.key === "dim",
-    )?.value;
-
-    if (!expectedDim) {
-      logger.log(
-        "Milvus",
-        "Could not retrieve the expected dimension for the embedding field.",
-      );
-      return [];
-    }
-
-    if (binaryEmbedding.length !== parseInt(expectedDim / 8)) {
-      logger.log(
-        "Milvus",
-        `Dimension mismatch: expected ${expectedDim}, got ${messageEmbedding.length}.`,
-      );
-      return [];
-    }
+    const expectedDim = parseInt(embeddingField?.type_params.find(param => param.key === "dim")?.value);
+    validateEmbeddingDimension(binaryEmbedding, expectedDim)
 
     const voiceResponse = await searchDocumentsInMilvus(
       binaryEmbedding,
@@ -959,15 +963,6 @@ async function insertAugmentVectorsToMilvus(
 
 /**
  * Retrieves web context, summarizes it, and stores it in Milvus.
- * @param {string[]} urls - The URLs to pull content from.
- * @param {string} query - The search query.
- * @param {string} subject - The subject of the search.
- * @param {string} userId - The user ID.
- * @returns {Promise<string|boolean>} - The summary string or false if failed.
- */
-// In ai-logic.js, replace the entire function body of retrieveWebContext with the following:
-/**
- * Retrieves web context, summarizes it, and stores it in Milvus.
  * @param {object[]} urls - Array of URL objects from Brave search.
  * @param {string} query - The search query.
  * @param {string} subject - The subject of the search.
@@ -976,59 +971,84 @@ async function insertAugmentVectorsToMilvus(
  */
 async function retrieveWebContext(urls, query, subject, userId) {
   try {
-    logger.log(
-      "LLM",
-      `Starting summarization based on search term: '${query}'`,
-    );
+    logger.log("LLM", `Starting optimized web context retrieval for '${query}'`);
 
-    const pageContents = await pullFromWeb(urls, subject);
-    if (!pageContents || pageContents.trim() === "") {
-      logger.log("Augment", "No data to summarize for the search.");
-      return false; // Return false if no content found
+    // Step 1: Scrape each URL in parallel.
+    const scrapePromises = urls.map(urlObj =>
+      pullFromWebScraper([urlObj], subject)
+    );
+    const pageContentsArray = await Promise.all(scrapePromises);
+    const validContents = pageContentsArray.filter(content => content && content.trim() !== "");
+
+    if (validContents.length === 0) {
+      logger.log("Augment", "No valid scraped content to summarize.");
+      return false;
     }
 
-    const instruct = await summaryPrompt(pageContents);
+    // Step 2: Summarize each page individually.
+    const summaryPromises = validContents.map(content => summarizePage(content, subject));
+    const individualSummaries = await Promise.all(summaryPromises);
 
-    const chatTask = await sendChatCompletionRequest(instruct, await retrieveConfigValue("models.summary"))
+    // Step 3: Generate a final combined summary.
+    const finalSummary = await finalCombinedSummary(individualSummaries, subject);
 
-    const summaryOutput = `### Summary of ${subject}:\n${chatTask.response}`;
+    // Step 4: Upsert the final summary into the vector DB.
+    const finalText = `### Final Summary for ${subject}:\n${finalSummary.summaryContents}`;
+    const embeddingArray = await getMessageEmbedding(finalSummary.vectorString);
+    const upsertData = [{
+      relation: finalSummary.vectorString.slice(0, 512),
+      text_content: finalText,
+      embedding: embeddingArray,
+    }];
 
-    const embeddingArray = await getMessageEmbedding(subject);
-
-    const upsertData = [
-      {
-        relation: subject,
-        text_content: summaryOutput,
-        embedding: embeddingArray,
-      },
-    ];
-
-    // Upsert to Milvus
     const upsertResult = await upsertIntelligenceToMilvus(
       upsertData,
       await retrieveConfigValue("milvus.collections.intelligence"),
-      userId,
+      userId
     );
 
     if (upsertResult) {
-      logger.log("Augment", `Stored summary for '${subject}' into vector DB. Generation time: ${chatTask.tokensPerSecond}`);
-      return summaryOutput;
+      logger.log("Augment", `Final combined summary stored for '${subject}'`);
+      return finalText;
     } else {
-      logger.log(
-        "Augment",
-        `Failed to store summary for '${subject}' into vector DB.`,
-        "err",
-      );
+      logger.log("Augment", `Failed to store final summary for '${subject}'`, "err");
       return false;
     }
   } catch (error) {
-    logger.log(
-      "Augment",
-      `Failed to retrieve context for query: '${query}' due to error: ${error}`,
-      "err",
-    );
+    logger.log("Augment", `Error in optimized web context retrieval for '${query}': ${error}`, "err");
     return false;
   }
+}
+
+async function summarizePage(pageContent, subject) {
+  // Generate a summary request for the individual page
+  const instruct = await SummaryRequestBody.create(
+    `Please summarize the following content about "${subject}" in a way that provides both a concise vector-optimized sentence and a detailed summary.`,
+    await retrieveConfigValue("models.summary.model"),
+    pageContent
+  );
+  const chatTask = await sendChatCompletionRequest(instruct, await retrieveConfigValue("models.summary"));
+  // Parse the JSON response according to our fixed schema
+  return JSON.parse(chatTask.response);
+}
+
+async function finalCombinedSummary(summaries, subject) {
+  // Combine the individual summaries into one text block.
+  // You might choose to include both the vectorString and summaryContents.
+  const combinedText = summaries
+    .map(s => `Vector hint: ${s.vectorString}\nDetailed: ${s.summaryContents}`)
+    .join("\n\n");
+
+  // Create a final summary prompt that instructs the model to produce a unified summary.
+  const finalPrompt = `You are provided with multiple summaries for content about "${subject}". Please consolidate these into a final summary. Your output must be in JSON format with two properties: "vectorString" (a single concise sentence optimized for vector search) and "summaryContents" (the complete final summary). Here are the individual summaries:\n\n${combinedText}`;
+
+  const instruct = await SummaryRequestBody.create(
+    finalPrompt,
+    await retrieveConfigValue("models.summary.model"),
+    combinedText // you can also pass an empty message if you rely solely on the prompt
+  );
+  const chatTask = await sendChatCompletionRequest(instruct, await retrieveConfigValue("models.summary"));
+  return JSON.parse(chatTask.response);
 }
 
 /**
@@ -1064,12 +1084,55 @@ async function searchBraveAPI(query, freshness) {
 
     const data = await response.json();
     if (data && data.web && Array.isArray(data.web.results)) {
-      const chosenResults = data.web.results.slice(0, 3);
-      return chosenResults;
+      const chosenResults = data.web.results.slice(0, 4);
+      let resultStuff = [];
+      for await (const item of chosenResults) {
+        const relevantItems = { url: item.url, title: item.title, source: item.meta_url.hostname }
+        resultStuff.push(relevantItems)
+      }
+      return resultStuff;
     } else {
       logger.log(
         "Brave Search",
         `No web results found from Brave for '${query}' using freshness '${freshness}'`,
+        "err",
+      );
+      return [];
+    }
+  } catch (error) {
+    console.error("Error:", error);
+  }
+}
+
+/**
+ * Searches the Brave API for web results.
+ * @param {string} query - The search query.
+ * @param {string} freshness - The freshness parameter for the search.
+ * @returns {Promise<object[]>} - An array of web results.
+ */
+async function searchSearXNG(query, freshness) {
+  try {
+    const url = new URL("https://search.prolix.live/search");
+    url.searchParams.set("q", query);
+    url.searchParams.set("safesearch", 0);
+    url.searchParams.set("categories", "general");
+    url.searchParams.set("engines", "google,bing");
+    url.searchParams.set("format", "json");
+
+    const response = await axios.get(url.toString())
+
+    if (Array.isArray(response.data.results)) {
+      const chosenResults = response.data.results.slice(0, 4);
+      let resultStuff = [];
+      for await (const item of chosenResults) {
+        const relevantItems = { url: item.url, title: item.title, source: item.parsed_url[1] }
+        resultStuff.push(relevantItems)
+      }
+      return resultStuff;
+    } else {
+      logger.log(
+        "SearXNG Search",
+        `No web results found from SearXNG for '${query}'`,
         "err",
       );
       return [];
@@ -1091,15 +1154,14 @@ async function inferSearchParam(query, userId) {
 
     const chatTask = await sendChatCompletionRequest(instruct, await retrieveConfigValue("models.query"))
 
-    if (
-      !chatTask.response.includes(";") ||
-      chatTask.response.toLowerCase() === "pass"
-    ) {
-      logger.log("LLM", `Query builder opted out of search for this query.`);
-      return "pass";
+    const fullChat = JSON.parse(chatTask.response)
+
+    if (fullChat.valid === false) {
+      logger.log("LLM", `Query builder opted out of search for this query. Reason: ${fullChat.reason}`);
+      return false;
     } else {
-      logger.log("LLM", `Returned optimized search param: '${chatTask.response}'. Time to generate: ${chatTask.tokensPerSecond}t/s`);
-      return chatTask.response;
+      logger.log("LLM", `Returned optimized search param: '${fullChat.searchTerm}'. Time to first token: ${chatTask.timeToFirstToken} seconds. Process speed: ${chatTask.tokensPerSecond}tps`);
+      return fullChat;
     }
   } catch (error) {
     logger.log("LLM", `Error inferring search parameter: ${error}`);
@@ -1159,7 +1221,7 @@ async function insertChatVectorsToMilvus(
       );
       return false;
     }
-
+    const currentTime = Date.now();
     const fieldsData = [
       {
         embedding: vectors,
@@ -1167,7 +1229,7 @@ async function insertChatVectorsToMilvus(
         text_content: sumText,
         raw_msg: message,
         ai_message: response,
-        time_stamp: date,
+        time_stamp: currentTime,
       },
     ];
 
@@ -1603,24 +1665,22 @@ async function respondWithContext(message, username, userID) {
       user: username,
     };
 
-    const openai = new OpenAI({
-      baseURL: await retrieveConfigValue("models.chat.endpoint"),
-      apiKey: await retrieveConfigValue("models.chat.apiKey"),
-    });
-    const body = await contextPromptChat(promptData, message, userID);
+    const body = await contextPromptChatCoT(promptData, message, userID);
 
-    const chatTask = await sendChatCompletionRequest(body, await retrieveConfigValue("models.chat"))
+    const chatTask = await sendChatCompletionRequestCoT(body, await retrieveConfigValue("models.chat"))
 
-    logger.log("System", `Generated textual character response in ${chatTask.tokensPerSecond}t/s`) 
-    return await replyStripped(chatTask.response, userID);
+    logger.log("LLM", `Processed thoughts: ${JSON.stringify(chatTask.thoughtProcess, null, 2)}`)
+
+    logger.log("System", `Generated textual character response. Time to first token: ${chatTask.timeToFirstToken} seconds. Process speed: ${chatTask.tokensPerSecond}tps`);
+    return chatTask.response;
   } catch (error) {
-    console.error("Error calling resultsReranked:", error);
+    console.error("Error calling respondWithContext:", error);
   }
 }
 
 async function rerankString(message, userId) {
   const promptRerank = await rerankPrompt(message, userId);
-  const chatTask = await sendChatCompletionRequest(promptRerank, await retrieveConfigValue("models.rerank"))
+  const chatTask = await sendChatCompletionRequest(promptRerank, await retrieveConfigValue("models.rerankTransform"))
   return chatTask.response;
 }
 
@@ -1631,20 +1691,22 @@ async function respondWithoutContext(message, userId) {
 }
 
 async function respondWithVoice(message, userId) {
+  const startTime = performance.now();
+  let wordCount = message.trim().split(/\s+/).length; // Count words
+
   const fixedAcro = await fixTTSString(message);
   const userObj = await returnAuthObject(userId);
   logger.log(
     "LLM",
     `Converted ${fixedAcro.acronymCount} acronyms in ${userObj.bot_name}'s TTS message.`,
   );
+
   const voiceForm = new FormData();
   voiceForm.append("text_input", fixedAcro.fixedString);
   voiceForm.append("text_filtering", "standard");
   voiceForm.append("character_voice_gen", userObj.speaker_file);
   voiceForm.append("narrator_enabled", "false");
   voiceForm.append("text_not_inside", "character");
-  voiceForm.append("rvccharacter_voice_gen", userObj.rvc_model);
-  voiceForm.append("rvccharacter_pitch", userObj.rvc_pitch);
   voiceForm.append("language", "en");
   voiceForm.append("output_file_name", userObj.user_id);
   voiceForm.append("output_file_timestamp", "true");
@@ -1652,28 +1714,56 @@ async function respondWithVoice(message, userId) {
   voiceForm.append("temperature", "0.80");
   voiceForm.append("repetition_penalty", "2.0");
 
-  const res = await axios.post(
-    new URL(await retrieveConfigValue("alltalk.ttsGenEndpoint.internal")),
-    voiceForm
-  );
+  try {
+    const res = await axios.post(
+      new URL(await retrieveConfigValue("alltalk.ttsGenEndpoint.internal")),
+      voiceForm,
+    );
+    const timeElapsed = (performance.now() - startTime) / 1000;
+    logger.log("API", `Download URL for AT: ${await retrieveConfigValue("alltalk.ttsServeEndpoint.internal")}${res.data.output_file_url}`)
+    
+    const fileRes = await axios({
+      method: 'GET',
+      url: `${await retrieveConfigValue("alltalk.ttsServeEndpoint.internal")}${res.data.output_file_url}`,
+      responseType: 'arraybuffer'
+    });
 
-  if (res.status == 200) {
-    if (userObj.is_local == true) {
-      const audioUrl = `${await retrieveConfigValue("alltalk.ttsServeEndpoint.internal")}${res.data.output_file_url}`;
+    const tempDir = path.join(__dirname, 'temp');
+    await fs.mkdir(tempDir, { recursive: true });
+    const tempFilePath = path.join(tempDir, `tts_${Date.now()}.wav`);
+
+    await fs.writeFile(tempFilePath, fileRes.data);
+
+    if (res.status === 200 && fileRes.status == 200) {
+      const processedResult = await processAudio(tempFilePath, {
+        preset: userObj.ttsEqPref,
+        outputDir: 'final',
+        userId: userObj.user_id
+      });
+
+      await fs.unlink(tempFilePath).catch(() => { });
+
+      let audioUrl;
+      if (userObj.is_local) {
+        audioUrl = `${await retrieveConfigValue("alltalk.ttsServeEndpoint.internal")}${processedResult}`;
+      } else {
+        audioUrl = `${await retrieveConfigValue("alltalk.ttsServeEndpoint.external")}${processedResult}`;
+      }
+      logger.log("LLM", `TTS request completed in ${timeElapsed.toFixed(2)} seconds.`);
       return audioUrl;
     } else {
-      const audioUrl = `${await retrieveConfigValue("alltalk.ttsServeEndpoint.external")}${res.data.output_file_url}`;
-      return audioUrl;
+      console.error(`Request failed with: ${res.data}`);
+      return { error: `TTS request failed with status: ${res.status}` };
     }
-  } else {
-    console.error(`Request failed with: ${res.data}`);
+  } catch (error) {
+    console.error("Error during TTS request:", error);
+    return { error: error.message };
   }
 }
 
 async function respondToDirectVoice(message, userId, withVoice = false) {
   const fixedAcro = await fixTTSString(message);
-  const userObj = await returnAuthObject(userId);
-  
+
   try {
     const [voiceCtx, rawContext] = await Promise.all([
       findRelevantVoiceInMilvus(message, userId, 3),
@@ -1696,7 +1786,7 @@ async function respondToDirectVoice(message, userId, withVoice = false) {
 
     const body = await contextPromptChat(promptData, message, userId);
     const chatTask = await sendChatCompletionRequest(body, await retrieveConfigValue("models.chat"))
-    logger.log("LLM", `Generated textual response to voice message. Time to generate: ${chatTask.tokensPerSecond}t/s`)
+    logger.log("LLM", `Generated textual response to voice message. Time to first token: ${chatTask.timeToFirstToken} seconds. Process speed: ${chatTask.tokensPerSecond}tps`);
     const strippedResp = await replyStripped(chatTask.response, userId);
     const userObj = await returnAuthObject(userId);
     if (withVoice) {
@@ -1706,8 +1796,8 @@ async function respondToDirectVoice(message, userId, withVoice = false) {
       voiceForm.append("character_voice_gen", userObj.speaker_file);
       voiceForm.append("narrator_enabled", "false");
       voiceForm.append("text_not_inside", "character");
-      voiceForm.append("rvccharacter_voice_gen", userObj.rvc_model);
-      voiceForm.append("rvccharacter_pitch", userObj.rvc_pitch);
+      // voiceForm.append("rvccharacter_voice_gen", userObj.rvc_model);
+      // voiceForm.append("rvccharacter_pitch", userObj.rvc_pitch);
       voiceForm.append("language", "en");
       voiceForm.append("output_file_name", userObj.user_id);
       voiceForm.append("output_file_timestamp", "true");
@@ -1761,7 +1851,7 @@ async function addChatMessageAsVector(
     logger.log("Milvus", `Can't load collection for chat.`);
     return; // Early return on failure
   }
-
+  const currentTime = Date.now()
   try {
     const embeddingsArray = await getMessageEmbedding(sumText);
     const success = await insertChatVectorsToMilvus(
@@ -1770,7 +1860,7 @@ async function addChatMessageAsVector(
       sumText,
       response,
       username,
-      date,
+      currentTime,
       userId,
     );
     if (success) {
@@ -1826,7 +1916,7 @@ async function respondToEvent(event, userId) {
   const instructPrompt = await eventPromptChat(eventMessage, userId);
 
   const chatTask = await sendChatCompletionRequest(instructPrompt, await retrieveConfigValue("models.chat"))
-  logger.log("LLM", `Generated event response. Time to generate: ${chatTask.tokensPerSecond}t/s`)
+  logger.log("LLM", `Generated event response. Time to first token: ${chatTask.timeToFirstToken} seconds. Process speed: ${chatTask.tokensPerSecond}tps`);
   const strippedResponse = await replyStripped(
     chatTask.response,
     userId,
@@ -2020,7 +2110,6 @@ async function checkEndpoint(endpoint, key, modelName) {
     }
   } catch (err) {
     logger.log("INIT", `Error checking endpoint ${endpoint}: ${err}`);
-    throw err;
   }
 }
 
@@ -2038,7 +2127,6 @@ export {
   addChatMessageAsVector,
   insertAugmentVectorsToMilvus,
   respondWithoutContext,
-  getMessageEmbedding,
   respondWithVoice,
   respondToEvent,
   processFiles,
@@ -2047,4 +2135,6 @@ export {
   findRelevantDocuments,
   weGottaGoBald,
   checkAndCreateCollection,
+  searchSearXNG,
+  returnRecentChats
 };

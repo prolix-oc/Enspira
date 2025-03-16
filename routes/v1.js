@@ -1,6 +1,5 @@
 import * as aiHelper from "../ai-logic.js";
 import {
-  filterCharacterFromMessage,
   containsCharacterName,
   containsAuxBotName,
   containsPlayerSocials,
@@ -55,11 +54,11 @@ function containsJailbreakAttempt(input) {
   return pattern.test(input);
 }
 
-async function getModerationResult(data, user_id, strippedMessage, fromBot) {
+async function getModerationResult(data, user_id, message, fromBot) {
   if (!(await containsPlayerSocials(data.user, user_id)) || !fromBot) {
     return twitchHelper.prepareModerationChatRequest(
       data.user,
-      strippedMessage,
+      message,
       data.emoteCount,
       user_id,
     );
@@ -153,6 +152,12 @@ async function routes(fastify, options) {
       reply.code(400).send({ success: false, error: error.message });
     }
   });
+  fastify.get('/testchat', async (request, response) => {
+    logger.log("API", "Received test endpoint req.")
+    const testChats = await aiHelper.findRecentChats(request.body.userId)
+    logger.log("Milvus", `Returned the following results: ${JSON.stringify(testChats)}`)
+    response.code(200).send({ ...testChats });
+  })
   /**
    * Handles chat requests, processes them, and sends responses.
    * @param {object} request - The request object.
@@ -184,28 +189,27 @@ async function routes(fastify, options) {
       );
       const now = moment();
       const formattedDate = now.format("MMMM Do [at] h:mmA");
-      const strippedMessage = await filterCharacterFromMessage(
-        data.message,
-        authObject.user_id,
-      );
+
       const isCharMessage = await containsCharacterName(data.user, authObject.user_id)
       const mentionsChar = await containsCharacterName(data.message, authObject.user_id)
       // Moved to separate function to prevent duplication error
       let moderationResult = null;
       if (!fromBot && !isCharMessage) {
-        moderationResult = await getModerationResult(
-          data,
-          authObject.user_id,
-          strippedMessage,
-          fromBot
-        );
+        // moderationResult = await getModerationResult(
+        //   data,
+        //   authObject.user_id,
+        //   data.message,
+        //   fromBot
+        // );
+        moderationResult["action"] = "safe"
       } else if (!fromBot && isCharMessage) {
-        moderationResult = await getModerationResult(
-          data,
-          authObject.user_id,
-          strippedMessage,
-          fromBot
-        );
+        // moderationResult = await getModerationResult(
+        //   data,
+        //   authObject.user_id,
+        //   data.message,
+        //   fromBot
+        // );
+        moderationResult["action"] = "safe"
       } else if (fromBot && !isCharMessage) {
         moderationResult["action"] = "safe";
       } else {
@@ -215,7 +219,7 @@ async function routes(fastify, options) {
         data.user,
         authObject.user_id,
       ))
-        ? `${authObject.display_name}`
+        ? `${authObject.player_name}`
         : `${data.user}`;
 
       if (
@@ -226,7 +230,7 @@ async function routes(fastify, options) {
         await handleChatMessage(
           data,
           authObject,
-          strippedMessage,
+          data.message,
           moderationResult,
           user,
           formattedDate,
@@ -240,7 +244,7 @@ async function routes(fastify, options) {
         await handleNonChatMessage(
           data,
           authObject,
-          strippedMessage,
+          data.message,
           moderationResult,
           user,
           formattedDate,
@@ -325,35 +329,14 @@ async function routes(fastify, options) {
   });
 }
 
-/**
- * Handles chat messages directed at the character.
- * @param {object} data - The data object containing message details.
- * @param {object} authObject - The authentication object.
- * @param {string} strippedMessage - The message with character names removed.
- * @param {string} moderationResult - The result of the moderation check.
- * @param {string} user - The user who sent the message.
- * @param {string} formattedDate - The formatted date and time of the message.
- * @param {object} response - The response object.
- * @returns {Promise<void>} - A promise that resolves when the response is sent.
- */
-async function handleChatMessage(
-  data,
-  authObject,
-  strippedMessage,
-  moderationResult,
-  user,
-  formattedDate,
-  response,
-) {
-  if (
-    (await twitchHelper.isCommandMatch(data.message, authObject.user_id)) ==
-    false
-  ) {
-    if (containsJailbreakAttempt(strippedMessage)) {
-      logger.log("API", `Processing message as jailbreak attempt.`);
+async function handleChatMessage(data, authObject, message, moderationResult, user, formattedDate, response) {
+  // Check if the message is a command or a jailbreak attempt first…
+  if (!(await twitchHelper.isCommandMatch(message, authObject.user_id))) {
+    if (containsJailbreakAttempt(message)) {
+      logger.log("API", "Processing message as jailbreak attempt.");
       const aiJBResp = await aiHelper.respondWithoutContext(
         `Creatively be mean towards ${data.user} for trying to stop you from doing your job and ruin ${authObject.player_name}'s stream.`,
-        authObject.user_id,
+        authObject.user_id
       );
       response.send({ response: aiJBResp });
     } else {
@@ -362,46 +345,22 @@ async function handleChatMessage(
         if (data.firstMessage) {
           finalResp = await aiHelper.respondToEvent(data, authObject.user_id);
         } else {
-          finalResp = await aiHelper.respondWithContext(
-            strippedMessage,
-            user,
-            authObject.user_id,
-          );
+          finalResp = await aiHelper.respondWithContext(message, user, authObject.user_id);
         }
         if (finalResp) {
-          const contextString = `On ${formattedDate}, ${user} said in ${user === authObject.player_name
-            ? "their own"
-            : `${authObject.player_name}'s`
-            } chat: "${strippedMessage}".`;
-          const summaryString = `On ${formattedDate}, ${user} said to you in ${user === authObject.player_name
-            ? "their own"
-            : `${authObject.player_name}'s`
-            } chat: "${strippedMessage}". You responded by saying: ${finalResp}`;
-          await twitchHelper.maintainChatContext(
-            contextString,
-            authObject.user_id,
-          );
-          await aiHelper.addChatMessageAsVector(
-            summaryString,
-            strippedMessage,
-            user,
-            formattedDate,
-            finalResp,
-            authObject.user_id,
-          );
-          logger.log("API", `Processing message as normal.`);
+          const contextString = `On ${formattedDate}, ${user} said in chat: "${message}".`;
+          const summaryString = `On ${formattedDate}, ${user} said: "${message}". You responded: ${finalResp}`;
+          // Optimization: Fire-and-forget vector saving instead of awaiting it.
+          aiHelper.addChatMessageAsVector(summaryString, message, user, formattedDate, finalResp, authObject.user_id)
+            .catch(err => logger.log("API", "Error saving chat message vector:", err));
+          logger.log("API", "Processing message as normal.");
           if (data.withVoice) {
-            const ttsResponse = authObject.tts_enabled
-              ? {
-                response: finalResp,
-                audio_url: await aiHelper.respondWithVoice(
-                  finalResp,
-                  authObject.user_id,
-                ),
-              }
-              : { response: finalResp };
-            response.send({ response: finalResp, ...ttsResponse });
-          } else if (!data.withVoice || data.withVoice == null) {
+            // Optionally, run TTS in parallel
+            const audio_url = authObject.tts_enabled
+              ? await aiHelper.respondWithVoice(finalResp, authObject.user_id)
+              : null;
+            response.send({ response: finalResp, audio_url });
+          } else {
             response.send({ response: finalResp });
           }
         } else {
@@ -428,16 +387,12 @@ async function handleGameUpdate(
   ) {
     let finalResp;
     finalResp = await aiHelper.respondWithContext(
-      strippedMessage,
+      message,
       user,
       authObject.user_id,
     );
 
     if (finalResp) {
-      await twitchHelper.maintainChatContext(
-        contextString,
-        authObject.user_id,
-      );
       logger.log("API", `Processing message as normal.`);
       if (data.withVoice) {
         const ttsResponse = authObject.tts_enabled
@@ -522,7 +477,7 @@ async function handleVoiceConversion(data, authObject, response) {
  * Handles chat messages not directed at the character.
  * @param {object} data - The data object containing message details.
  * @param {object} authObject - The authentication object.
- * @param {string} strippedMessage - The message with character names removed.
+ * @param {string} message - The message object.
  * @param {string} moderationResult - The result of the moderation check.
  * @param {string} user - The user who sent the message.
  * @param {string} formattedDate - The formatted date and time of the message.
@@ -532,7 +487,7 @@ async function handleVoiceConversion(data, authObject, response) {
 async function handleNonChatMessage(
   data,
   authObject,
-  strippedMessage,
+  message,
   moderationResult,
   user,
   formattedDate,
@@ -544,7 +499,7 @@ async function handleNonChatMessage(
     (await twitchHelper.isCommandMatch(data.message, authObject.user_id)) ==
     false
   ) {
-    if (containsJailbreakAttempt(strippedMessage)) {
+    if (containsJailbreakAttempt(message)) {
       logger.log("API", `Jailbreak attempt. Not saving.`);
       response.send({ response: "OK" });
     } else if (!fromBot) {
@@ -557,18 +512,14 @@ async function handleNonChatMessage(
           const contextString = `On ${formattedDate}, ${user} said in ${user === authObject.player_name
             ? "their own"
             : `${authObject.player_name}'s`
-            } chat: "${strippedMessage}". You responded by saying: ${aiResp}`;
+            } chat: "${message}". You responded by saying: ${aiResp}`;
           const summaryString = `On ${formattedDate}, ${user} said to you in ${user === authObject.player_name
             ? "their own"
             : `${authObject.player_name}'s`
-            } chat: "${strippedMessage}". You responded by saying: ${aiResp}`;
-          await twitchHelper.maintainChatContext(
-            contextString,
-            authObject.user_id,
-          );
+            } chat: "${message}". You responded by saying: ${aiResp}`;
           await aiHelper.addChatMessageAsVector(
             summaryString,
-            strippedMessage,
+            message,
             user,
             formattedDate,
             aiResp,
@@ -576,7 +527,7 @@ async function handleNonChatMessage(
           );
           logger.log(
             "API",
-            `Processing ${data.user}'s message '${strippedMessage}' into vector memory.`,
+            `Processing ${data.user}'s message '${message}' into vector memory.`,
           );
           const ttsResponse = authObject.tts_enabled
             ? {
@@ -599,18 +550,14 @@ async function handleNonChatMessage(
           const summaryString = `On ${formattedDate} ${user} said in ${user === authObject.player_name
             ? "their own"
             : `${authObject.player_name}'s`
-            } Twitch chat: "${strippedMessage}"`;
+            } Twitch chat: "${message}"`;
           const contextString = `On ${formattedDate}, ${user} said in ${user === authObject.player_name
             ? "their own"
             : `${authObject.player_name}'s`
-            } chat: "${strippedMessage}"`;
-          await twitchHelper.maintainChatContext(
-            contextString,
-            authObject.user_id,
-          );
+            } chat: "${message}"`;
           await aiHelper.addChatMessageAsVector(
             summaryString,
-            strippedMessage,
+            message,
             user,
             formattedDate,
             "None",

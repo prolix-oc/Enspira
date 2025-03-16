@@ -6,20 +6,19 @@ import { join } from "path";
 import blessed from "neo-blessed";
 import { createLogger } from "./logger.js";
 import * as aiHelper from "./ai-logic.js";
-import { saveAuthToDisk } from "./api-helper.js";
-import {  
+import { saveAuthToDisk, updateUserParameter } from "./api-helper.js";
+import {
   saveConfigToDisk,
   retrieveConfigValue,
   saveConfigValue
 } from "./config-helper.js";
-import levenshtein from "fast-levenshtein";
 
 if (cluster.isPrimary) {
-  console.log = () => {};
-  console.info = () => {};
-  console.warn = () => {};
-  console.error = () => {};
-  console.debug = () => {};
+  console.log = () => { };
+  console.info = () => { };
+  console.warn = () => { };
+  console.error = () => { };
+  console.debug = () => { };
   const screen = blessed.screen({
     fastCSR: true,
     terminal: "xterm-256color",
@@ -281,6 +280,15 @@ if (cluster.isPrimary) {
       case "exit":
         shutdown();
         break;
+      case "flush_chat":
+        var query = text.replace("flush_chat ", "").replace("flush_chat", "");
+        await saveChatContextToDisk(query)
+        break;
+      case "test_chats":
+        var query = text.replace("test_chats ", "").replace("test_chats", "");
+        const testChats = await aiHelper.returnRecentChats(query, true)
+        logger.log("Milvus", `Got the following content: ${JSON.stringify(testChats.chatList)} in ${testChats.executionTime} seconds.`)
+        break;
       case "reload_db":
         var query = text
           .toLowerCase()
@@ -317,16 +325,25 @@ if (cluster.isPrimary) {
           break;
         }
         const getSetValue = await retrieveConfigValue(query);
-        logger.log("System", `'${query}' is set to: ${typeof(getSetValue) === "object" ? `${JSON.stringify(getSetValue, {spaces:2})}`: `${getSetValue}`}`);
+        logger.log("System", `'${query}' is set to: ${typeof (getSetValue) === "object" ? `${JSON.stringify(getSetValue, { spaces: 2 })}` : `${getSetValue}`}`);
         break;
       case "set":
         var query = text.replace("set ", "").replace("set", "");
         var choices = query.split(' ')
         const didSave = await saveConfigValue(choices[0], choices[1])
         didSave ?
-        logger.log("Config", `Value '${choices[1]}' for parameter '${choices[0]}' saved.`) 
-        :
-        logger.log("Config", `Value '${choices[1]}' for parameter '${choices[0]}' failed to save.`)
+          logger.log("Config", `Value '${choices[1]}' for parameter '${choices[0]}' saved.`)
+          :
+          logger.log("Config", `Value '${choices[1]}' for parameter '${choices[0]}' failed to save.`)
+        break;
+      case "setuser":
+        var query = text.replace("setuser ", "").replace("setuser", "")
+        var choices = query.split(' ')
+        const updated = await updateUserParameter(choices[0], choices[1], choices[2])
+        updated ?
+          logger.log("Config", `Value '${choices[1]}' for user '${choices[0]}' saved.`)
+          :
+          logger.log("Config", `Value '${choices[1]}' for user '${choices[0]}' failed to save.`)
         break;
       case "augment":
         logger.log("System", `Sending augmentation request...`);
@@ -600,18 +617,18 @@ if (cluster.isPrimary) {
     clearLogBox();
     const logger = createLogger(false);
     global.logger = logger;
-    console.log = function () {};
-    console.debug = function () {};
-    console.warn = function () {};
-    console.info = function () {};
+    console.log = function () { };
+    console.debug = function () { };
+    console.warn = function () { };
+    console.info = function () { };
   });
 } else {
   const logger = createLogger(false);
   global.logger = logger;
-  console.log = function () {};
-  console.debug = function () {};
-  console.warn = function () {};
-  console.info = function () {};
+  console.log = function () { };
+  console.debug = function () { };
+  console.warn = function () { };
+  console.info = function () { };
 
   // Export the logging function globally for the worker process
   const appPath = join(process.cwd(), "index.js");

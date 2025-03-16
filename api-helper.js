@@ -2,11 +2,8 @@ import fs from "fs-extra";
 import axios from "axios";
 import cron from "node-cron";
 import * as crypto from "crypto";
-var authTokens = [];
 import path from "path";
 import { retrieveConfigValue } from "./config-helper.js";
-import { loadCollectionIfNeeded } from "./ai-logic.js";
-
 let cachedAuthKeys = null;
 const authFilePath = await retrieveConfigValue("server.authFilePath");
 
@@ -369,14 +366,19 @@ const funFact = async () => {
   const pickOne = Math.floor(Math.random() * 5) + 1
   switch (pickOne) {
     case 1:
+      logger.log("API", "Pulled fact from Black History API.")
       return await blackRandomFact()
     case 2:
+      logger.log("API", "Pulled fact from MeowFacts.")
       return await randomCatFact()
     case 3:
+      logger.log("API", "Pulled fact from Numbers API.")
       return await randomNumbersFact()
     case 4:
+      logger.log("API", "Pulled fact from Kinduff.")
       return await randomDogFact()
     case 5:
+      logger.log("API", "Pulled fact from UselessFacts.")
       return await randomUselessFact()
     default:
       return "One of the websites decided to take a break. Instead of sharing a provided fun fact from one of these sites, talk about your favorite safe-for-work and stream-appropriate fact about your favorite person."
@@ -388,7 +390,7 @@ const blackRandomFact = async () => {
     const response = await axios.get(
       "https://rest.blackhistoryapi.io/fact/random", { headers: {"x-api-key": await retrieveConfigValue("funFacts.key")}}
     );
-    return response.data.Results.text;
+    return response.data.Results[0].text;
   } catch (err) {
     logger.log("System", "Unable to get random fact from BlackHistoryAPI")
   }
@@ -400,19 +402,18 @@ const randomCatFact = async () => {
     const response = await axios.get(
       "https://meowfacts.herokuapp.com/"
     );
-    return response.data.text;
+    return response.data.data[0];
   } catch (err) {
     logger.log("System", "Unable to get random fact from UselessFacts")
   }
 };
 
 const randomUselessFact = async () => {
-
   try {
     const response = await axios.get(
       "https://uselessfacts.jsph.pl/api/v2/facts/random?language=en"
     );
-    return response.data.data[0];
+    return response.data.text;
   } catch (err) {
     logger.log("System", "Unable to get random fact from MeowFacts")
   }

@@ -1,10 +1,11 @@
 import fs from "fs-extra";
 import { join } from "path";
 import { funFact, returnAuthObject, updateUserParameter } from "./api-helper.js";
-import { moderatorPrompt } from "./prompt-helper.js";
+import { sendChatCompletionRequest, moderatorPrompt } from "./prompt-helper.js";
 import moment from "moment";
-import OpenAI from "openai";
 import { retrieveConfigValue } from './config-helper.js'
+
+let cachedChatContexts = {};
 
 /**
  * Returns a formatted string for a Twitch event based on its type.
@@ -46,42 +47,6 @@ async function returnTwitchEvent(eventThing, userId) {
   }
 }
 
-/**
- * Maintains a chat context file by adding new lines and ensuring the file doesn't exceed a specified size.
- *
- * @param {string} newLine - The new line to add to the chat context.
- * @param {string} userID - The ID of the user associated with the chat context.
- * @returns {Promise<void>}
- */
-async function maintainChatContext(newLine, userID) {
-  const userObj = await returnAuthObject(userID)
-  const chatContextPath = join(
-    process.cwd(),
-    `/world_info/${userID}/twitch_chat.txt`,
-  );
-
-  await fs.ensureFile(chatContextPath);
-
-  const currentLines = (await fs.readFile(chatContextPath, "utf-8"))
-    .split("\n")
-    .filter(Boolean);
-
-  currentLines.push("- " + newLine);
-
-  if (currentLines.length > userObj.max_chats) {
-    currentLines.shift();
-  }
-
-  await fs.writeFile(chatContextPath, currentLines.join("\n") + "\n");
-}
-
-/**
- * Maintains a chat context file by adding new lines and ensuring the file doesn't exceed a specified size.
- *
- * @param {string} newStatLine - The new line of game info to add to the match context.
- * @param {string} userID - The ID of the user associated with the chat context.
- * @returns {Promise<void>}
- */
 async function addGameStatline(newStatLine, userID) {
   const userObj = returnAuthObject(userID)
   const chatContextPath = join(
@@ -129,18 +94,22 @@ const getTimeDifferenceFromNow = (inputDate) => {
   }
 };
 
-/**
- * Reads and parses event messages from a file.
- *
- * @param {string} playerId - The ID of the player.
- * @returns {Promise<object>} - The parsed event messages.
- */
+const eventMessagesCache = {};
+
 async function readEventMessages(playerId) {
-  const addonStrings = await fs.readFile(
-    `./world_info/${playerId}/event_messages.txt`,
-    "utf-8",
-  );
-  return JSON.parse(addonStrings);
+  if (eventMessagesCache[playerId]) {
+    return eventMessagesCache[playerId];
+  }
+  try {
+    const filePath = `./world_info/${playerId}/event_messages.txt`;
+    const fileContent = await fs.readFile(filePath, "utf-8");
+    const parsed = JSON.parse(fileContent);
+    eventMessagesCache[playerId] = parsed;
+    return parsed;
+  } catch (error) {
+    logger.log("Files", `Error reading event messages for player ${playerId}: ${error}`);
+    return {};
+  }
 }
 
 /**
@@ -255,9 +224,9 @@ const donoMessage = async (event) => {
     event.eventData.donoType === "charity"
       ? `\n${parsedAddons.charity.replace("{{player}}", event.playerName)}`
       : `They said this in a message:\n${event.eventData.donoMessage}\n${parsedAddons.dono.replace(
-          "{{player}}",
-          event.playerName,
-        )}`;
+        "{{player}}",
+        event.playerName,
+      )}`;
   return subString;
 };
 
@@ -332,9 +301,8 @@ const hypeStartMessage = async (event) => {
   subString += `It is currently at level ${event.eventData.level}, started ${getTimeDifferenceFromNow(
     event.eventData.startedAt,
   )}, and will expire ${getTimeDifferenceFromNow(event.eventData.expiresAt)}.\n`;
-  subString += `We are ${
-    event.eventData.percent * 100
-  }% of the way to level ${parseInt(event.eventData.level) + 1}!\n`;
+  subString += `We are ${event.eventData.percent * 100
+    }% of the way to level ${parseInt(event.eventData.level) + 1}!\n`;
   subString += `${event.eventData.topSubUser} has the most gifted subscriptions at ${event.eventData.topSubTotal} subs, and ${event.eventData.topBitsUser} has donated the most bits with ${event.eventData.topBitsAmt} bits donated!`;
   subString += "\n" + parsedAddons.hype;
   return subString;
@@ -356,9 +324,8 @@ const hypeUpdateMessage = async (event) => {
   subString += event.eventData.isGolden
     ? `This is now a Golden Kappa train, a rare event rewarding contributors with the Golden Kappa emote for 24 hours!\n`
     : "";
-  subString += `We are ${
-    event.eventData.percent * 100
-  }% of the way to level ${parseInt(event.eventData.level) + 1}!\n`;
+  subString += `We are ${event.eventData.percent * 100
+    }% of the way to level ${parseInt(event.eventData.level) + 1}!\n`;
   subString += `${event.eventData.topSubUser} has the most gifted subscriptions at ${event.eventData.topSubTotal} subs, and ${event.eventData.topBitsUser} has donated the most bits with ${event.eventData.topBitsAmt} bits donated!`;
   subString += "\n" + parsedAddons.hype;
   return subString;
@@ -375,9 +342,8 @@ const hypeEndMessage = async (event) => {
   let subString = `The Hype Train on ${event.playerName}'s channel has just ended!\n`;
   subString += `It ended at level ${event.eventData.level}, started ${getTimeDifferenceFromNow(
     event.eventData.startedAt,
-  )}, and reached ${
-    event.eventData.percent * 100
-  }% towards level ${parseInt(event.eventData.level) + 1}.\n`;
+  )}, and reached ${event.eventData.percent * 100
+    }% towards level ${parseInt(event.eventData.level) + 1}.\n`;
   subString += `There were ${event.eventData.contributors} contributors! `;
   subString += event.eventData.isGolden
     ? `This was a Golden Kappa train, a rare event rewarding contributors with the Golden Kappa emote for 24 hours.\n`
@@ -403,9 +369,8 @@ const hypeLevelUpMessage = async (event) => {
   subString += event.eventData.isGolden
     ? `This is now a Golden Kappa train, a rare event rewarding contributors with the Golden Kappa emote for 24 hours!\n`
     : "";
-  subString += `We are ${
-    event.eventData.percent * 100
-  }% of the way to level ${parseInt(event.eventData.level) + 1}!\n`;
+  subString += `We are ${event.eventData.percent * 100
+    }% of the way to level ${parseInt(event.eventData.level) + 1}!\n`;
   subString += `${event.eventData.topSubUser} has the most gifted subscriptions at ${event.eventData.topSubTotal} subs, and ${event.eventData.topBitsUser} has donated the most bits with ${event.eventData.topBitsAmt} bits donated!`;
   subString += "\n" + parsedAddons.hype;
   return subString;
@@ -461,9 +426,8 @@ const shoutoutMessage = async (event) => {
   subString += `The last time ${event.eventData.user} was live, they were streaming ${event.eventData.game} for their viewers! `;
   subString += `${event.eventData.user} was last active ${getTimeDifferenceFromNow(
     event.eventData.lastActive,
-  )} on their channel! The title of their last stream was '${
-    event.eventData.streamTitle
-  }'. `;
+  )} on their channel! The title of their last stream was '${event.eventData.streamTitle
+    }'. `;
   subString += event.eventData.isMod
     ? `They are also a moderator in ${event.playerName}'s Twitch channel!\n`
     : "";
@@ -596,47 +560,40 @@ async function prepareModerationChatRequest(
       userMessageFormatted,
       userId,
     );
-    const openai = new OpenAI({
-      baseURL: await retrieveConfigValue("models.moderator.endpoint"),
-      apiKey: await retrieveConfigValue("models.moderator.apiKey"),
-    });
 
-    const completion = await openai.chat.completions.create(moderationPrompt);
-    const properFormatEnsure = completion.choices[0].message.content
-      .replace("```plaintext", "")
-      .replace("```", "");
-    const [action, reason] = properFormatEnsure.split(";");
-    if (action === "strike") {
-      logger.log(
-        "Moderation",
-        `${userName} earned a strike in ${userObject.twitch_name}'s channel. Reason: ${reason}'`,
-      );
-      const newStrikes = await incrementStrikes(userName, userId);
-      return {
-        action,
-        reason,
-        user: userName,
-        userMsg: userMessage,
-        strikeCount: newStrikes.strikes,
-      };
-    } else if (action === "ban") {
-      logger.log(
-        "Moderation",
-        `${userName} received a ${action} in ${userObject.twitch_name}'s channel. Reason: '${reason}'`,
-      );
-      await addBanToUser(userName, userObject.twitch_name);
-      return {
-        action,
-        reason,
-        user: userName,
-        userMsg: userMessage,
-      };
+    const completion = await sendChatCompletionRequest(moderationPrompt, await retrieveConfigValue("models.moderator"));
+    const formattedCompletion = JSON.parse(completion.response)
+    if (formattedCompletion.actionNeeded == true) {
+      const reason = formattedCompletion.reason
+      const action = formattedCompletion.actionType
+      if (action === "strike") {
+        logger.log(
+          "Moderation",
+          `${userName} earned a strike in ${userObject.twitch_name}'s channel. Reason: ${reason}'`,
+        );
+        const newStrikes = await incrementStrikes(userName, userId);
+        return {
+          action,
+          reason,
+          user: userName,
+          userMsg: userMessage,
+          strikeCount: newStrikes.strikes,
+        };
+      } else if (action === "ban") {
+        logger.log(
+          "Moderation",
+          `${userName} received a ${action} in ${userObject.twitch_name}'s channel. Reason: '${reason}'`,
+        );
+        await addBanToUser(userName, userObject.twitch_name);
+        return {
+          action,
+          reason,
+          user: userName,
+          userMsg: userMessage,
+        };
+      }
     } else {
-      logger.log(
-        "Moderation",
-        `${userName} message was deemed safe.`,
-      );
-      return "safe";
+      return "safe"
     }
   } catch (error) {
     logger.log("Moderation", `Error creating mod chat completion: ${error}`);
@@ -882,10 +839,9 @@ export {
   prepareModerationChatRequest,
   incrementStrikes,
   getStrikesByUserName,
-  maintainChatContext,
   socialMedias,
   checkForUser,
   containsAuxBotName,
   checkBanned,
-  undoBan,
+  undoBan
 };

@@ -3,7 +3,6 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { dirname } from "path";
 import levenshtein from "fast-levenshtein";
-import { config } from "process";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
@@ -48,7 +47,7 @@ function convertValueToOriginalType(value, originalType) {
 }
 
 function findClosestKey(inputPath, config, threshold = 2) {
-  const keys = extractAllPaths(config); // Get all paths from the config
+  const keys = extractAllPaths(config);
   const lowerInputPath = inputPath.toLowerCase();
 
   const exactMatch = keys.find(key => key.toLowerCase() === lowerInputPath);
@@ -177,7 +176,6 @@ async function retrieveConfigValue(path) {
       try {
           return convertValueToOriginalType(value, originalType);
       } catch (error) {
-          logger.log("Config", `Error converting config value to original type: ${error}`);
           return value;
       }
   } else {
