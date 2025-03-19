@@ -141,3 +141,7 @@ resources/*
 start.sh
 final/*
 temp/*
+*.go
+go.mod
+go.sum
+bin/*

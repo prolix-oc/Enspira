@@ -31,8 +31,8 @@ export class ChatRequestBody {
     });
 
     // Set default values that don't require async initialization
-    this.max_tokens = 192;
-    this.generate_window = 192;
+    this.max_tokens = retrieveConfigValue('samplers.chat.maxTokens');
+    this.generate_window = 
     this.stream = true;
   }
 
@@ -61,7 +61,10 @@ export class ChatRequestBody {
       presenceRange,
       temperature,
       dynTempMax,
-      dynTempMin
+      dynTempMin,
+      dynTemp,
+      maxTokens,
+      generateWindow
     ] = await Promise.all([
       retrieveConfigValue("models.chat.model"),
       retrieveConfigValue("samplers.chat.topK"),
@@ -76,8 +79,11 @@ export class ChatRequestBody {
       retrieveConfigValue("samplers.chat.repetitionRange"),
       retrieveConfigValue("samplers.chat.presenceRange"),
       retrieveConfigValue("samplers.chat.temperature"),
-      retrieveConfigValue("samplers.chat.temperature"),
-      retrieveConfigValue("samplers.chat.temperature")
+      retrieveConfigValue("samplers.chat.dynTempMin"),
+      retrieveConfigValue("samplers.chat.dynTempMax"),
+      retrieveConfigValue("samplers.chat.dynTemp"),
+      retrieveConfigValue('samplers.chat.maxTokens'),
+      retrieveConfigValue('samplers.chat.generateWindow')
     ]);
 
     this.model = model;
@@ -93,10 +99,11 @@ export class ChatRequestBody {
     this.repetition_range = parseInt(repetitionRange);
     this.presence_range = parseInt(presenceRange);
     this.temperature = parseFloat(temperature);
-    this.max_tokens = 192;
-    this.generate_window = 192;
+    this.max_tokens = parseInt(maxTokens);
+    this.generate_window = parseInt(generateWindow);
     this.stream = true;
     if (retrieveConfigValue("samplers.chat.dynTemp") == true) {
+      this.dynatemp = dynTemp
       this.dynatemp_min = parseFloat(dynTempMin)
       this.dynatemp_max = parseFloat(dynTempMax)
     }

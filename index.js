@@ -3,7 +3,7 @@ import Fastify from "fastify";
 import fs from "fs-extra";
 import { join } from "path";
 import { audioRoutes } from './routes/audio.js';
-import { processAudio, ensureGoServerRunning } from './audio-processor.js';
+import { processAudio } from './audio-processor.js';
 import * as aiHelper from "./ai-logic.js";
 import path from "path";
 import {
@@ -254,6 +254,7 @@ export async function launchRest(fastify) {
     return Promise.resolve();
   } catch (err) {
     logger.error("API", `Failed to launch API server with error: ${err}`);
+    await fs.writeFile('./error.txt', JSON.stringify(err))
     throw err;
   }
 }
@@ -275,7 +276,6 @@ export async function initializeApp() {
     ];
     
     await loadConfig();
-    await ensureGoServerRunning();
     for await (const user of allUsers) {
       for await (const collectionName of collectionNames) {
         try {

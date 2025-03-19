@@ -3,13 +3,14 @@ import moment from "moment";
 import { socialMedias } from "./twitch-helper.js";
 import { interpretEmotions } from "./data-helper.js";
 import { returnAuthObject } from "./api-helper.js";
-import { getPromptTokens, getOutputTokens, tokenizedFromRemote, promptTokenizedFromRemote } from "./token-helper.js";
+import { tokenizedFromRemote, promptTokenizedFromRemote } from "./token-helper.js";
 import { retrieveConfigValue } from "./config-helper.js";
 import { returnRecentChats } from "./ai-logic.js";
 import { ChatRequestBody, ChatRequestBodyCoT, ToolRequestBody, QueryRequestBody, ModerationRequestBody, SummaryRequestBody } from "./oai-requests.js";
 import { jsonrepair } from 'jsonrepair'
 import OpenAI from "openai";
 import { performance } from "node:perf_hooks";
+import { logger } from './create-global-logger.js';
 
 const templateCache = {};
 
@@ -56,10 +57,8 @@ export async function sendChatCompletionRequest(requestBody, modelConfig) {
         fullResponse += content;
       }
     }
-
     // Calculate backend processing time in seconds
     const backendTimeElapsed = (performance.now() - backendStartTime) / 1000;
-
     // Tokenize the full response using the remote service
     const generatedTokens = await tokenizedFromRemote(fullResponse, modelConfig.modelType);
     let backendTokensPerSecond = 0;
@@ -67,8 +66,21 @@ export async function sendChatCompletionRequest(requestBody, modelConfig) {
       backendTokensPerSecond = (generatedTokens / backendTimeElapsed).toFixed(2);
     }
 
+    // Split the full response into the thought process and final response based on the <think> tags.
+    let thoughtProcess = "";
+    var finalResponse = fullResponse;
+    const startTag = "<think>";
+    const endTag = "</think>";
+    const startIndex = fullResponse.indexOf(startTag);
+    const endIndex = fullResponse.indexOf(endTag);
+    if (startIndex !== -1 && endIndex !== -1 && endIndex > startIndex) {
+      thoughtProcess = fullResponse.substring(startIndex + startTag.length, endIndex).trim();
+      finalResponse = fullResponse.substring(endIndex + endTag.length).trim();
+    }
+
     return {
-      response: fullResponse,
+      response: finalResponse,
+      thoughtProcess,
       timeToFirstToken: firstTokenTimeElapsed ? firstTokenTimeElapsed.toFixed(3) : null,
       tokensPerSecond: backendTokensPerSecond,
     };
@@ -435,8 +447,6 @@ const eventPromptChat = async (message, userId) => {
     message
   )
 
-  await fs.writeJSON('./prompt-event.json', promptWithSamplers, { spaces: 2 })
-
   logger.log(
     "LLM",
     `Event handler prompt is using ${await promptTokenizedFromRemote(
@@ -588,6 +598,7 @@ const replyStripped = async (message, userId) => {
     .replace(new RegExp(`${userObj.bot_name}:\\s?`, "g"), "") // Remove bot's name followed by a colon and optional space
     .replace(/\(500 characters\)/g, "") // Remove (500 characters)
     .replace(/\\/g, "") // Remove backslashes
+    .replace(/\p{Emoji_Presentation}|\p{Extended_Pictographic}/gu, "") // Remove only graphical emojis
     .replace(/\s+/g, " "); // Replace multiple spaces with a single space
 
   // Remove unmatched quotes ONLY at the beginning or end of the string

@@ -25,7 +25,6 @@ import {
   rerankPrompt,
   fixTTSString,
   sendChatCompletionRequest,
-  sendChatCompletionRequestCoT
 } from "./prompt-helper.js";
 import { SummaryRequestBody } from "./oai-requests.js"
 import { returnTwitchEvent } from "./twitch-helper.js";
@@ -49,14 +48,14 @@ const MAX_WAIT_MS = 500;
  */
 function getCachedResult(key) {
   if (!queryCache.has(key)) return null;
-  
+
   const { result, expiry } = queryCache.get(key);
   if (Date.now() > expiry) {
     // Expired entry
     queryCache.delete(key);
     return null;
   }
-  
+
   logger.log("Milvus", `Cache hit for query: ${key}`);
   return result;
 }
@@ -73,19 +72,19 @@ function setCachedResult(key, result, ttl = DEFAULT_TTL) {
     // Find and delete oldest entry
     let oldestKey = null;
     let oldestTime = Infinity;
-    
+
     for (const [cachedKey, value] of queryCache.entries()) {
       if (value.expiry < oldestTime) {
         oldestTime = value.expiry;
         oldestKey = cachedKey;
       }
     }
-    
+
     if (oldestKey) {
       queryCache.delete(oldestKey);
     }
   }
-  
+
   // Add new entry to cache
   queryCache.set(key, {
     result,
@@ -103,77 +102,76 @@ function clearQueryCache(pattern = null) {
     logger.log("Milvus", "Query cache cleared");
     return;
   }
-  
+
   // Selective clearing based on pattern
   for (const key of queryCache.keys()) {
     if (key.includes(pattern)) {
       queryCache.delete(key);
     }
   }
-  
+
   logger.log("Milvus", `Query cache entries matching '${pattern}' cleared`);
 }
 
 async function retryMilvusOperation(operation, maxRetries = 3, initialDelay = 100) {
   let lastError;
   let delay = initialDelay;
-  
+
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       return await operation();
     } catch (error) {
       lastError = error;
-      
+
       // Determine if error is retryable
-      const isRetryable = 
+      const isRetryable =
         error.message?.includes('connection') ||
         error.message?.includes('timeout') ||
         error.message?.includes('busy') ||
         error.code === 'NetworkError' ||
         error.status?.code === 'Unavailable';
-      
+
       if (isRetryable && attempt < maxRetries) {
         logger.log("Milvus", `Retrying operation, attempt ${attempt}/${maxRetries} after ${delay}ms delay. Error: ${error.message}`);
         await new Promise(resolve => setTimeout(resolve, delay));
         delay *= 2; // Exponential backoff
       } else {
         // Non-retryable error or max retries reached
-        throw error;
       }
     }
   }
-  
+
   throw lastError; // Should not reach here normally
 }
 
 async function ensureCollectionLoaded(collectionName, userId) {
   const key = `${collectionName}_${userId}`;
   const cacheExpiry = 60 * 60 * 1000; // 1 hour
-  
+
   // Check cache first
   const cached = collectionLoadStatus.get(key);
   if (cached && cached.loaded && (Date.now() - cached.timestamp) < cacheExpiry) {
     return true;
   }
-  
+
   // Not in cache or expired, need to check/load
   try {
     const collectionStatus = await client.getLoadState({
       collection_name: key,
     });
-    
+
     if (collectionStatus.state === LoadState.LoadStateNotExist) {
       logger.log("Milvus", `Collection ${key} does not exist`);
       return false;
-    } 
-    
+    }
+
     if (collectionStatus.state === LoadState.LoadStateNotLoad) {
       await client.loadCollection({
         collection_name: key,
       });
       logger.log("Milvus", `Collection ${key} loaded successfully.`);
     }
-    
+
     // Update cache
     collectionLoadStatus.set(key, { loaded: true, timestamp: Date.now() });
     return true;
@@ -191,7 +189,7 @@ function getOptimalIndexParams(collectionType, estimatedSize) {
     index_type: IndexType.BIN_IVF_FLAT,
     metric_type: MetricType.JACCARD,
   };
-  
+
   // Adjust nlist based on collection type and estimated size
   if (estimatedSize < 1000) {
     // For small collections, smaller nlist reduces preprocessing time
@@ -203,28 +201,28 @@ function getOptimalIndexParams(collectionType, estimatedSize) {
   } else {
     params.params = { nlist: 4096 };
   }
-  
+
   // For very small collections where performance is critical
   if (collectionType === 'users' && estimatedSize < 100) {
     params.index_type = IndexType.BIN_FLAT; // Exact search for tiny collections
   }
-  
+
   return params;
 }
 
 async function scheduleVectorInsertion(collectionType, userId, vector) {
   const key = `${collectionType}_${userId}`;
-  
+
   if (!pendingVectors.has(key)) {
     pendingVectors.set(key, []);
-    
+
     // Schedule processing
     setTimeout(() => processVectorBatch(collectionType, userId), MAX_WAIT_MS);
   }
-  
+
   const batch = pendingVectors.get(key);
   batch.push(vector);
-  
+
   // If batch is full, process immediately
   if (batch.length >= MAX_BATCH_SIZE) {
     processVectorBatch(collectionType, userId);
@@ -234,19 +232,19 @@ async function scheduleVectorInsertion(collectionType, userId, vector) {
 async function processVectorBatch(collectionType, userId) {
   const key = `${collectionType}_${userId}`;
   if (!pendingVectors.has(key)) return;
-  
+
   const vectors = pendingVectors.get(key);
   pendingVectors.delete(key);
-  
+
   if (vectors.length === 0) return;
-  
+
   try {
     // Perform batch insertion
     await client.insert({
       collection_name: `${await retrieveConfigValue(`milvus.collections.${collectionType}`)}_${userId}`,
       fields_data: vectors
     });
-    
+
     logger.log("Milvus", `Batch inserted ${vectors.length} vectors into ${collectionType}_${userId}`);
   } catch (error) {
     logger.log("Milvus", `Error batch inserting vectors: ${error}`);
@@ -259,31 +257,31 @@ async function getOptimizedSearchParams(collectionName, userId, queryEmbedding, 
   const collStats = await client.getCollectionStatistics({
     collection_name: `${collectionName}_${userId}`
   });
-  
+
   const rowCount = parseInt(collStats.stats.row_count);
-  
+
   // Default parameters
   let nprobe = 16; // Starting with a more reasonable default
   let consistencyLevel = ConsistencyLevelEnum.Session; // Less strict for most searches
-  
+
   // Adjust nprobe based on collection size
   if (rowCount < 1000) {
     nprobe = 8;
   } else if (rowCount > 100000) {
     nprobe = 32;
   }
-  
+
   // Override with passed options
   if (options.requireStrongConsistency) {
     consistencyLevel = ConsistencyLevelEnum.Strong;
   }
-  
+
   // For critical searches, use stronger consistency
   if (options.criticalSearch) {
     nprobe = Math.min(rowCount / 10, 64); // More thorough search but capped
-    consistencyLevel = ConsistencyLevelEnum.Strong; 
+    consistencyLevel = ConsistencyLevelEnum.Strong;
   }
-  
+
   return {
     collection_name: `${collectionName}_${userId}`,
     data: queryEmbedding,
@@ -661,7 +659,6 @@ export async function axiosRequestWithRetry(config, attempts = 3, initialDelay =
       return await axios(config);
     } catch (error) {
       if (i === attempts - 1) {
-        throw error;
       }
       await new Promise(resolve => setTimeout(resolve, delay));
       delay *= 2; // Exponential backoff
@@ -692,7 +689,6 @@ export async function getMessageEmbedding(message) {
       : embeddingResp[0].embedding;
   } catch (error) {
     logger.log("System", `Error generating embedding: ${error}`);
-    throw error;
   }
 }
 
@@ -713,10 +709,10 @@ async function searchDocumentsInMilvus(queryEmbedding, collectionName, textParam
     // Get optimized search parameters
     const startTime = performance.now();
     const searchParams = await getOptimizedSearchParams(
-      collectionName, 
-      userId, 
-      queryEmbedding, 
-      limit, 
+      collectionName,
+      userId,
+      queryEmbedding,
+      limit,
       textParam,
       options
     );
@@ -726,13 +722,13 @@ async function searchDocumentsInMilvus(queryEmbedding, collectionName, textParam
       () => client.search(searchParams),
       options.maxRetries || 3
     );
-    
+
     const timeElapsed = (performance.now() - startTime) / 1000;
     logger.log(
       "DB Metrics",
       `Vector search took ${timeElapsed.toFixed(3)} seconds for query in collection "${collectionName}".`,
     );
-    
+
     return searchResponse;
   } catch (error) {
     logger.log("Milvus", `Error searching in Milvus: ${error}`);
@@ -767,7 +763,7 @@ async function findRelevantChats(message, user, userId, topK = 10) {
     // Get embedding
     const messageEmbedding = await getMessageEmbedding(message);
     const binaryEmbedding = Buffer.from(messageEmbedding);
-    
+
     // Get collection schema to validate embedding dimensions
     const collectionSchema = await getCollectionSchema(
       await retrieveConfigValue("milvus.collections.chat"),
@@ -789,7 +785,7 @@ async function findRelevantChats(message, user, userId, topK = 10) {
       userId,
       { requireStrongConsistency: false } // Use session consistency for chat queries
     );
-    
+
     // Cache the results
     setCachedResult(cacheKey, chatSearchResponse.results, 30000); // 30 second TTL
     return chatSearchResponse.results;
@@ -845,14 +841,14 @@ async function findRelevantDocuments(message, userId, topK = 10) {
   const cacheKey = `docs_${userId}_${message}`;
   const cachedResult = getCachedResult(cacheKey);
   if (cachedResult) return cachedResult;
-  
+
   try {
     // Ensure collection exists and is loaded
     const collExists = await checkAndCreateCollection(
       await retrieveConfigValue("milvus.collections.intelligence"),
       userId,
     );
-    
+
     if (!collExists) {
       return [];
     }
@@ -878,12 +874,12 @@ async function findRelevantDocuments(message, userId, topK = 10) {
       ["text_content", "relation"],
       topK,
       userId,
-      { 
+      {
         criticalSearch: true, // Higher importance search
         maxRetries: 3
       }
     );
-    
+
     // Cache results for longer period
     setCachedResult(cacheKey, searchResponse.results, 300000); // 5 minute TTL for documents
     return searchResponse.results;
@@ -905,14 +901,14 @@ async function findRelevantVoiceInMilvus(message, userId, topK = 5) {
   const cacheKey = `voice_${userId}_${message}`;
   const cachedResult = getCachedResult(cacheKey);
   if (cachedResult) return cachedResult;
-  
+
   try {
     // Ensure collection exists and is loaded
     const created = await checkAndCreateCollection(
       await retrieveConfigValue("milvus.collections.voice"),
       userId,
     );
-    
+
     if (!created) {
       return [];
     }
@@ -1908,7 +1904,7 @@ async function respondWithContext(message, username, userID) {
       logger.log("System", "Using cached response from previous identical query");
       return cachedResponse;
     }
-    
+
     // Perform parallel queries for all relevant context
     // Use Promise.all for better performance
     const [rawContext, voiceCtx, chatHistory] = await Promise.all([
@@ -1931,24 +1927,24 @@ async function respondWithContext(message, username, userID) {
       user: username,
     };
 
-    const body = await contextPromptChatCoT(promptData, message, userID);
+    const body = await contextPromptChat(promptData, message, userID);
 
     // Use retryMilvusOperation to handle potential LLM request failures
     const chatTask = await retryMilvusOperation(
-      async () => sendChatCompletionRequestCoT(body, await retrieveConfigValue("models.chat")),
+      async () => sendChatCompletionRequest(body, await retrieveConfigValue("models.chat")),
       2,  // Fewer retries for LLM since these can be slow
       500 // Longer initial delay
     );
 
     logger.log("LLM", `Processed thoughts: ${JSON.stringify(chatTask.thoughtProcess, null, 2)}`);
     logger.log("System", `Generated textual character response. Time to first token: ${chatTask.timeToFirstToken} seconds. Process speed: ${chatTask.tokensPerSecond}tps`);
-    
+
     // Cache the response for a short time (10 seconds)
     // Only cache if it was successful
     if (chatTask.response) {
       setCachedResult(responseCacheKey, chatTask.response, 10000);
     }
-    
+
     return chatTask.response;
   } catch (error) {
     logger.log("System", `Error calling respondWithContext: ${error}`);
@@ -1966,12 +1962,12 @@ async function rerankString(message, userId) {
 async function respondWithoutContext(message, userId) {
   const instruct = await nonContextChatPrompt(message, userId);
   const chatTask = await sendChatCompletionRequest(instruct, await retrieveConfigValue("models.chat"))
-  return replyStripped(chatTask.response);
+  const strippedResp = await replyStripped(chatTask.response, userId);
+  return strippedResp;
 }
 
 async function respondWithVoice(message, userId) {
   const startTime = performance.now();
-  let wordCount = message.trim().split(/\s+/).length; // Count words
 
   const fixedAcro = await fixTTSString(message);
   const userObj = await returnAuthObject(userId);
@@ -2001,48 +1997,60 @@ async function respondWithVoice(message, userId) {
     const timeElapsed = (performance.now() - startTime) / 1000;
     logger.log("API", `Download URL for AT: ${await retrieveConfigValue("alltalk.ttsServeEndpoint.internal")}${res.data.output_file_url}`)
 
-    const fileRes = await axios({
-      method: 'GET',
-      url: `${await retrieveConfigValue("alltalk.ttsServeEndpoint.internal")}${res.data.output_file_url}`,
-      responseType: 'arraybuffer'
-    });
+    if (userObj.ttsUpsamplePref) {
+      const fileRes = await axios({
+        method: 'GET',
+        url: `${await retrieveConfigValue("alltalk.ttsServeEndpoint.internal")}${res.data.output_file_url}`,
+        responseType: 'arraybuffer'
+      });
 
-    const tempDir = path.join(__dirname, 'temp');
-    await fs.mkdir(tempDir, { recursive: true });
-    const tempFilePath = path.join(tempDir, `tts_${Date.now()}.wav`);
+      const tempDir = path.join(__dirname, 'temp');
+      await fs.mkdir(tempDir, { recursive: true });
+      const tempFilePath = path.join(tempDir, `tts_${Date.now()}.wav`);
 
-    await fs.writeFile(tempFilePath, fileRes.data);
+      await fs.writeFile(tempFilePath, fileRes.data);
 
-    if (res.status === 200 && fileRes.status == 200) {
-      try {
-        // Process the audio file (synchronous operation)
-        const processedFilePath = await processAudio(tempFilePath, {
-          preset: userObj.ttsEqPref || 'clarity',
-          userId: userObj.user_id
-        });
+      if (res.status === 200 && fileRes.status == 200) {
+        try {
+          // Process the audio file (synchronous operation)
+          const processedFilePath = processAudio(tempFilePath, {
+            preset: userObj.ttsEqPref || 'clarity',
+            userId: userObj.user_id
+          });
 
-        logger.log("API", `Processed audio file to ${processedFilePath}`);
+          logger.log("API", `Processed audio file to ${processedFilePath}`);
 
-        // Clean up temp file
-        await fs.unlink(tempFilePath).catch(() => { });
+          // Clean up temp file
+          await fs.unlink(tempFilePath).catch(() => { });
 
-        let audioUrl;
-        if (userObj.is_local) {
-          audioUrl = `${await retrieveConfigValue("alltalk.ttsServeEndpoint.internal")}${processedFilePath}`;
-        } else {
-          audioUrl = `${await retrieveConfigValue("alltalk.ttsServeEndpoint.external")}${processedFilePath}`;
+          let audioUrl;
+          if (userObj.is_local) {
+            audioUrl = `${await retrieveConfigValue("alltalk.ttsServeEndpoint.internal")}${processedFilePath}`;
+          } else {
+            audioUrl = `${await retrieveConfigValue("alltalk.ttsServeEndpoint.external")}${processedFilePath}`;
+          }
+          logger.log("LLM", `TTS request completed in ${timeElapsed.toFixed(2)} seconds.`);
+          return audioUrl;
+
+        } catch (processingError) {
+          logger.error("API", `Error processing audio: ${processingError.message}`);
+          return null
         }
-        logger.log("LLM", `TTS request completed in ${timeElapsed.toFixed(2)} seconds.`);
-        return audioUrl;
-
-      } catch (processingError) {
-        logger.error("API", `Error processing audio: ${processingError.message}`);
-        return null
+      } else {
+        console.error(`Request failed with: ${res.data}`);
+        return { error: `TTS request failed with status: ${res.status}` };
       }
     } else {
-      console.error(`Request failed with: ${res.data}`);
-      return { error: `TTS request failed with status: ${res.status}` };
+      let audioUrl;
+      if (userObj.is_local) {
+        audioUrl = `${await retrieveConfigValue("alltalk.ttsServeEndpoint.internal")}${res.data.output_file_url}`;
+      } else {
+        audioUrl = `${await retrieveConfigValue("alltalk.ttsServeEndpoint.external")}${res.data.output_file_url}`;
+      }
+      logger.log("LLM", `TTS request completed in ${timeElapsed.toFixed(2)} seconds.`);
+      return audioUrl;
     }
+
   } catch (error) {
     console.error("Error during TTS request:", error);
     return { error: error.message };
@@ -2130,15 +2138,15 @@ async function addChatMessageAsVector(sumText, message, username, date, response
       await retrieveConfigValue("milvus.collections.chat"),
       userId
     );
-    
+
     if (!isLoaded) {
       logger.log("Milvus", `Can't load collection for chat.`);
       return false;
     }
-    
+
     const currentTime = Date.now();
     const embeddingsArray = await getMessageEmbedding(sumText);
-    
+
     // Prepare vector data
     const vectorData = {
       embedding: embeddingsArray,
@@ -2148,7 +2156,7 @@ async function addChatMessageAsVector(sumText, message, username, date, response
       ai_message: response,
       time_stamp: currentTime,
     };
-    
+
     // Schedule for batch insertion
     scheduleVectorInsertion('chat', userId, vectorData);
     return true;
@@ -2201,6 +2209,8 @@ async function respondToEvent(event, userId) {
   const instructPrompt = await eventPromptChat(eventMessage, userId);
 
   const chatTask = await sendChatCompletionRequest(instructPrompt, await retrieveConfigValue("models.chat"))
+  logger.log("LLM", `Thought tokens: ${chatTask.thoughtProcess}`)
+  logger.log("LLM", `Response tokens: ${chatTask.response}`)
   logger.log("LLM", `Generated event response. Time to first token: ${chatTask.timeToFirstToken} seconds. Process speed: ${chatTask.tokensPerSecond}tps`);
   const strippedResponse = await replyStripped(
     chatTask.response,
@@ -2232,18 +2242,18 @@ async function checkMilvusHealthDetailed(userId = null) {
   try {
     // Basic health check
     const isHealthy = await client.checkHealth();
-    
+
     const healthData = {
       isHealthy: isHealthy.isHealthy,
       timestamp: Date.now(),
       metrics: {}
     };
-    
+
     if (!isHealthy.isHealthy) {
       logger.log("Milvus", "Milvus health check failed");
       return healthData;
     }
-    
+
     // If userId is provided, check their collections
     if (userId) {
       const collections = [
@@ -2252,27 +2262,27 @@ async function checkMilvusHealthDetailed(userId = null) {
         await retrieveConfigValue("milvus.collections.chat"),
         await retrieveConfigValue("milvus.collections.voice")
       ];
-      
+
       const collectionStats = {};
-      
+
       for (const collection of collections) {
         const collName = `${collection}_${userId}`;
         try {
           const exists = await client.hasCollection({
             collection_name: collName
           });
-          
+
           if (exists.value) {
             // Get collection statistics
             const stats = await client.getCollectionStatistics({
               collection_name: collName
             });
-            
+
             // Get load status
             const loadState = await client.getLoadState({
               collection_name: collName
             });
-            
+
             collectionStats[collection] = {
               exists: true,
               rowCount: parseInt(stats.stats.row_count || 0),
@@ -2290,23 +2300,23 @@ async function checkMilvusHealthDetailed(userId = null) {
           };
         }
       }
-      
+
       healthData.metrics.collections = collectionStats;
     }
-    
+
     // Get system info if available
     try {
       const sysInfo = await client.getMetric({
         request: {}
       });
-      
+
       if (sysInfo && sysInfo.response) {
         healthData.metrics.system = sysInfo.response;
       }
     } catch (error) {
       healthData.metrics.system = { error: error.message };
     }
-    
+
     // Add cache stats
     healthData.metrics.cache = {
       queryCache: {
@@ -2317,12 +2327,12 @@ async function checkMilvusHealthDetailed(userId = null) {
         size: collectionLoadStatus.size
       }
     };
-    
+
     return healthData;
   } catch (error) {
     logger.log("Milvus", `Error in detailed health check: ${error}`);
-    return { 
-      isHealthy: false, 
+    return {
+      isHealthy: false,
       error: error.message,
       timestamp: Date.now()
     };
