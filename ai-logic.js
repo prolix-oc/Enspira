@@ -34,6 +34,271 @@ import { returnAuthObject } from "./api-helper.js";
 import { retrieveConfigValue } from "./config-helper.js";
 import { fileURLToPath } from 'url';
 
+const queryCache = new Map();
+const collectionLoadStatus = new Map();
+const pendingVectors = new Map(); // collectionName_userId -> [vectors to insert]
+const MAX_BATCH_SIZE = 100;
+const MAX_CACHE_SIZE = 150;
+const DEFAULT_TTL = 60000;
+const MAX_WAIT_MS = 500;
+
+/**
+ * Get a cached result if available and not expired
+ * @param {string} key - Unique cache key
+ * @returns {any} - The cached result or null if not found/expired
+ */
+function getCachedResult(key) {
+  if (!queryCache.has(key)) return null;
+  
+  const { result, expiry } = queryCache.get(key);
+  if (Date.now() > expiry) {
+    // Expired entry
+    queryCache.delete(key);
+    return null;
+  }
+  
+  logger.log("Milvus", `Cache hit for query: ${key}`);
+  return result;
+}
+
+/**
+ * Store a result in the query cache
+ * @param {string} key - Unique cache key
+ * @param {any} result - Result to cache
+ * @param {number} ttl - Time to live in milliseconds
+ */
+function setCachedResult(key, result, ttl = DEFAULT_TTL) {
+  // Implement LRU eviction if cache gets too large
+  if (queryCache.size >= MAX_CACHE_SIZE) {
+    // Find and delete oldest entry
+    let oldestKey = null;
+    let oldestTime = Infinity;
+    
+    for (const [cachedKey, value] of queryCache.entries()) {
+      if (value.expiry < oldestTime) {
+        oldestTime = value.expiry;
+        oldestKey = cachedKey;
+      }
+    }
+    
+    if (oldestKey) {
+      queryCache.delete(oldestKey);
+    }
+  }
+  
+  // Add new entry to cache
+  queryCache.set(key, {
+    result,
+    expiry: Date.now() + ttl
+  });
+}
+
+/**
+ * Clear the entire query cache or entries matching a pattern
+ * @param {string} [pattern] - Optional pattern to match keys for selective clearing
+ */
+function clearQueryCache(pattern = null) {
+  if (!pattern) {
+    queryCache.clear();
+    logger.log("Milvus", "Query cache cleared");
+    return;
+  }
+  
+  // Selective clearing based on pattern
+  for (const key of queryCache.keys()) {
+    if (key.includes(pattern)) {
+      queryCache.delete(key);
+    }
+  }
+  
+  logger.log("Milvus", `Query cache entries matching '${pattern}' cleared`);
+}
+
+async function retryMilvusOperation(operation, maxRetries = 3, initialDelay = 100) {
+  let lastError;
+  let delay = initialDelay;
+  
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      
+      // Determine if error is retryable
+      const isRetryable = 
+        error.message?.includes('connection') ||
+        error.message?.includes('timeout') ||
+        error.message?.includes('busy') ||
+        error.code === 'NetworkError' ||
+        error.status?.code === 'Unavailable';
+      
+      if (isRetryable && attempt < maxRetries) {
+        logger.log("Milvus", `Retrying operation, attempt ${attempt}/${maxRetries} after ${delay}ms delay. Error: ${error.message}`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        delay *= 2; // Exponential backoff
+      } else {
+        // Non-retryable error or max retries reached
+        throw error;
+      }
+    }
+  }
+  
+  throw lastError; // Should not reach here normally
+}
+
+async function ensureCollectionLoaded(collectionName, userId) {
+  const key = `${collectionName}_${userId}`;
+  const cacheExpiry = 60 * 60 * 1000; // 1 hour
+  
+  // Check cache first
+  const cached = collectionLoadStatus.get(key);
+  if (cached && cached.loaded && (Date.now() - cached.timestamp) < cacheExpiry) {
+    return true;
+  }
+  
+  // Not in cache or expired, need to check/load
+  try {
+    const collectionStatus = await client.getLoadState({
+      collection_name: key,
+    });
+    
+    if (collectionStatus.state === LoadState.LoadStateNotExist) {
+      logger.log("Milvus", `Collection ${key} does not exist`);
+      return false;
+    } 
+    
+    if (collectionStatus.state === LoadState.LoadStateNotLoad) {
+      await client.loadCollection({
+        collection_name: key,
+      });
+      logger.log("Milvus", `Collection ${key} loaded successfully.`);
+    }
+    
+    // Update cache
+    collectionLoadStatus.set(key, { loaded: true, timestamp: Date.now() });
+    return true;
+  } catch (error) {
+    logger.log("Milvus", `Error loading collection: ${error}`);
+    collectionLoadStatus.set(key, { loaded: false, timestamp: Date.now() });
+    return false;
+  }
+}
+
+function getOptimalIndexParams(collectionType, estimatedSize) {
+  // Base configuration
+  const params = {
+    field_name: "embedding",
+    index_type: IndexType.BIN_IVF_FLAT,
+    metric_type: MetricType.JACCARD,
+  };
+  
+  // Adjust nlist based on collection type and estimated size
+  if (estimatedSize < 1000) {
+    // For small collections, smaller nlist reduces preprocessing time
+    params.params = { nlist: 128 };
+  } else if (estimatedSize < 10000) {
+    params.params = { nlist: 512 };
+  } else if (estimatedSize < 100000) {
+    params.params = { nlist: 2048 };
+  } else {
+    params.params = { nlist: 4096 };
+  }
+  
+  // For very small collections where performance is critical
+  if (collectionType === 'users' && estimatedSize < 100) {
+    params.index_type = IndexType.BIN_FLAT; // Exact search for tiny collections
+  }
+  
+  return params;
+}
+
+async function scheduleVectorInsertion(collectionType, userId, vector) {
+  const key = `${collectionType}_${userId}`;
+  
+  if (!pendingVectors.has(key)) {
+    pendingVectors.set(key, []);
+    
+    // Schedule processing
+    setTimeout(() => processVectorBatch(collectionType, userId), MAX_WAIT_MS);
+  }
+  
+  const batch = pendingVectors.get(key);
+  batch.push(vector);
+  
+  // If batch is full, process immediately
+  if (batch.length >= MAX_BATCH_SIZE) {
+    processVectorBatch(collectionType, userId);
+  }
+}
+
+async function processVectorBatch(collectionType, userId) {
+  const key = `${collectionType}_${userId}`;
+  if (!pendingVectors.has(key)) return;
+  
+  const vectors = pendingVectors.get(key);
+  pendingVectors.delete(key);
+  
+  if (vectors.length === 0) return;
+  
+  try {
+    // Perform batch insertion
+    await client.insert({
+      collection_name: `${await retrieveConfigValue(`milvus.collections.${collectionType}`)}_${userId}`,
+      fields_data: vectors
+    });
+    
+    logger.log("Milvus", `Batch inserted ${vectors.length} vectors into ${collectionType}_${userId}`);
+  } catch (error) {
+    logger.log("Milvus", `Error batch inserting vectors: ${error}`);
+    // Implement retry logic here
+  }
+}
+
+async function getOptimizedSearchParams(collectionName, userId, queryEmbedding, limit, textParam, options = {}) {
+  // Get collection info to determine appropriate parameters
+  const collStats = await client.getCollectionStatistics({
+    collection_name: `${collectionName}_${userId}`
+  });
+  
+  const rowCount = parseInt(collStats.stats.row_count);
+  
+  // Default parameters
+  let nprobe = 16; // Starting with a more reasonable default
+  let consistencyLevel = ConsistencyLevelEnum.Session; // Less strict for most searches
+  
+  // Adjust nprobe based on collection size
+  if (rowCount < 1000) {
+    nprobe = 8;
+  } else if (rowCount > 100000) {
+    nprobe = 32;
+  }
+  
+  // Override with passed options
+  if (options.requireStrongConsistency) {
+    consistencyLevel = ConsistencyLevelEnum.Strong;
+  }
+  
+  // For critical searches, use stronger consistency
+  if (options.criticalSearch) {
+    nprobe = Math.min(rowCount / 10, 64); // More thorough search but capped
+    consistencyLevel = ConsistencyLevelEnum.Strong; 
+  }
+  
+  return {
+    collection_name: `${collectionName}_${userId}`,
+    data: queryEmbedding,
+    topk: limit,
+    metric_type: MetricType.JACCARD,
+    output_fields: textParam instanceof Array ? textParam : [textParam],
+    vector_type: DataType.BinaryVector,
+    search_params: buildSearchParams({
+      nprobe: nprobe,
+      limit: limit,
+    }),
+    consistency_level: consistencyLevel,
+  };
+}
+
 const intelligenceSchema = async (userId) => {
   return {
     collection_name: `${await retrieveConfigValue("milvus.collections.intelligence")}_${userId}`,
@@ -431,43 +696,47 @@ export async function getMessageEmbedding(message) {
   }
 }
 
-async function searchDocumentsInMilvus(
-  queryEmbedding,
-  collectionName,
-  textParam,
-  limit,
-  userId,
-) {
+async function searchDocumentsInMilvus(queryEmbedding, collectionName, textParam, limit, userId, options = {}) {
   if (!queryEmbedding || queryEmbedding.length === 0) {
     logger.log("Milvus", "Query embedding is empty.");
     return { results: [] };
   }
 
   try {
-    const startTime = performance.now();
-    const searchParams = {
-      collection_name: `${collectionName}_${userId}`,
-      data: queryEmbedding,
-      topk: limit,
-      metric_type: MetricType.JACCARD,
-      output_fields: [textParam],
-      vector_type: DataType.BinaryVector,
-      search_params: buildSearchParams({
-        nprobe: 64,
-        limit: limit,
-      }),
-      consistency_level: ConsistencyLevelEnum.Strong,
-    };
+    // Ensure collection is loaded using our new cache system
+    const isLoaded = await ensureCollectionLoaded(collectionName, userId);
+    if (!isLoaded) {
+      logger.log("Milvus", `Collection ${collectionName}_${userId} not available for search.`);
+      return { results: [] };
+    }
 
+    // Get optimized search parameters
+    const startTime = performance.now();
+    const searchParams = await getOptimizedSearchParams(
+      collectionName, 
+      userId, 
+      queryEmbedding, 
+      limit, 
+      textParam,
+      options
+    );
+
+    // Execute search with retry capability
+    const searchResponse = await retryMilvusOperation(
+      () => client.search(searchParams),
+      options.maxRetries || 3
+    );
+    
     const timeElapsed = (performance.now() - startTime) / 1000;
     logger.log(
       "DB Metrics",
       `Vector search took ${timeElapsed.toFixed(3)} seconds for query in collection "${collectionName}".`,
     );
-    const searchResponse = await client.search(searchParams);
+    
     return searchResponse;
   } catch (error) {
     logger.log("Milvus", `Error searching in Milvus: ${error}`);
+    return { results: [] };
   }
 }
 
@@ -480,7 +749,13 @@ async function searchDocumentsInMilvus(
  * @returns {Promise<object[]|boolean>} - An array of relevant chat results or false if the collection doesn't exist.
  */
 async function findRelevantChats(message, user, userId, topK = 10) {
+  // Check cache for identical queries
+  const cacheKey = `chats_${userId}_${message}`;
+  const cachedResult = getCachedResult(cacheKey);
+  if (cachedResult) return cachedResult;
+
   try {
+    // Verify collection exists (using our optimized collection check)
     const created = await checkAndCreateCollection(
       await retrieveConfigValue("milvus.collections.chat"),
       userId,
@@ -489,20 +764,11 @@ async function findRelevantChats(message, user, userId, topK = 10) {
       return false;
     }
 
-    const loadCollect = await loadCollectionIfNeeded(
-      await retrieveConfigValue("milvus.collections.chat"),
-      userId,
-    );
-    if (!loadCollect) {
-      logger.log(
-        "Milvus",
-        `Failed to load collection: ${await retrieveConfigValue("milvus.collections.chat")}_${userId}. Exiting search.`,
-      );
-      return [];
-    }
-
+    // Get embedding
     const messageEmbedding = await getMessageEmbedding(message);
     const binaryEmbedding = Buffer.from(messageEmbedding);
+    
+    // Get collection schema to validate embedding dimensions
     const collectionSchema = await getCollectionSchema(
       await retrieveConfigValue("milvus.collections.chat"),
       userId,
@@ -512,15 +778,20 @@ async function findRelevantChats(message, user, userId, topK = 10) {
       (field) => field.name === "embedding",
     );
     const expectedDim = parseInt(embeddingField?.type_params.find(param => param.key === "dim")?.value);
-    validateEmbeddingDimension(binaryEmbedding, expectedDim)
+    validateEmbeddingDimension(binaryEmbedding, expectedDim);
 
+    // Use optimized search
     const chatSearchResponse = await searchDocumentsInMilvus(
       binaryEmbedding,
       await retrieveConfigValue("milvus.collections.chat"),
-      "text_content",
+      ["text_content", "username", "raw_msg", "ai_message"], // Get more fields in one query
       topK,
       userId,
+      { requireStrongConsistency: false } // Use session consistency for chat queries
     );
+    
+    // Cache the results
+    setCachedResult(cacheKey, chatSearchResponse.results, 30000); // 30 second TTL
     return chatSearchResponse.results;
   } catch (error) {
     logger.log("Milvus", `Error in findRelevantChats: ${error}`);
@@ -570,37 +841,23 @@ async function returnRecentChats(userId, fromConsole = false) {
  * @returns {Promise<object[]|boolean>} - An array of relevant document results or false if the collection doesn't exist.
  */
 async function findRelevantDocuments(message, userId, topK = 10) {
+  // Check cache first
+  const cacheKey = `docs_${userId}_${message}`;
+  const cachedResult = getCachedResult(cacheKey);
+  if (cachedResult) return cachedResult;
+  
   try {
-    const exists = await client.hasCollection({
-      collection_name: `${await retrieveConfigValue("milvus.collections.intelligence")}_${userId}`,
-    });
-
-    if (!exists.value) {
-      logger.log(
-        "Milvus",
-        `Collection ${await retrieveConfigValue("milvus.collections.intelligence")}_${userId} does not exist.`,
-      );
-      const created = await checkAndCreateCollection(
-        await retrieveConfigValue("milvus.collections.intelligence"),
-        userId,
-      );
-      if (!created) {
-        return [];
-      }
-    }
-
-    const isLoaded = await loadCollectionIfNeeded(
+    // Ensure collection exists and is loaded
+    const collExists = await checkAndCreateCollection(
       await retrieveConfigValue("milvus.collections.intelligence"),
       userId,
     );
-    if (!isLoaded) {
-      logger.log(
-        "Milvus",
-        `Failed to load collection: ${await retrieveConfigValue("milvus.collections.intelligence")}_${userId}. Exiting search.`,
-      );
+    
+    if (!collExists) {
       return [];
     }
 
+    // Get and validate embedding
     const messageEmbedding = await getMessageEmbedding(message);
     const binaryEmbedding = Buffer.from(messageEmbedding);
     const collectionSchema = await getCollectionSchema(
@@ -612,15 +869,23 @@ async function findRelevantDocuments(message, userId, topK = 10) {
       (field) => field.name === "embedding",
     );
     const expectedDim = parseInt(embeddingField?.type_params.find(param => param.key === "dim")?.value);
-    validateEmbeddingDimension(binaryEmbedding, expectedDim)
+    validateEmbeddingDimension(binaryEmbedding, expectedDim);
 
+    // Use optimized search with higher nprobe for documents (more accurate)
     const searchResponse = await searchDocumentsInMilvus(
       binaryEmbedding,
       await retrieveConfigValue("milvus.collections.intelligence"),
-      "text_content",
+      ["text_content", "relation"],
       topK,
       userId,
+      { 
+        criticalSearch: true, // Higher importance search
+        maxRetries: 3
+      }
     );
+    
+    // Cache results for longer period
+    setCachedResult(cacheKey, searchResponse.results, 300000); // 5 minute TTL for documents
     return searchResponse.results;
   } catch (error) {
     logger.log("Milvus", `Error in findRelevantDocuments: ${error}`);
@@ -636,37 +901,23 @@ async function findRelevantDocuments(message, userId, topK = 10) {
  * @returns {Promise<object[]|boolean>} - An array of relevant voice interaction results or false if the collection doesn't exist.
  */
 async function findRelevantVoiceInMilvus(message, userId, topK = 5) {
+  // Check cache
+  const cacheKey = `voice_${userId}_${message}`;
+  const cachedResult = getCachedResult(cacheKey);
+  if (cachedResult) return cachedResult;
+  
   try {
-    const exists = await client.hasCollection({
-      collection_name: `${await retrieveConfigValue("milvus.collections.voice")}_${userId}`,
-    });
-
-    if (!exists.value) {
-      logger.log(
-        "Milvus",
-        `Collection ${await retrieveConfigValue("milvus.collections.voice")}_${userId} does not exist.`,
-      );
-      const created = await checkAndCreateCollection(
-        await retrieveConfigValue("milvus.collections.voice"),
-        userId,
-      );
-      if (!created) {
-        return [];
-      }
-    }
-
-    const isLoaded = await loadCollectionIfNeeded(
+    // Ensure collection exists and is loaded
+    const created = await checkAndCreateCollection(
       await retrieveConfigValue("milvus.collections.voice"),
       userId,
     );
-    if (!isLoaded) {
-      logger.log(
-        "Milvus",
-        `Failed to load collection: ${await retrieveConfigValue("milvus.collections.voice")}_${userId}. Exiting search.`,
-      );
+    
+    if (!created) {
       return [];
     }
 
+    // Get and validate embedding
     const messageEmbedding = await getMessageEmbedding(message);
     const binaryEmbedding = Buffer.from(messageEmbedding);
     const collectionSchema = await getCollectionSchema(
@@ -678,16 +929,20 @@ async function findRelevantVoiceInMilvus(message, userId, topK = 5) {
       (field) => field.name === "embedding",
     );
     const expectedDim = parseInt(embeddingField?.type_params.find(param => param.key === "dim")?.value);
-    validateEmbeddingDimension(binaryEmbedding, expectedDim)
+    validateEmbeddingDimension(binaryEmbedding, expectedDim);
 
+    // Use optimized search
     const voiceResponse = await searchDocumentsInMilvus(
       binaryEmbedding,
       await retrieveConfigValue("milvus.collections.voice"),
-      "summary",
+      ["summary", "username", "user_message", "ai_resp", "date_time"],
       topK,
       userId,
+      { requireStrongConsistency: false }
     );
 
+    // Cache results
+    setCachedResult(cacheKey, voiceResponse.results, 60000); // 1 minute TTL
     return voiceResponse.results;
   } catch (error) {
     logger.log("Milvus", `Error in findRelevantVoiceInMilvus: ${error}`);
@@ -1112,7 +1367,7 @@ async function searchBraveAPI(query, freshness) {
  */
 async function searchSearXNG(query, freshness) {
   try {
-    const url = new URL("https://search.prolix.live/search");
+    const url = new URL("https://search.prolix.dev/search");
     url.searchParams.set("q", query);
     url.searchParams.set("safesearch", 0);
     url.searchParams.set("categories", "general");
@@ -1646,12 +1901,23 @@ async function processFiles(directory, userId) {
  */
 async function respondWithContext(message, username, userID) {
   try {
+    // Check if we already have cached response for this exact message
+    const responseCacheKey = `response_${userID}_${message}_${username}`;
+    const cachedResponse = getCachedResult(responseCacheKey);
+    if (cachedResponse) {
+      logger.log("System", "Using cached response from previous identical query");
+      return cachedResponse;
+    }
+    
+    // Perform parallel queries for all relevant context
+    // Use Promise.all for better performance
     const [rawContext, voiceCtx, chatHistory] = await Promise.all([
       findRelevantDocuments(message, userID, 8),
       findRelevantVoiceInMilvus(message, userID, 3),
       findRelevantChats(message, username, userID, 3),
     ]);
 
+    // Process results in parallel
     const [contextBody, relChatBody, relVoiceBody] = await Promise.all([
       resultsReranked(rawContext, message, userID, true),
       resultsReranked(chatHistory, message, userID),
@@ -1667,14 +1933,27 @@ async function respondWithContext(message, username, userID) {
 
     const body = await contextPromptChatCoT(promptData, message, userID);
 
-    const chatTask = await sendChatCompletionRequestCoT(body, await retrieveConfigValue("models.chat"))
+    // Use retryMilvusOperation to handle potential LLM request failures
+    const chatTask = await retryMilvusOperation(
+      async () => sendChatCompletionRequestCoT(body, await retrieveConfigValue("models.chat")),
+      2,  // Fewer retries for LLM since these can be slow
+      500 // Longer initial delay
+    );
 
-    logger.log("LLM", `Processed thoughts: ${JSON.stringify(chatTask.thoughtProcess, null, 2)}`)
-
+    logger.log("LLM", `Processed thoughts: ${JSON.stringify(chatTask.thoughtProcess, null, 2)}`);
     logger.log("System", `Generated textual character response. Time to first token: ${chatTask.timeToFirstToken} seconds. Process speed: ${chatTask.tokensPerSecond}tps`);
+    
+    // Cache the response for a short time (10 seconds)
+    // Only cache if it was successful
+    if (chatTask.response) {
+      setCachedResult(responseCacheKey, chatTask.response, 10000);
+    }
+    
     return chatTask.response;
   } catch (error) {
-    console.error("Error calling respondWithContext:", error);
+    logger.log("System", `Error calling respondWithContext: ${error}`);
+    // Return a fallback response rather than throwing
+    return "I'm sorry, I encountered an issue while processing your message. Could you please try again?";
   }
 }
 
@@ -1737,18 +2016,14 @@ async function respondWithVoice(message, userId) {
     if (res.status === 200 && fileRes.status == 200) {
       try {
         // Process the audio file (synchronous operation)
-        const processedFilePath = processAudio(tempFilePath, {
+        const processedFilePath = await processAudio(tempFilePath, {
           preset: userObj.ttsEqPref || 'clarity',
-          outputDir: 'final',
           userId: userObj.user_id
         });
 
         logger.log("API", `Processed audio file to ${processedFilePath}`);
 
         // Clean up temp file
-        await fs.unlink(tempFilePath).catch(() => { });
-
-
         await fs.unlink(tempFilePath).catch(() => { });
 
         let audioUrl;
@@ -1848,41 +2123,38 @@ async function respondToDirectVoice(message, userId, withVoice = false) {
   }
 }
 
-async function addChatMessageAsVector(
-  sumText,
-  message,
-  username,
-  date,
-  response,
-  userId,
-) {
-  const loadedColl = await loadCollectionIfNeeded(
-    await retrieveConfigValue("milvus.collections.chat"),
-    userId,
-  );
-  if (!loadedColl) {
-    logger.log("Milvus", `Can't load collection for chat.`);
-    return; // Early return on failure
-  }
-  const currentTime = Date.now()
+async function addChatMessageAsVector(sumText, message, username, date, response, userId) {
   try {
-    const embeddingsArray = await getMessageEmbedding(sumText);
-    const success = await insertChatVectorsToMilvus(
-      embeddingsArray,
-      message,
-      sumText,
-      response,
-      username,
-      currentTime,
-      userId,
+    // Use our optimized collection loading
+    const isLoaded = await ensureCollectionLoaded(
+      await retrieveConfigValue("milvus.collections.chat"),
+      userId
     );
-    if (success) {
-      logger.log("Milvus", "Chat text successfully inserted into Milvus.");
-    } else {
-      logger.log("Milvus", "Failed to insert chat text into Milvus.");
+    
+    if (!isLoaded) {
+      logger.log("Milvus", `Can't load collection for chat.`);
+      return false;
     }
+    
+    const currentTime = Date.now();
+    const embeddingsArray = await getMessageEmbedding(sumText);
+    
+    // Prepare vector data
+    const vectorData = {
+      embedding: embeddingsArray,
+      username: username,
+      text_content: sumText,
+      raw_msg: message,
+      ai_message: response,
+      time_stamp: currentTime,
+    };
+    
+    // Schedule for batch insertion
+    scheduleVectorInsertion('chat', userId, vectorData);
+    return true;
   } catch (error) {
     logger.log("Milvus", `Error processing chat text: ${error}`);
+    return false;
   }
 }
 
@@ -1949,6 +2221,112 @@ async function startIndexingVectors(userId) {
 async function checkMilvusHealth() {
   const isUp = await client.checkHealth();
   return isUp.isHealthy;
+}
+
+/**
+ * Perform a health check on the Milvus database with detailed diagnostics
+ * @param {string} userId - User ID to check collections for
+ * @returns {Promise<object>} - Health status and metrics
+ */
+async function checkMilvusHealthDetailed(userId = null) {
+  try {
+    // Basic health check
+    const isHealthy = await client.checkHealth();
+    
+    const healthData = {
+      isHealthy: isHealthy.isHealthy,
+      timestamp: Date.now(),
+      metrics: {}
+    };
+    
+    if (!isHealthy.isHealthy) {
+      logger.log("Milvus", "Milvus health check failed");
+      return healthData;
+    }
+    
+    // If userId is provided, check their collections
+    if (userId) {
+      const collections = [
+        await retrieveConfigValue("milvus.collections.user"),
+        await retrieveConfigValue("milvus.collections.intelligence"),
+        await retrieveConfigValue("milvus.collections.chat"),
+        await retrieveConfigValue("milvus.collections.voice")
+      ];
+      
+      const collectionStats = {};
+      
+      for (const collection of collections) {
+        const collName = `${collection}_${userId}`;
+        try {
+          const exists = await client.hasCollection({
+            collection_name: collName
+          });
+          
+          if (exists.value) {
+            // Get collection statistics
+            const stats = await client.getCollectionStatistics({
+              collection_name: collName
+            });
+            
+            // Get load status
+            const loadState = await client.getLoadState({
+              collection_name: collName
+            });
+            
+            collectionStats[collection] = {
+              exists: true,
+              rowCount: parseInt(stats.stats.row_count || 0),
+              loadState: loadState.state
+            };
+          } else {
+            collectionStats[collection] = {
+              exists: false
+            };
+          }
+        } catch (err) {
+          collectionStats[collection] = {
+            exists: 'error',
+            error: err.message
+          };
+        }
+      }
+      
+      healthData.metrics.collections = collectionStats;
+    }
+    
+    // Get system info if available
+    try {
+      const sysInfo = await client.getMetric({
+        request: {}
+      });
+      
+      if (sysInfo && sysInfo.response) {
+        healthData.metrics.system = sysInfo.response;
+      }
+    } catch (error) {
+      healthData.metrics.system = { error: error.message };
+    }
+    
+    // Add cache stats
+    healthData.metrics.cache = {
+      queryCache: {
+        size: queryCache.size,
+        maxSize: MAX_CACHE_SIZE
+      },
+      collectionLoadStatus: {
+        size: collectionLoadStatus.size
+      }
+    };
+    
+    return healthData;
+  } catch (error) {
+    logger.log("Milvus", `Error in detailed health check: ${error}`);
+    return { 
+      isHealthy: false, 
+      error: error.message,
+      timestamp: Date.now()
+    };
+  }
 }
 
 /**
@@ -2149,5 +2527,14 @@ export {
   weGottaGoBald,
   checkAndCreateCollection,
   searchSearXNG,
-  returnRecentChats
+  returnRecentChats,
+  ensureCollectionLoaded,
+  retryMilvusOperation,
+  getOptimizedSearchParams,
+  scheduleVectorInsertion,
+  processVectorBatch,
+  getCachedResult,
+  setCachedResult,
+  clearQueryCache,
+  checkMilvusHealthDetailed
 };

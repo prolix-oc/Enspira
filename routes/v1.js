@@ -54,18 +54,6 @@ function containsJailbreakAttempt(input) {
   return pattern.test(input);
 }
 
-async function getModerationResult(data, user_id, message, fromBot) {
-  if (!(await containsPlayerSocials(data.user, user_id)) || !fromBot) {
-    return twitchHelper.prepareModerationChatRequest(
-      data.user,
-      message,
-      data.emoteCount,
-      user_id,
-    );
-  }
-  return "safe";
-}
-
 async function routes(fastify, options) {
   await fastify.addContentTypeParser(
     "application/json",
@@ -193,7 +181,6 @@ async function routes(fastify, options) {
       const isCharMessage = await containsCharacterName(data.user, authObject.user_id)
       const mentionsChar = await containsCharacterName(data.message, authObject.user_id)
       // Moved to separate function to prevent duplication error
-      let moderationResult = null;
       if (!fromBot && !isCharMessage) {
         // moderationResult = await getModerationResult(
         //   data,
@@ -201,7 +188,6 @@ async function routes(fastify, options) {
         //   data.message,
         //   fromBot
         // );
-        moderationResult["action"] = "safe"
       } else if (!fromBot && isCharMessage) {
         // moderationResult = await getModerationResult(
         //   data,
@@ -209,11 +195,6 @@ async function routes(fastify, options) {
         //   data.message,
         //   fromBot
         // );
-        moderationResult["action"] = "safe"
-      } else if (fromBot && !isCharMessage) {
-        moderationResult["action"] = "safe";
-      } else {
-        moderationResult["action"] = "safe";
       }
       const user = (await twitchHelper.checkForUser(
         data.user,
@@ -231,7 +212,6 @@ async function routes(fastify, options) {
           data,
           authObject,
           data.message,
-          moderationResult,
           user,
           formattedDate,
           response,
@@ -245,7 +225,7 @@ async function routes(fastify, options) {
           data,
           authObject,
           data.message,
-          moderationResult,
+          null,
           user,
           formattedDate,
           response,
@@ -329,7 +309,7 @@ async function routes(fastify, options) {
   });
 }
 
-async function handleChatMessage(data, authObject, message, moderationResult, user, formattedDate, response) {
+async function handleChatMessage(data, authObject, message, user, formattedDate, response) {
   // Check if the message is a command or a jailbreak attempt first…
   if (!(await twitchHelper.isCommandMatch(message, authObject.user_id))) {
     if (containsJailbreakAttempt(message)) {
@@ -340,38 +320,34 @@ async function handleChatMessage(data, authObject, message, moderationResult, us
       );
       response.send({ response: aiJBResp });
     } else {
-      if (moderationResult === "safe") {
-        let finalResp;
-        if (data.firstMessage) {
-          finalResp = await aiHelper.respondToEvent(data, authObject.user_id);
+      let finalResp;
+      if (data.firstMessage) {
+        finalResp = await aiHelper.respondToEvent(data, authObject.user_id);
+      } else {
+        finalResp = await aiHelper.respondWithContext(message, user, authObject.user_id);
+      }
+      if (finalResp) {
+        const contextString = `On ${formattedDate}, ${user} said in chat: "${message}".`;
+        const summaryString = `On ${formattedDate}, ${user} said: "${message}". You responded: ${finalResp}`;
+        // Optimization: Fire-and-forget vector saving instead of awaiting it.
+        aiHelper.addChatMessageAsVector(summaryString, message, user, formattedDate, finalResp, authObject.user_id)
+          .catch(err => logger.log("API", "Error saving chat message vector:", err));
+        logger.log("API", "Processing message as normal.");
+        if (data.withVoice) {
+          // Optionally, run TTS in parallel
+          const audio_url = authObject.tts_enabled
+            ? await aiHelper.respondWithVoice(finalResp, authObject.user_id)
+            : null;
+          response.send({ response: finalResp, audio_url });
         } else {
-          finalResp = await aiHelper.respondWithContext(message, user, authObject.user_id);
-        }
-        if (finalResp) {
-          const contextString = `On ${formattedDate}, ${user} said in chat: "${message}".`;
-          const summaryString = `On ${formattedDate}, ${user} said: "${message}". You responded: ${finalResp}`;
-          // Optimization: Fire-and-forget vector saving instead of awaiting it.
-          aiHelper.addChatMessageAsVector(summaryString, message, user, formattedDate, finalResp, authObject.user_id)
-            .catch(err => logger.log("API", "Error saving chat message vector:", err));
-          logger.log("API", "Processing message as normal.");
-          if (data.withVoice) {
-            // Optionally, run TTS in parallel
-            const audio_url = authObject.tts_enabled
-              ? await aiHelper.respondWithVoice(finalResp, authObject.user_id)
-              : null;
-            response.send({ response: finalResp, audio_url });
-          } else {
-            response.send({ response: finalResp });
-          }
-        } else {
-          response.send({ response: "error" });
+          response.send({ response: finalResp });
         }
       } else {
-        response.send({ ...moderationResult, moderation_action: "takeAction" });
+        response.send({ response: "error" });
       }
     }
   } else {
-    response.send({ response: "OK" });
+    response.send({ response: "OK" })
   }
 }
 
@@ -488,7 +464,6 @@ async function handleNonChatMessage(
   data,
   authObject,
   message,
-  moderationResult,
   user,
   formattedDate,
   response,
@@ -504,79 +479,63 @@ async function handleNonChatMessage(
       response.send({ response: "OK" });
     } else if (!fromBot) {
       if (data.firstMessage) {
-        if (moderationResult === "safe") {
-          const aiResp = await aiHelper.respondToEvent(
-            data,
-            authObject.user_id,
-          );
-          const contextString = `On ${formattedDate}, ${user} said in ${user === authObject.player_name
-            ? "their own"
-            : `${authObject.player_name}'s`
-            } chat: "${message}". You responded by saying: ${aiResp}`;
-          const summaryString = `On ${formattedDate}, ${user} said to you in ${user === authObject.player_name
-            ? "their own"
-            : `${authObject.player_name}'s`
-            } chat: "${message}". You responded by saying: ${aiResp}`;
-          await aiHelper.addChatMessageAsVector(
-            summaryString,
-            message,
-            user,
-            formattedDate,
-            aiResp,
-            authObject.user_id,
-          );
-          logger.log(
-            "API",
-            `Processing ${data.user}'s message '${message}' into vector memory.`,
-          );
-          const ttsResponse = authObject.tts_enabled
-            ? {
-              response: aiResp,
-              audio_url: await aiHelper.respondWithVoice(
-                aiResp,
-                authObject.user_id,
-              ),
-            }
-            : { response: aiResp };
-          response.send({ ...ttsResponse, moderator_action: moderationResult });
-        } else {
-          response.send({
-            ...moderationResult,
-            moderation_action: "takeAction",
-          });
-        }
+        const aiResp = await aiHelper.respondToEvent(
+          data,
+          authObject.user_id,
+        );
+        const contextString = `On ${formattedDate}, ${user} said in ${user === authObject.player_name
+          ? "their own"
+          : `${authObject.player_name}'s`
+          } chat: "${message}". You responded by saying: ${aiResp}`;
+        const summaryString = `On ${formattedDate}, ${user} said to you in ${user === authObject.player_name
+          ? "their own"
+          : `${authObject.player_name}'s`
+          } chat: "${message}". You responded by saying: ${aiResp}`;
+        await aiHelper.addChatMessageAsVector(
+          summaryString,
+          message,
+          user,
+          formattedDate,
+          aiResp,
+          authObject.user_id,
+        );
+        logger.log(
+          "API",
+          `Processing ${data.user}'s message '${message}' into vector memory.`,
+        );
+        const ttsResponse = authObject.tts_enabled
+          ? {
+            response: aiResp,
+            audio_url: await aiHelper.respondWithVoice(
+              aiResp,
+              authObject.user_id,
+            ),
+          }
+          : { response: aiResp };
+        response.send({ ...ttsResponse });
       } else {
-        if (moderationResult === "safe") {
-          const summaryString = `On ${formattedDate} ${user} said in ${user === authObject.player_name
-            ? "their own"
-            : `${authObject.player_name}'s`
-            } Twitch chat: "${message}"`;
-          const contextString = `On ${formattedDate}, ${user} said in ${user === authObject.player_name
-            ? "their own"
-            : `${authObject.player_name}'s`
-            } chat: "${message}"`;
-          await aiHelper.addChatMessageAsVector(
-            summaryString,
-            message,
-            user,
-            formattedDate,
-            "None",
-            authObject.user_id,
-          );
-          logger.log("API", `Processing memory request.`);
-          response.send({ response: "OK" });
-        } else {
-          response.send({
-            ...moderationResult,
-            moderation_action: "takeAction",
-          });
-        }
+        const summaryString = `On ${formattedDate} ${user} said in ${user === authObject.player_name
+          ? "their own"
+          : `${authObject.player_name}'s`
+          } Twitch chat: "${message}"`;
+        const contextString = `On ${formattedDate}, ${user} said in ${user === authObject.player_name
+          ? "their own"
+          : `${authObject.player_name}'s`
+          } chat: "${message}"`;
+        await aiHelper.addChatMessageAsVector(
+          summaryString,
+          message,
+          user,
+          formattedDate,
+          "None",
+          authObject.user_id,
+        );
+        logger.log("API", `Processing memory request.`);
+        response.send({ response: "OK" });
       }
-    } else {
-      logger.log("API", `Known bot ${data.user}, ignoring.`);
-      response.send({ response: "OK" });
     }
   } else {
+    logger.log("API", `Known bot ${data.user}, ignoring.`);
     response.send({ response: "OK" });
   }
 }

@@ -477,7 +477,7 @@ export class ChatRequestBodyCoT {
                 properties: {
                   thought: {
                     type: "string",
-                    description: "The result of one iteration of rich, vivid thought regarding the user's message and it's meaning. List only one thought within this item in plain written format."
+                    description: "The result of one unique iteration of rich, deliberate thought regarding the user's message and it's meaning."
                   }
                 },
                 required: ["thought"],
@@ -486,7 +486,7 @@ export class ChatRequestBodyCoT {
             },
             final_response: {
               type: "string",
-              description: "Contextualize all thoughts and form them into a response that feels appropriate to use towards the user's message."
+              description: "Deliberate with yourself via the reasoning and thought you've performed, and form the thoughts into a single, coherent response that feels appropriate to use towards the user's message."
             }
           },
           required: ["thoughts", "final_response"],

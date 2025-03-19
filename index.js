@@ -3,7 +3,7 @@ import Fastify from "fastify";
 import fs from "fs-extra";
 import { join } from "path";
 import { audioRoutes } from './routes/audio.js';
-import { processAudio, scheduleCleanup } from './audio-processor.js';
+import { processAudio, ensureGoServerRunning } from './audio-processor.js';
 import * as aiHelper from "./ai-logic.js";
 import path from "path";
 import {
@@ -165,8 +165,6 @@ const createServer = async () => {
     addContentDisposition: true
   });
 
-  scheduleCleanup(path.join(process.cwd(), 'final'), 5, 24);
-
   return fastify;
 };
 
@@ -277,7 +275,7 @@ export async function initializeApp() {
     ];
     
     await loadConfig();
-
+    await ensureGoServerRunning();
     for await (const user of allUsers) {
       for await (const collectionName of collectionNames) {
         try {
