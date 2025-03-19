@@ -32,7 +32,7 @@ export function processAudio(inputFilePath, options = {}) {
         const filterString = enhanceVocals ? getPresetFilters(preset).join(',') : '';
         
         // Create the ffmpeg command
-        const ffmpegCommand = `ffmpeg -y -i "${inputFilePath}" -af "${filterString}" -ar 44100 -ac 1 -codec:a pcm_s16le -threads 4 "${outputFilePath}"`;
+        const ffmpegCommand = `ffmpeg -y -i "${inputFilePath}" -af "${filterString}" -ar 48000 -ac 1 -codec:a pcm_s24le -threads 4 "${outputFilePath}"`;
         
         // Log the command
         logger.debug("Audio", `Executing command: ${ffmpegCommand}`);
