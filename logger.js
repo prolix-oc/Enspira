@@ -1,7 +1,17 @@
+// logger.js - Updated for single-process application
 import moment from "moment";
-import fs from 'fs/promises'
+import fs from 'fs/promises';
+import path from 'path';
+
+// Create logs directory if it doesn't exist
+try {
+  await fs.mkdir('./logs', { recursive: true });
+} catch (err) {
+  // Directory likely already exists, ignore
+}
+
 export const createLogger = (
-  isPrimary = false,
+  withUI = false,
   logBox = null,
   screen = null,
 ) => {
@@ -15,26 +25,44 @@ export const createLogger = (
   };
 
   const logToScreen = (source, message) => {
-    if (logBox && screen) {
+    if (withUI && logBox && screen) {
       const formattedLog = formatLogMessage(source, message);
       logBox.pushLine(formattedLog);
       screen.render();
     }
   };
 
-  const writeTrace = async (trace, dest) => {
-    await fs.writeFile('./logs/' + dest, trace + '\n')
-  }
+  const logToFile = async (source, message, type) => {
+    try {
+      const timestamp = getTimestamp();
+      const formattedMessage = typeof message === "string" ? message : JSON.stringify(message);
+      const logEntry = `${timestamp} [${source}] [${type}] ${formattedMessage}\n`;
+      
+      // Append to daily log file
+      const today = moment().format('YYYY-MM-DD');
+      await fs.appendFile(`./logs/${today}.log`, logEntry);
+      
+      // Also append to type-specific log if it's an error or warning
+      if (type === 'error' || type === 'warn') {
+        await fs.appendFile(`./logs/${type}.log`, logEntry);
+      }
+    } catch (err) {
+      // If we can't log to file, at least try to show it on screen
+      if (withUI && logBox && screen) {
+        logBox.pushLine(`{red-fg}Error writing to log file: ${err.message}{/}`);
+        screen.render();
+      }
+    }
+  };
 
-  const logToWorker = (source, message, type) => {
-    if (process.send) {
-      process.send({
-        type: "log",
-        source,
-        message,
-        timestamp: getTimestamp(),
-        logType: type,
-      });
+  const writeTrace = async (trace, dest) => {
+    try {
+      await fs.writeFile(`./logs/${dest}`, trace + '\n');
+    } catch (err) {
+      if (withUI && logBox && screen) {
+        logBox.pushLine(`{red-fg}Error writing trace to file: ${err.message}{/}`);
+        screen.render();
+      }
     }
   };
 
@@ -44,11 +72,11 @@ export const createLogger = (
       source = "System";
     }
 
-    if (isPrimary) {
-      logToScreen(source, message);
-    } else {
-      logToWorker(source, message, type);
-    }
+    // Log to UI
+    logToScreen(source, message);
+    
+    // Log to file
+    logToFile(source, message, type);
   };
 
   return {
@@ -61,3 +89,20 @@ export const createLogger = (
     trace: (trace, dest) => writeTrace(trace, dest)
   };
 };
+
+// Get the global logger if available, otherwise create a basic one
+export function getLogger() {
+  if (global._sharedObjects && global._sharedObjects.logger) {
+    return global._sharedObjects.logger;
+  }
+  
+  if (global.logger) {
+    return global.logger;
+  }
+  
+  // Fallback logger
+  return createLogger(false);
+}
+
+// Export a shared logger instance to be used by modules
+export const logger = getLogger();

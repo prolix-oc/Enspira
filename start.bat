@@ -1,2 +1,2 @@
 @echo off
-node cluster
+node main.js

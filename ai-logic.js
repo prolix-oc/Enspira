@@ -1721,7 +1721,7 @@ async function respondWithVoice(message, userId) {
     );
     const timeElapsed = (performance.now() - startTime) / 1000;
     logger.log("API", `Download URL for AT: ${await retrieveConfigValue("alltalk.ttsServeEndpoint.internal")}${res.data.output_file_url}`)
-    
+
     const fileRes = await axios({
       method: 'GET',
       url: `${await retrieveConfigValue("alltalk.ttsServeEndpoint.internal")}${res.data.output_file_url}`,
@@ -1735,22 +1735,35 @@ async function respondWithVoice(message, userId) {
     await fs.writeFile(tempFilePath, fileRes.data);
 
     if (res.status === 200 && fileRes.status == 200) {
-      const processedResult = await processAudio(tempFilePath, {
-        preset: userObj.ttsEqPref,
-        outputDir: 'final',
-        userId: userObj.user_id
-      });
+      try {
+        // Process the audio file (synchronous operation)
+        const processedFilePath = processAudio(tempFilePath, {
+          preset: userObj.ttsEqPref || 'clarity',
+          outputDir: 'final',
+          userId: userObj.user_id
+        });
 
-      await fs.unlink(tempFilePath).catch(() => { });
+        logger.log("API", `Processed audio file to ${processedFilePath}`);
 
-      let audioUrl;
-      if (userObj.is_local) {
-        audioUrl = `${await retrieveConfigValue("alltalk.ttsServeEndpoint.internal")}${processedResult}`;
-      } else {
-        audioUrl = `${await retrieveConfigValue("alltalk.ttsServeEndpoint.external")}${processedResult}`;
+        // Clean up temp file
+        await fs.unlink(tempFilePath).catch(() => { });
+
+
+        await fs.unlink(tempFilePath).catch(() => { });
+
+        let audioUrl;
+        if (userObj.is_local) {
+          audioUrl = `${await retrieveConfigValue("alltalk.ttsServeEndpoint.internal")}${processedFilePath}`;
+        } else {
+          audioUrl = `${await retrieveConfigValue("alltalk.ttsServeEndpoint.external")}${processedFilePath}`;
+        }
+        logger.log("LLM", `TTS request completed in ${timeElapsed.toFixed(2)} seconds.`);
+        return audioUrl;
+
+      } catch (processingError) {
+        logger.error("API", `Error processing audio: ${processingError.message}`);
+        return null
       }
-      logger.log("LLM", `TTS request completed in ${timeElapsed.toFixed(2)} seconds.`);
-      return audioUrl;
     } else {
       console.error(`Request failed with: ${res.data}`);
       return { error: `TTS request failed with status: ${res.status}` };

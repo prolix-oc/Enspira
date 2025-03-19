@@ -139,3 +139,5 @@ resources/*
 *.key
 *.crt
 start.sh
+final/*
+temp/*
