@@ -4,7 +4,7 @@
     "port": 3002,
     "authRequired": true,
     "endpoints": {
-      "external": "::",
+      "external": "https://example.com",
       "internal": "::"
     }
   },
@@ -33,7 +33,9 @@
       "apiKey": "",
       "model": "",
       "modelType": "",
-      "maxTokens": 0
+      "maxTokens": 0,
+      "reasoningCapable": false,
+      "reasoningToken": ""
     },
     "query": {
       "endpoint": "",
@@ -41,7 +43,9 @@
       "apiKey": "",
       "model": "",
       "modelType": "",
-      "maxTokens": 0
+      "maxTokens": 0,
+      "reasoningCapable": false,
+      "reasoningToken": ""
     },
     "chat": {
       "endpoint": "",
@@ -49,7 +53,9 @@
       "apiKey": "",
       "model": "",
       "modelType": "",
-      "maxTokens": 0
+      "maxTokens": 0,
+      "reasoningCapable": false,
+      "reasoningToken": ""
     },
     "embedding": {
       "endpoint": "",
@@ -57,7 +63,9 @@
       "apiKeyType": "",
       "model": "",
       "rerankingModel": "",
-      "classifyModel": ""
+      "classifyModel": "",
+      "reasoningCapable": false,
+      "reasoningToken": ""
     },
     "conversion": {
       "endpoint": "",
@@ -65,7 +73,9 @@
       "apiKeyType": "",
       "model": "",
       "modelType": "",
-      "maxTokens": 0
+      "maxTokens": 0,
+      "reasoningCapable": false,
+      "reasoningToken": ""
     },
     "rerank": {
       "endpoint": "",
@@ -73,7 +83,9 @@
       "apiKeyType": "",
       "model": "",
       "modelType": "",
-      "maxTokens": 0
+      "maxTokens": 0,
+      "reasoningCapable": false,
+      "reasoningToken": ""
     },
     "moderator": {
       "endpoint": "",
@@ -81,7 +93,9 @@
       "apiKeyType": "",
       "model": "",
       "modelType": "",
-      "maxTokens": 0
+      "maxTokens": 0,
+      "reasoningCapable": false,
+      "reasoningToken": ""
     }
   },
   "samplers": {

@@ -319,7 +319,7 @@ async function fetchWeather() {
           const timeOfDay = `It is currently ${
             current["is_day"] ? "day time." : "night time."
           }`;
-          const currWeather = `## Current Weather:\nHere are the current weather conditions for where you and ${user.player_name} live:\n${timeOfDay}${tempString}${cloudString}${rainString}${snowString}${windString}`;
+          const currWeather = `## Current Weather:\nHere are the current weather conditions for where you and ${user.user_name} live:\n${timeOfDay}${tempString}${cloudString}${rainString}${snowString}${windString}`;
 
           const userDir = path.join("./world_info", user.user_id);
           if (!fs.existsSync(userDir)) {

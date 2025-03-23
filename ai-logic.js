@@ -814,7 +814,7 @@ async function returnRecentChats(userId, fromConsole = false) {
     const formattedResults = sortedResults
       .map(
         (item) =>
-          `- ${item.username} sent the following message in ${userObj.player_name}'s Twitch channel: ${item.raw_msg}`,
+          `- ${item.username} sent the following message in ${userObj.user_name}'s Twitch channel: ${item.raw_msg}`,
       )
       .join("\n");
     const timeElapsed = (performance.now() - startTime) / 1000;
@@ -1928,6 +1928,7 @@ async function respondWithContext(message, username, userID) {
       user: username,
     };
 
+    // Using the updated contextPromptChat function that creates the new message structure
     const body = await contextPromptChat(promptData, message, userID);
 
     // Use retryMilvusOperation to handle potential LLM request failures
@@ -1945,13 +1946,16 @@ async function respondWithContext(message, username, userID) {
     if (chatTask.response) {
       setCachedResult(responseCacheKey, chatTask.response, 10000);
     }
-    const strippedResp = await replyStripped(chatTask.response, userID)
+    const strippedResp = await replyStripped(chatTask.response, userID);
 
     return { response: strippedResp, thoughtProcess: chatTask.thoughtProcess };
   } catch (error) {
     logger.log("System", `Error calling respondWithContext: ${error}`);
     // Return a fallback response rather than throwing
-    return "I'm sorry, I encountered an issue while processing your message. Could you please try again?";
+    return { 
+      response: "I'm sorry, I encountered an issue while processing your message. Could you please try again?",
+      thoughtProcess: `Error: ${error.message}`
+    };
   }
 }
 
@@ -1962,11 +1966,33 @@ async function rerankString(message, userId) {
 }
 
 async function respondWithoutContext(message, userId) {
-  const userObj = await returnAuthObject(userId)
-  const instruct = await nonContextChatPrompt(message, userId);
-  const chatTask = await sendChatCompletionRequest(instruct, await retrieveConfigValue("models.chat"))
-  const strippedResp = await replyStripped(chatTask.response, userId)
-  return { response: strippedResp, thoughtProcess: chatTask.thoughtProcess };
+  try {
+    const userObj = await returnAuthObject(userId);
+    
+    // Build the prompt data with minimal context
+    const promptData = {
+      relChats: "- No relevant chat context available.",
+      relContext: "- No additional context to provide.",
+      relVoice: "- No voice conversation history.",
+      user: "User"
+    };
+    
+    // Using updated contextPromptChat function with new message structure
+    const body = await contextPromptChat(promptData, message, userId);
+    const chatTask = await sendChatCompletionRequest(body, await retrieveConfigValue("models.chat"));
+    
+    const strippedResp = await replyStripped(chatTask.response, userId);
+    return { 
+      response: strippedResp, 
+      thoughtProcess: chatTask.thoughtProcess 
+    };
+  } catch (error) {
+    logger.log("System", `Error in respondWithoutContext: ${error}`);
+    return {
+      response: "I'm sorry, I encountered an error processing your request.",
+      thoughtProcess: `Error: ${error.message}`
+    };
+  }
 }
 
 async function respondWithVoice(message, userId) {
@@ -2061,14 +2087,16 @@ async function respondWithVoice(message, userId) {
 }
 
 async function respondToDirectVoice(message, userId, withVoice = false) {
-  const fixedAcro = await fixTTSString(message);
-
   try {
+    const userObj = await returnAuthObject(userId);
+
+    // Perform parallel queries for all relevant context
     const [voiceCtx, rawContext] = await Promise.all([
       findRelevantVoiceInMilvus(message, userId, 3),
       findRelevantDocuments(message, userId, 6),
     ]);
 
+    // Process results in parallel
     const [contextBody, voiceCtxBody] = await Promise.all([
       resultsReranked(rawContext, message, userId, true),
       withVoice
@@ -2080,60 +2108,38 @@ async function respondToDirectVoice(message, userId, withVoice = false) {
       relChats: "- No additional chat content.",
       relContext: contextBody,
       relVoice: voiceCtxBody,
-      user: userObj.player_name,
+      user: userObj.user_name,
     };
 
+    // Using updated contextPromptChat function with new message structure
     const body = await contextPromptChat(promptData, message, userId);
-    const chatTask = await sendChatCompletionRequest(body, await retrieveConfigValue("models.chat"))
+    const chatTask = await sendChatCompletionRequest(body, await retrieveConfigValue("models.chat"));
+    
     logger.log("LLM", `Generated textual response to voice message. Time to first token: ${chatTask.timeToFirstToken} seconds. Process speed: ${chatTask.tokensPerSecond}tps`);
     const strippedResp = await replyStripped(chatTask.response, userId);
-    const userObj = await returnAuthObject(userId);
+
+    // If voice response requested, generate it
     if (withVoice) {
-      const voiceForm = new FormData();
-      voiceForm.append("text_input", fixedAcro.fixedString);
-      voiceForm.append("text_filtering", "standard");
-      voiceForm.append("character_voice_gen", userObj.speaker_file);
-      voiceForm.append("narrator_enabled", "false");
-      voiceForm.append("text_not_inside", "character");
-      // voiceForm.append("rvccharacter_voice_gen", userObj.rvc_model);
-      // voiceForm.append("rvccharacter_pitch", userObj.rvc_pitch);
-      voiceForm.append("language", "en");
-      voiceForm.append("output_file_name", userObj.user_id);
-      voiceForm.append("output_file_timestamp", "true");
-      voiceForm.append("autoplay", "false");
-      voiceForm.append("temperature", "0.80");
-      voiceForm.append("repetition_penalty", "2.0");
-
-
-      const res = await axios.post(
-        `${await retrieveConfigValue("alltalk.ttsGenEndpoint.internal")}`,
-        voiceForm,
-      );
-
-      if (res.status === 200) {
-        logger.log("Voice", `Direct voice response from AllTalk successful.`);
-        let audioUrl;
-        if (userObj.is_local == true) {
-          audioUrl = `${await retrieveConfigValue("alltalk.ttsServeEndpoint.internal")}${res.data.output_file_url}`;
-        } else {
-          audioUrl = `${await retrieveConfigValue("alltalk.ttsServeEndpoint.external")}${res.data.output_file_url}`;
-        }
-        return {
-          audio_url: `${audioUrl}${res.data.output_file_url}`,
-          response: strippedResp,
-        };
-      } else {
-        return strippedResp;
-      }
+      const audioUrl = await respondWithVoice(strippedResp, userId);
+      return {
+        response: strippedResp,
+        audio_url: audioUrl,
+        thoughtProcess: chatTask.thoughtProcess
+      };
     } else {
-      return strippedResp;
+      return {
+        response: strippedResp,
+        thoughtProcess: chatTask.thoughtProcess
+      };
     }
   } catch (error) {
     logger.log("Voice", `Error in respondToDirectVoice: ${error}`);
-    return "Error processing voice response.";
+    return {
+      response: "Error processing voice response.",
+      error: error.message
+    };
   }
 }
-
 async function addChatMessageAsVector(sumText, message, username, date, response, userId) {
   try {
     // Use our optimized collection loading
@@ -2208,13 +2214,24 @@ async function addVoiceMessageAsVector(
 }
 
 async function respondToEvent(event, userId) {
-  const eventMessage = await returnTwitchEvent(event, userId);
-  const instructPrompt = await eventPromptChat(eventMessage, userId);
+  try {
+    const eventMessage = await returnTwitchEvent(event, userId);
+    
+    // Using updated eventPromptChat function with the new message structure
+    const instructPrompt = await eventPromptChat(eventMessage, userId);
 
-  const chatTask = await sendChatCompletionRequest(instructPrompt, await retrieveConfigValue("models.chat"))
-  logger.log("LLM", `Generated event response. Time to first token: ${chatTask.timeToFirstToken} seconds. Process speed: ${chatTask.tokensPerSecond}tps`);
-  const strippedResp = await replyStripped(chatTask.response, userId)
-  return { response: strippedResp, thoughtProcess: chatTask.thoughtProcess };
+    const chatTask = await sendChatCompletionRequest(instructPrompt, await retrieveConfigValue("models.chat"));
+    logger.log("LLM", `Generated event response. Time to first token: ${chatTask.timeToFirstToken} seconds. Process speed: ${chatTask.tokensPerSecond}tps`);
+    
+    const strippedResp = await replyStripped(chatTask.response, userId);
+    return { response: strippedResp, thoughtProcess: chatTask.thoughtProcess };
+  } catch (error) {
+    logger.log("System", `Error in respondToEvent: ${error}`);
+    return { 
+      response: "I'm sorry, I encountered an error processing this event.",
+      thoughtProcess: `Error: ${error.message}`
+    };
+  }
 }
 
 async function startIndexingVectors(userId) {

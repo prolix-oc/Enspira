@@ -352,7 +352,7 @@ const moderatorPrompt = async (message, userId) => {
   const instructTemplate = await getTemplate("./instructs/helpers/moderation.prompt");
 
   const replacements = {
-    "{{player}}": userObject.player_name,
+    "{{user}}": userObject.user_name,
     "{{char}}": userObject.bot_name,
     "{{twitch}}": userObject.twitch_name,
     "{{socials}}": await socialMedias(userId),
@@ -386,13 +386,9 @@ const moderatorPrompt = async (message, userId) => {
 const contextPromptChat = async (promptData, message, userID) => {
   const currentAuthObject = await returnAuthObject(userID);
   const instructTemplate = await getTemplate(`./instructs/system_cot.prompt`);
-  const dynamicPrompt = await fs.readFile(
-    `./instructs/dynamic.prompt`,
-    "utf-8"
-  );
-
   const timeStamp = moment().format("dddd, MMMM Do YYYY, [at] hh:mm A");
 
+  // Load all necessary files in parallel for better performance
   const fileContents = await readPromptFiles(userID, [
     "character_personality",
     "world_lore",
@@ -407,36 +403,11 @@ const contextPromptChat = async (promptData, message, userID) => {
 
   const sentiment = await interpretEmotions(message);
   logger.log("LLM", `Analysis of emotions: ${sentiment}`);
-  const user = promptData.user
+  const user = promptData.user;
 
-  const replacements = {
-    "{{datetime}}": `\n- The date and time where you and ${currentAuthObject.player_name} live is currently: ${timeStamp}`,
-    "{{ctx}}": `\n\n## Additional Information:\nExternal context relevant to the conversation:\n${promptData.relContext}`,
-    "{{ruleset}}": `\n\n# Guidelines\n${fileContents.rules}`,
-    "{{chat}}": `\n## Other Relevant Chat Context:\nBelow are potentially relevant chat messages sent previously, that may be relevant to the conversation:\n${promptData.relChats}`,
-    // Make sure character card is included:
-    "{{card}}": `\n\n## ${currentAuthObject.bot_name}'s Description:\n${fileContents.character_card}`,
-    "{{persona}}": `\n\n## ${currentAuthObject.bot_name}'s Personality:\n${fileContents.character_personality}`,
-    "{{player_info}}": `\n\n## Information about ${currentAuthObject.player_name}:\nThis is pertinent information regarding ${currentAuthObject.player_name} that you should always remember.\n${fileContents.player_info}`,
-    "{{lore}}": `\n\n## World Information:\nUse this information to reflect the world and context around ${currentAuthObject.bot_name}:\n${fileContents.world_lore}`,
-    "{{scene}}": `\n\n## Scenario:\n${fileContents.scenario}`,
-    "{{weather}}": `\n\n${currentAuthObject.weather ? fileContents.weather : ""
-      }`,
-    "{{voice}}": `\n## Previous Voice Interactions:\nNon-exhaustive list of prior vocal interactions you've had with ${currentAuthObject.player_name}:\n${promptData.relVoice}`,
-    "{{recent_voice}}": `\n\n## Current Voice Conversations with ${currentAuthObject.player_name}:\nUp to the last ${await retrieveConfigValue(
-      "twitch.maxChatsToSave"
-    )} voice messages are provided to you. Use these voice messages to help you keep up with the current conversation:\n${fileContents.voice_messages
-      }`,
-    "{{recent_chat}}": `\n\n## Current Messages from Chat:\nUp to the last ${await retrieveConfigValue(
-      "twitch.maxChatsToSave"
-    )} messages are provided to you from ${currentAuthObject.player_name
-      }'s Twitch chat. Use these messages to keep up with the current conversation:\n${await returnRecentChats(userID)
-      }`,
-    "{{emotion}}": `\n\n## Current Emotional Assessment of Message:\n- ${sentiment}`
-  };
-
-  const postProcessReplacements = {
-    "{{player}}": currentAuthObject.player_name,
+  // Common replacements for preprocessing text
+  const commonReplacements = {
+    "{{user}}": currentAuthObject.user_name,
     "{{char}}": currentAuthObject.bot_name,
     "{{char_limit}}": await retrieveConfigValue("twitch.maxCharLimit"),
     "{{user}}": promptData.user,
@@ -444,21 +415,75 @@ const contextPromptChat = async (promptData, message, userID) => {
     "{{soc_tiktok}}": await socialMedias(userID, "tt"),
   };
 
-  const instructionTemplate = replacePlaceholders(instructTemplate, {
-    ...replacements,
-    ...postProcessReplacements,
-  });
-  const dynamicTemplate = replacePlaceholders(dynamicPrompt, {
-    ...replacements,
-    ...postProcessReplacements,
-  });
+  // Process system prompt
+  const systemPrompt = replacePlaceholders(instructTemplate, commonReplacements);
 
-  const promptWithSamplers = await ChatRequestBody.create(
-    instructionTemplate,
-    dynamicTemplate,
-    message,
-    user
-  )
+  // Structure the prompt data in the format expected by the new ChatRequestBody
+  const structuredPromptData = {
+    systemPrompt: systemPrompt,
+    
+    // Character information
+    characterDescription: fileContents.character_card ? 
+      `# ${currentAuthObject.bot_name}'s Description:\n${replacePlaceholders(fileContents.character_card, commonReplacements)}` : null,
+      
+    characterPersonality: fileContents.character_personality ? 
+      `# ${currentAuthObject.bot_name}'s Personality:\n${replacePlaceholders(fileContents.character_personality, commonReplacements)}` : null,
+    
+    // World information
+    worldInfo: fileContents.world_lore ? 
+      `# World Information:\nUse this information to reflect the world and context around ${currentAuthObject.bot_name}:\n${replacePlaceholders(fileContents.world_lore, commonReplacements)}` : null,
+    
+    // Scenario
+    scenario: fileContents.scenario ? 
+      `# Scenario:\n${replacePlaceholders(fileContents.scenario, commonReplacements)}` : null,
+    
+    // Player information
+    playerInfo: fileContents.player_info ? 
+      `# Information about ${currentAuthObject.user_name}:\nThis is pertinent information regarding ${currentAuthObject.user_name} that you should always remember.\n${replacePlaceholders(fileContents.player_info, commonReplacements)}` : null,
+    
+    // Current chat messages
+    recentChat: `# Current Messages from Chat:\nUp to the last ${await retrieveConfigValue("twitch.maxChatsToSave")} messages are provided to you from ${currentAuthObject.user_name}'s Twitch chat. Use these messages to keep up with the current conversation:\n${await returnRecentChats(userID)}`,
+    
+    // Weather information
+    weatherInfo: currentAuthObject.weather && fileContents.weather ? 
+      `# Current Weather:\n${replacePlaceholders(fileContents.weather, commonReplacements)}` : null,
+    
+    // Rules
+    rules: fileContents.rules ? 
+      `# Rules\n${replacePlaceholders(fileContents.rules, commonReplacements)}` : null,
+    
+    // Additional context elements
+    additionalContext: {
+      // Relevant context search results if available
+      contextResults: promptData.relContext ? 
+        `# Additional Information:\nExternal context relevant to the conversation:\n${promptData.relContext}` : null,
+      
+      // Relevant chat history if available
+      chatHistory: promptData.relChats ? 
+        `# Other Relevant Chat Context:\nBelow are potentially relevant chat messages sent previously, that may be relevant to the conversation:\n${promptData.relChats}` : null,
+      
+      // Voice interactions if available
+      voiceInteractions: promptData.relVoice ? 
+        `# Previous Voice Interactions:\nNon-exhaustive list of prior vocal interactions you've had with ${currentAuthObject.user_name}:\n${promptData.relVoice}` : null,
+      
+      // Recent voice messages if available
+      recentVoice: fileContents.voice_messages ? 
+        `# Current Voice Conversations with ${currentAuthObject.user_name}:\nUp to the last ${await retrieveConfigValue("twitch.maxChatsToSave")} voice messages are provided to you. Use these voice messages to help you keep up with the current conversation:\n${fileContents.voice_messages}` : null,
+      
+      // Emotional assessment
+      emotionalAssessment: sentiment ? 
+        `# Current Emotional Assessment of Message:\n- ${sentiment}` : null,
+      
+      // Current date/time
+      dateTime: `# Current Date and Time:\n- The date and time where you and ${currentAuthObject.user_name} live is currently: ${timeStamp}`
+    },
+    
+    // The actual user message
+    userMessage: message
+  };
+
+  // Create the chat request body with our structured prompt data
+  const promptWithSamplers = await ChatRequestBody.create(structuredPromptData);
 
   logger.log(
     "LLM",
@@ -468,16 +493,17 @@ const contextPromptChat = async (promptData, message, userID) => {
       "models.chat.maxTokens"
     )} tokens.`
   );
+  
   return promptWithSamplers;
 };
+
 
 const contextPromptChatCoT = async (promptData, message, userID) => {
   const currentAuthObject = await returnAuthObject(userID);
   const instructTemplate = await getTemplate(`./instructs/system_cot.prompt`);
-  const dynamicPrompt = await getTemplate(`./instructs/dynamic.prompt`);
-
   const timeStamp = moment().format("dddd, MMMM Do YYYY, [at] hh:mm A");
 
+  // Load all necessary files in parallel for better performance
   const fileContents = await readPromptFiles(userID, [
     "character_personality",
     "world_lore",
@@ -492,35 +518,11 @@ const contextPromptChatCoT = async (promptData, message, userID) => {
 
   const sentiment = await interpretEmotions(message);
   logger.log("LLM", `Analysis of emotions: ${sentiment}`);
-  const user = promptData.user
+  const user = promptData.user;
 
-  const replacements = {
-    "{{datetime}}": `\nThe current date and time where you and ${currentAuthObject.player_name} live is currently: ${timeStamp}`,
-    "{{ctx}}": `\n\n## Additional Information:\nExternal context relevant to the conversation:\n${promptData.relContext}`,
-    "{{ruleset}}": `\n\n# Guidelines\n${fileContents.rules}`,
-    "{{chat}}": `\n## Other Relevant Chat Context:\nBelow are potentially relevant chat messages sent previously, that may be relevant to the conversation:\n${promptData.relChats}`,
-    "{{card}}": `\n\n## ${currentAuthObject.bot_name}'s Description:\n${fileContents.character_card}`,
-    "{{persona}}": `\n\n## ${currentAuthObject.bot_name}'s Personality:\n${fileContents.character_personality}`,
-    "{{player_info}}": `\n\n## Information about ${currentAuthObject.player_name}:\nThis is pertinent information regarding ${currentAuthObject.player_name} that you should always remember.\n${fileContents.player_info}`,
-    "{{lore}}": `\n\n## World Information:\nUse this information to reflect the world and context around ${currentAuthObject.bot_name}:\n${fileContents.world_lore}`,
-    "{{scene}}": `\n\n## Scenario:\n${fileContents.scenario}`,
-    "{{weather}}": `\n\n${currentAuthObject.weather ? fileContents.weather : ""
-      }`,
-    "{{voice}}": `\n## Previous Voice Interactions:\nNon-exhaustive list of prior vocal interactions you've had with ${currentAuthObject.player_name}:\n${promptData.relVoice}`,
-    "{{recent_voice}}": `\n\n## Current Voice Conversations with ${currentAuthObject.player_name}:\nUp to the last ${await retrieveConfigValue(
-      "twitch.maxChatsToSave"
-    )} voice messages are provided to you. Use these voice messages to help you keep up with the current conversation:\n${fileContents.voice_messages
-      }`,
-    "{{recent_chat}}": `\n\n## Current Messages from Chat:\nUp to the last ${await retrieveConfigValue(
-      "twitch.maxChatsToSave"
-    )} messages are provided to you from ${currentAuthObject.player_name
-      }'s Twitch chat. Use these messages to keep up with the current conversation:\n${await returnRecentChats(userID)
-      }`,
-    "{{emotion}}": `\n\n## Current Emotional Assessment of Message:\n- ${sentiment}`
-  };
-
-  const postProcessReplacements = {
-    "{{player}}": currentAuthObject.player_name,
+  // Common replacements for preprocessing text
+  const commonReplacements = {
+    "{{user}}": currentAuthObject.user_name,
     "{{char}}": currentAuthObject.bot_name,
     "{{char_limit}}": await retrieveConfigValue("twitch.maxCharLimit"),
     "{{user}}": promptData.user,
@@ -528,21 +530,79 @@ const contextPromptChatCoT = async (promptData, message, userID) => {
     "{{soc_tiktok}}": await socialMedias(userID, "tt"),
   };
 
-  const instructionTemplate = replacePlaceholders(instructTemplate, {
-    ...replacements,
-    ...postProcessReplacements,
-  });
-  const dynamicTemplate = replacePlaceholders(dynamicPrompt, {
-    ...replacements,
-    ...postProcessReplacements,
-  });
+  // Process system prompt and add CoT instructions
+  let systemPrompt = replacePlaceholders(instructTemplate, commonReplacements);
+  systemPrompt += "\n\nIMPORTANT: Keep your thoughts concise and focused. Limit each thought to 250 words maximum. Your final response should be optimized for Twitch chat and be no longer than 500 characters whenever possible.";
 
-  const promptWithSamplers = await ChatRequestBodyCoT.create(
-    instructionTemplate,
-    dynamicTemplate,
-    message,
-    user
-  )
+  // Structure the prompt data in the format expected by the ChatRequestBodyCoT
+  const structuredPromptData = {
+    systemPrompt: systemPrompt,
+    
+    // Character information
+    characterDescription: fileContents.character_card ? 
+      `# ${currentAuthObject.bot_name}'s Description:\n${replacePlaceholders(fileContents.character_card, commonReplacements)}` : null,
+      
+    characterPersonality: fileContents.character_personality ? 
+      `# ${currentAuthObject.bot_name}'s Personality:\n${replacePlaceholders(fileContents.character_personality, commonReplacements)}` : null,
+    
+    // World information
+    worldInfo: fileContents.world_lore ? 
+      `# World Information:\nUse this information to reflect the world and context around ${currentAuthObject.bot_name}:\n${replacePlaceholders(fileContents.world_lore, commonReplacements)}` : null,
+    
+    // Scenario
+    scenario: fileContents.scenario ? 
+      `# Scenario:\n${replacePlaceholders(fileContents.scenario, commonReplacements)}` : null,
+    
+    // Player information
+    playerInfo: fileContents.player_info ? 
+      `# Information about ${currentAuthObject.user_name}:\nThis is pertinent information regarding ${currentAuthObject.user_name} that you should always remember.\n${replacePlaceholders(fileContents.player_info, commonReplacements)}` : null,
+    
+    // Current chat messages
+    recentChat: `# Current Messages from Chat:\nUp to the last ${await retrieveConfigValue("twitch.maxChatsToSave")} messages are provided to you from ${currentAuthObject.user_name}'s Twitch chat. Use these messages to keep up with the current conversation:\n${await returnRecentChats(userID)}`,
+    
+    // Weather information
+    weatherInfo: currentAuthObject.weather && fileContents.weather ? 
+      `# Current Weather:\n${replacePlaceholders(fileContents.weather, commonReplacements)}` : null,
+    
+    // Rules
+    rules: fileContents.rules ? 
+      `# Rules\n${replacePlaceholders(fileContents.rules, commonReplacements)}` : null,
+    
+    // Additional context elements
+    additionalContext: {
+      // Relevant context search results if available
+      contextResults: promptData.relContext ? 
+        `# Additional Information:\nExternal context relevant to the conversation:\n${promptData.relContext}` : null,
+      
+      // Relevant chat history if available
+      chatHistory: promptData.relChats ? 
+        `# Other Relevant Chat Context:\nBelow are potentially relevant chat messages sent previously, that may be relevant to the conversation:\n${promptData.relChats}` : null,
+      
+      // Voice interactions if available
+      voiceInteractions: promptData.relVoice ? 
+        `# Previous Voice Interactions:\nNon-exhaustive list of prior vocal interactions you've had with ${currentAuthObject.user_name}:\n${promptData.relVoice}` : null,
+      
+      // Recent voice messages if available
+      recentVoice: fileContents.voice_messages ? 
+        `# Current Voice Conversations with ${currentAuthObject.user_name}:\nUp to the last ${await retrieveConfigValue("twitch.maxChatsToSave")} voice messages are provided to you. Use these voice messages to help you keep up with the current conversation:\n${fileContents.voice_messages}` : null,
+      
+      // Emotional assessment
+      emotionalAssessment: sentiment ? 
+        `# Current Emotional Assessment of Message:\n- ${sentiment}` : null,
+      
+      // Current date/time
+      dateTime: `# Current Date and Time:\n- The date and time where you and ${currentAuthObject.user_name} live is currently: ${timeStamp}`
+    },
+    
+    // The actual user message
+    userMessage: message,
+    
+    // Flag for chain-of-thought processing
+    isChainOfThought: true
+  };
+
+  // Create the chat request body with our structured prompt data
+  const promptWithSamplers = await ChatRequestBodyCoT.create(structuredPromptData);
 
   logger.log(
     "LLM",
@@ -552,6 +612,7 @@ const contextPromptChatCoT = async (promptData, message, userID) => {
       "models.chat.maxTokens"
     )} tokens.`
   );
+  
   return promptWithSamplers;
 };
 
@@ -566,71 +627,80 @@ const eventPromptChat = async (message, userId) => {
   const userObject = await returnAuthObject(userId);
   logger.log(
     "System",
-    `Doing eventing stuff for: ${userObject.player_name} and ${userId}`
+    `Doing eventing stuff for: ${userObject.user_name} and ${userId}`
   );
 
   const instructTemplate = await getTemplate(`./instructs/system.prompt`);
-  const dynamicPrompt = await getTemplate("./instructs/dynamic.prompt");
-
   const timeStamp = moment().format("dddd, MMMM Do YYYY, [at] hh:mm A");
 
+  // Load all necessary files in parallel for better performance
   const fileContents = await readPromptFiles(userId, [
     "character_personality",
     "world_lore",
     "scenario",
     "character_card",
     "weather",
-    "twitch_chat",
     "rules",
     "player_info",
   ]);
 
-  // **1. Corrected Replacements Object:**
-  const replacements = {
-    "{{datetime}}": `\n- The date and time where you and ${userObject.player_name} live is currently: ${timeStamp}`,
-    "{{ruleset}}": `\n\n# Guidelines\n${fileContents.rules}`,
-    "{{card}}": `\n\n## ${userObject.bot_name}'s Description:\n${fileContents.character_card}`,
-    "{{persona}}": `\n\n## ${userObject.bot_name}'s Personality:\n${fileContents.character_personality}`,
-    "{{lore}}": `\n\n## World Information:\nUse this information to reflect the world and context around ${userObject.bot_name}:\n${fileContents.world_lore}`,
-    "{{scene}}": `\n\n## Scenario:\n${fileContents.scenario}`,
-    "{{weather}}": `\n\n${userObject.weather ? fileContents.weather : ""
-      }`,
-    "{{recent_chat}}": `\n\n## Current Messages from Chat:\nUp to the last ${await retrieveConfigValue(
-      "twitch.maxChatsToSave"
-    )} messages are provided to you from ${userObject.player_name
-      }'s Twitch chat. Use these messages to keep up with the current conversation:\n${await returnRecentChats(userId)
-      }`,
-    // Add the player info
-    "{{player_info}}": `\n\n## Information about ${userObject.player_name}:\nThis is pertinent information regarding ${userObject.player_name} that you should always remember.\n${fileContents.player_info}`,
-    // Remove the unused replacements that were causing duplication
-    "{{emotion}}": "",
-    "{{voice}}": "",
-    "{{ctx}}": "",
-    "{{chat}}": "",
-    "{{recent_voice}}": "",
-  };
-
-  const postProcessReplacements = {
-    "{{player}}": userObject.player_name,
+  // Common replacements for preprocessing text
+  const commonReplacements = {
+    "{{user}}": userObject.user_name,
     "{{char}}": userObject.bot_name,
     "{{char_limit}}": await retrieveConfigValue("twitch.maxCharLimit"),
     "{{socials}}": await socialMedias(userId),
   };
 
-  const instructionTemplate = replacePlaceholders(
-    instructTemplate,
-    { ...replacements, ...postProcessReplacements } // Merge replacements for easier use
-  );
-  const dynamicTemplate = replacePlaceholders(
-    dynamicPrompt,
-    { ...replacements, ...postProcessReplacements } // Merge replacements for easier use
-  );
+  // Process system prompt
+  const systemPrompt = replacePlaceholders(instructTemplate, commonReplacements);
 
-  const promptWithSamplers = await ChatRequestBody.create(
-    instructionTemplate,
-    dynamicTemplate,
-    message
-  )
+  // Structure the prompt data in the format expected by the new ChatRequestBody
+  const structuredPromptData = {
+    systemPrompt: systemPrompt,
+    
+    // Character information
+    characterDescription: fileContents.character_card ? 
+      `# ${userObject.bot_name}'s Description:\n${replacePlaceholders(fileContents.character_card, commonReplacements)}` : null,
+      
+    characterPersonality: fileContents.character_personality ? 
+      `# ${userObject.bot_name}'s Personality:\n${replacePlaceholders(fileContents.character_personality, commonReplacements)}` : null,
+    
+    // World information
+    worldInfo: fileContents.world_lore ? 
+      `# World Information:\nUse this information to reflect the world and context around ${userObject.bot_name}:\n${replacePlaceholders(fileContents.world_lore, commonReplacements)}` : null,
+    
+    // Scenario
+    scenario: fileContents.scenario ? 
+      `# Scenario:\n${replacePlaceholders(fileContents.scenario, commonReplacements)}` : null,
+    
+    // Player information
+    playerInfo: fileContents.player_info ? 
+      `# Information about ${userObject.user_name}:\nThis is pertinent information regarding ${userObject.user_name} that you should always remember.\n${replacePlaceholders(fileContents.player_info, commonReplacements)}` : null,
+    
+    // Current chat messages
+    recentChat: `# Current Messages from Chat:\nUp to the last ${await retrieveConfigValue("twitch.maxChatsToSave")} messages are provided to you from ${userObject.user_name}'s Twitch chat. Use these messages to keep up with the current conversation:\n${await returnRecentChats(userId)}`,
+    
+    // Weather information
+    weatherInfo: userObject.weather && fileContents.weather ? 
+      `# Current Weather:\n${replacePlaceholders(fileContents.weather, commonReplacements)}` : null,
+    
+    // Rules
+    rules: fileContents.rules ? 
+      `# Rules\n${replacePlaceholders(fileContents.rules, commonReplacements)}` : null,
+    
+    // Additional context elements
+    additionalContext: {
+      // Current date/time
+      dateTime: `# Current Date and Time:\n- The date and time where you and ${userObject.user_name} live is currently: ${timeStamp}`
+    },
+    
+    // The actual user message
+    userMessage: message
+  };
+
+  // Create the chat request body with our structured prompt data
+  const promptWithSamplers = await ChatRequestBody.create(structuredPromptData);
 
   logger.log(
     "LLM",
@@ -640,6 +710,7 @@ const eventPromptChat = async (message, userId) => {
       "models.chat.maxTokens"
     )} tokens.`
   );
+  
   return promptWithSamplers;
 };
 
@@ -659,7 +730,7 @@ const queryPrompt = async (message, userId) => {
   const replacements = {
     "{{datetime}}": `${dateString}. The current time is ${timeString}`,
     "{{query}}": message,
-    "{{player}}": userObject.player_name,
+    "{{user}}": userObject.user_name,
     "{{socials}}": await socialMedias(userId),
     "{{char}}": userObject.bot_name
   };
@@ -694,7 +765,7 @@ const rerankPrompt = async (message, userId) => {
 
   const replacements = {
     "{{socials}}": await socialMedias(userId),
-    "{{player}}": userObject.player_name,
+    "{{user}}": userObject.user_name,
   };
 
   const instructionTemplate = replacePlaceholders(instructTemplate, replacements);

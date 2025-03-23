@@ -18,7 +18,7 @@ async function returnTwitchEvent(eventThing, userId) {
   const userObj = await returnAuthObject(userId);
   const event = {
     ...eventThing,
-    playerName: userObj.player_name,
+    playerName: userObj.user_name,
     playerId: userObj.user_id,
   };
 
@@ -195,7 +195,7 @@ const subMessage = async (event) => {
     default:
       break;
   }
-  subString += `\n${parsedAddons.sub.replace("{{player}}", event.playerName)}`;
+  subString += `\n${parsedAddons.sub.replace("{{user}}", event.playerName)}`;
   return subString;
 };
 
@@ -222,9 +222,9 @@ const donoMessage = async (event) => {
   }
   subString +=
     event.eventData.donoType === "charity"
-      ? `\n${parsedAddons.charity.replace("{{player}}", event.playerName)}`
+      ? `\n${parsedAddons.charity.replace("{{user}}", event.playerName)}`
       : `They said this in a message:\n${event.eventData.donoMessage}\n${parsedAddons.dono.replace(
-        "{{player}}",
+        "{{user}}",
         event.playerName,
       )}`;
   return subString;
@@ -245,7 +245,7 @@ const raidMessage = async (event) => {
     : `They are a follower of ${event.playerName}'s channel! `;
   subString += `They were last seen playing the video game ${event.eventData.lastGame} to their viewers! `;
   subString += `Their raid brought along ${event.eventData.viewers} viewers with them, who will now be eagerly watching ${event.playerName} stream and game!\n`;
-  subString += parsedAddons.raid.replace("{{player}}", event.playerName);
+  subString += parsedAddons.raid.replace("{{user}}", event.playerName);
   return subString;
 };
 
@@ -257,7 +257,7 @@ const raidMessage = async (event) => {
  */
 const followMessage = async (event) => {
   const parsedAddons = await readEventMessages(event.playerId);
-  return `${event.eventData.username} just followed ${event.playerName}'s Twitch channel!\n\n${parsedAddons.follow.replace("{{player}}", event.playerName)}`;
+  return `${event.eventData.username} just followed ${event.playerName}'s Twitch channel!\n\n${parsedAddons.follow.replace("{{user}}", event.playerName)}`;
 };
 
 /**
@@ -283,7 +283,7 @@ const chatMessage = async (event) => {
     ? `\nThis is ${event.user}'s *first ever* chat message in ${event.playerName}'s Twitch channel as well!`
     : "";
   subString += `\n${parsedAddons.firstchat.replace(
-    "{{player}}",
+    "{{user}}",
     event.playerName,
   )}`;
   return subString;
@@ -545,15 +545,15 @@ async function prepareModerationChatRequest(
     if (userStrikes === 2) {
       userMessageFormatted += userObject.global_strikes
         ? `\n${userName} has ${userStrikes} strikes across all users platforms. This is their last strike. If they commit another offense, apply a ban.`
-        : `\nThis is ${userName}'s last strike on ${userObject.player_name}'s channel. If they commit another offense, apply a ban.`;
+        : `\nThis is ${userName}'s last strike on ${userObject.user_name}'s channel. If they commit another offense, apply a ban.`;
     } else if (userStrikes >= 3) {
       userMessageFormatted += userObject.global_bans
         ? `\n${userName} has surpassed their max strikes on all user platforms. Apply a ban immediately regardless of their offense.`
-        : `\n${userName} has surpassed their max strikes on ${userObject.player_name}'s channel. Apply a ban immediately regardless of their offense.`;
+        : `\n${userName} has surpassed their max strikes on ${userObject.user_name}'s channel. Apply a ban immediately regardless of their offense.`;
     }
 
     if (banInfo.banned) {
-      userMessageFormatted += `\n${userName} has been banned in ${banInfo.banCount} other communities. Per ${userObject.player_name}'s request, apply a ban immediately regardless of their offense.`;
+      userMessageFormatted += `\n${userName} has been banned in ${banInfo.banCount} other communities. Per ${userObject.user_name}'s request, apply a ban immediately regardless of their offense.`;
     }
 
     const moderationPrompt = await moderatorPrompt(

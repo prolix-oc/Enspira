@@ -1,51 +1,110 @@
 import { retrieveConfigValue } from "./config-helper.js";
 
 export class ChatRequestBody {
-  constructor(prompt, context, message, user = "", docs) {
-    this.userFrom = user === "" 
-      ? message 
-      : `${user} sends the following message: ${message}`;
-      
+  constructor(promptData) {
     this.messages = [
+      // System message with core instructions
       {
         role: "system",
-        content: prompt,
-      },
+        content: promptData.systemPrompt
+      }
     ];
 
-    if (context) {
+    // Add each context component as a separate user message
+    if (promptData.characterDescription) {
       this.messages.push({
         role: "user",
-        content: `The System Administrator would like to provide the following additional information to you:\n${context}`,
+        content: promptData.characterDescription
       });
     }
 
+    if (promptData.characterPersonality) {
+      this.messages.push({
+        role: "user",
+        content: promptData.characterPersonality
+      });
+    }
+
+    if (promptData.worldInfo) {
+      this.messages.push({
+        role: "user",
+        content: promptData.worldInfo
+      });
+    }
+
+    if (promptData.scenario) {
+      this.messages.push({
+        role: "user",
+        content: promptData.scenario
+      });
+    }
+
+    if (promptData.playerInfo) {
+      this.messages.push({
+        role: "user",
+        content: promptData.playerInfo
+      });
+    }
+
+    if (promptData.recentChat) {
+      this.messages.push({
+        role: "user",
+        content: promptData.recentChat
+      });
+    }
+
+    if (promptData.weatherInfo) {
+      this.messages.push({
+        role: "user",
+        content: promptData.weatherInfo
+      });
+    }
+
+    if (promptData.rules) {
+      this.messages.push({
+        role: "user",
+        content: promptData.rules
+      });
+    }
+
+    // Add additional context elements if they exist
+    if (promptData.additionalContext) {
+      Object.entries(promptData.additionalContext).forEach(([key, value]) => {
+        if (value && value.trim()) {
+          this.messages.push({
+            role: "user",
+            content: value
+          });
+        }
+      });
+    }
+
+    // Add assistant acknowledgment
     this.messages.push({
       role: "assistant",
-      content: "I understand. I'll keep the provided rules, character information, and provided context in mind when responding to the next user message.",
+      content: "I understand. I'll keep the provided rules, character information, and provided context in mind when responding to the next user message."
     });
 
+    // Add the actual user query
     this.messages.push({
       role: "user",
-      content: this.userFrom,
+      content: promptData.userMessage
     });
 
-    // Set default values that don't require async initialization
-    this.max_tokens = retrieveConfigValue('samplers.chat.maxTokens');
-    this.generate_window = 
+    // Set streaming to true by default
     this.stream = true;
   }
 
-  // Static factory method to create and initialize the instance
-  static async create(prompt, context, message, user = "", docs) {
-    const instance = new ChatRequestBody(prompt, context, message, user, docs);
+  // Static factory method for async initialization
+  static async create(promptData) {
+    const instance = new ChatRequestBody(promptData);
     await instance.initialize();
     return instance;
   }
 
-  // Private method to handle async initialization
+  // Handle async initialization
   async initialize() {
-    // Load all configuration values
+    // Load all configuration values in parallel for better performance
     const [
       model,
       topK,
@@ -86,6 +145,7 @@ export class ChatRequestBody {
       retrieveConfigValue('samplers.chat.generateWindow')
     ]);
 
+    // Assign values to this instance
     this.model = model;
     this.top_k = parseInt(topK);
     this.min_p = parseFloat(minP);
@@ -101,11 +161,212 @@ export class ChatRequestBody {
     this.temperature = parseFloat(temperature);
     this.max_tokens = parseInt(maxTokens);
     this.generate_window = parseInt(generateWindow);
+    
+    // Add dynamic temperature settings if enabled
+    if (dynTemp) {
+      this.dynatemp = dynTemp;
+      this.dynatemp_min = parseFloat(dynTempMin);
+      this.dynatemp_max = parseFloat(dynTempMax);
+    }
+  }
+}
+
+export class ChatRequestBodyCoT {
+  constructor(promptData) {
+    // Initialize with the system prompt
+    this.messages = [
+      {
+        role: "system",
+        content: promptData.systemPrompt
+      }
+    ];
+
+    // Add each context component as a separate user message
+    if (promptData.characterDescription) {
+      this.messages.push({
+        role: "user",
+        content: promptData.characterDescription
+      });
+    }
+
+    if (promptData.characterPersonality) {
+      this.messages.push({
+        role: "user",
+        content: promptData.characterPersonality
+      });
+    }
+
+    if (promptData.worldInfo) {
+      this.messages.push({
+        role: "user",
+        content: promptData.worldInfo
+      });
+    }
+
+    if (promptData.scenario) {
+      this.messages.push({
+        role: "user",
+        content: promptData.scenario
+      });
+    }
+
+    if (promptData.playerInfo) {
+      this.messages.push({
+        role: "user",
+        content: promptData.playerInfo
+      });
+    }
+
+    if (promptData.recentChat) {
+      this.messages.push({
+        role: "user",
+        content: promptData.recentChat
+      });
+    }
+
+    if (promptData.weatherInfo) {
+      this.messages.push({
+        role: "user",
+        content: promptData.weatherInfo
+      });
+    }
+
+    if (promptData.rules) {
+      this.messages.push({
+        role: "user",
+        content: promptData.rules
+      });
+    }
+
+    // Add additional context elements if they exist
+    if (promptData.additionalContext) {
+      Object.entries(promptData.additionalContext).forEach(([key, value]) => {
+        if (value && value.trim()) {
+          this.messages.push({
+            role: "user",
+            content: value
+          });
+        }
+      });
+    }
+
+    // Add assistant acknowledgment
+    this.messages.push({
+      role: "assistant",
+      content: "I understand all given instructions and who I am now. I'll ensure I think deeply but concisely about the message and respond according to my thoughts."
+    });
+
+    // Add the actual user query
+    this.messages.push({
+      role: "user",
+      content: promptData.userMessage
+    });
+
+    // Set streaming to true by default
     this.stream = true;
-    if (retrieveConfigValue("samplers.chat.dynTemp") == true) {
-      this.dynatemp = dynTemp
-      this.dynatemp_min = parseFloat(dynTempMin)
-      this.dynatemp_max = parseFloat(dynTempMax)
+
+    // Define the JSON response format for chain-of-thought
+    this.response_format = {
+      type: "json_schema",
+      json_schema: {
+        name: "thoughtful_response",
+        schema: {
+          type: "object",
+          properties: {
+            thoughts: {
+              type: "array",
+              items: {
+                type: "string",
+                description: "One brief thought about the user's message. Keep each thought under 250 words maximum."
+              },
+              maxItems: 6,
+              description: "A short list of key thoughts that capture your reasoning process."
+            },
+            final_response: {
+              type: "string",
+              description: "Your final response to the user, optimized for Twitch chat. Keep it under 500 characters when possible."
+            }
+          },
+          required: ["thoughts", "final_response"],
+          additionalProperties: false
+        },
+        strict: true
+      }
+    };
+  }
+
+  // Static factory method for async initialization
+  static async create(promptData) {
+    const instance = new ChatRequestBodyCoT(promptData);
+    await instance.initialize();
+    return instance;
+  }
+
+  // Handle async initialization
+  async initialize() {
+    // Load all configuration values in parallel for better performance
+    const [
+      model,
+      maxTokens,
+      generateWindow,
+      topK,
+      minP,
+      xtcThreshold,
+      xtcProbability,
+      topP,
+      typicalP,
+      minTokens,
+      repetitionPenalty,
+      presencePenalty,
+      repetitionRange,
+      presenceRange,
+      temperature,
+      dynTemp,
+      dynTempMin,
+      dynTempMax
+    ] = await Promise.all([
+      retrieveConfigValue("models.chat.model"),
+      retrieveConfigValue("samplers.chat.maxTokens"),
+      retrieveConfigValue("samplers.chat.generateWindow"),
+      retrieveConfigValue("samplers.chat.topK"),
+      retrieveConfigValue("samplers.chat.minP"),
+      retrieveConfigValue("samplers.chat.xtcThreshold"),
+      retrieveConfigValue("samplers.chat.xtcProbability"),
+      retrieveConfigValue("samplers.chat.topP"),
+      retrieveConfigValue("samplers.chat.typicalP"),
+      retrieveConfigValue("samplers.chat.minTokens"),
+      retrieveConfigValue("samplers.chat.repetitionPenalty"),
+      retrieveConfigValue("samplers.chat.presencePenalty"),
+      retrieveConfigValue("samplers.chat.repetitionRange"),
+      retrieveConfigValue("samplers.chat.presenceRange"),
+      retrieveConfigValue("samplers.chat.temperature"),
+      retrieveConfigValue("samplers.chat.dynTemp"),
+      retrieveConfigValue("samplers.chat.dynTempMin"),
+      retrieveConfigValue("samplers.chat.dynTempMax")
+    ]);
+
+    // Assign and parse all configuration values
+    this.model = model;
+    this.max_tokens = parseInt(maxTokens);
+    this.generate_window = parseInt(generateWindow);
+    this.top_k = parseInt(topK);
+    this.min_p = parseFloat(minP);
+    this.xtc_threshold = parseFloat(xtcThreshold);
+    this.xtc_probability = parseFloat(xtcProbability);
+    this.top_p = parseFloat(topP);
+    this.typical_p = parseFloat(typicalP);
+    this.min_tokens = parseInt(minTokens);
+    this.repetition_penalty = parseFloat(repetitionPenalty);
+    this.presence_penalty = parseFloat(presencePenalty);
+    this.repetition_range = parseInt(repetitionRange);
+    this.presence_range = parseInt(presenceRange);
+    this.temperature = parseFloat(temperature);
+    
+    // Add dynamic temperature settings if enabled
+    if (dynTemp) {
+      this.dynatemp = dynTemp;
+      this.dynatemp_min = parseFloat(dynTempMin);
+      this.dynatemp_max = parseFloat(dynTempMax);
     }
   }
 }
@@ -427,145 +688,5 @@ export class ConvertDocsRequestBody {
       }
       return this;
     })();
-  }
-}
-
-export class ChatRequestBodyCoT {
-  // Constructor handles all synchronous initialization including message structure
-  constructor(prompt, context, message, user = "", docs) {
-    // Initialize user message formatting
-    this.userFrom = user === "" 
-      ? message 
-      : `${user} sends the following message: ${message}`;
-
-    // Set up the initial message array with the system prompt
-    this.messages = [
-      {
-        role: "system",
-        content: prompt + "\n\nIMPORTANT: Keep your thoughts concise and focused. Limit each thought to 250 words maximum. Your final response should be optimized for Twitch chat and be no longer than 500 characters whenever possible.",
-      },
-    ];
-
-    // Add context message if provided
-    if (context) {
-      this.messages.push({
-        role: "user",
-        content: `The System Administrator provides this additional information:\n\n${context}`,
-      });
-    }
-
-    // Add the assistant's acknowledgment message
-    this.messages.push({
-      role: "assistant",
-      content: "I understand all given instructions and who I am now. I'll ensure I think deeply but concisely about the message and respond according to my thoughts.",
-    });
-
-    // Add the user's message
-    this.messages.push({
-      role: "user",
-      content: this.userFrom,
-    });
-
-    // Set streaming to true by default
-    this.stream = true;
-
-    this.response_format = {
-      type: "json_schema",
-      json_schema: {
-        name: "thoughtful_response",
-        schema: {
-          type: "object",
-          properties: {
-            thoughts: {
-              type: "array",
-              items: {
-                type: "string",
-                description: "One brief thought about the user's message. Keep each thought under 250 words maximum."
-              },
-              maxItems: 6,
-              description: "A short list of key thoughts that capture your reasoning process."
-            },
-            final_response: {
-              type: "string",
-              description: "Your final response to the user, optimized for Twitch chat. Keep it under 500 characters when possible."
-            }
-          },
-          required: ["thoughts", "final_response"],
-          additionalProperties: false
-        },
-        strict: true
-      }
-    };
-  }
-
-  // Static factory method provides the async creation interface
-  static async create(prompt, context, message, user = "", docs) {
-    const instance = new ChatRequestBodyCoT(prompt, context, message, user, docs);
-    await instance.initialize();
-    return instance;
-  }
-
-  // Private method handles all async initialization
-  async initialize() {
-    const [
-      model,
-      maxTokens,
-      generateWindow,
-      topK,
-      minP,
-      xtcThreshold,
-      xtcProbability,
-      topP,
-      typicalP,
-      minTokens,
-      repetitionPenalty,
-      presencePenalty,
-      repetitionRange,
-      presenceRange,
-      temperature,
-      dynTemp,
-      dynTempMin,
-      dynTempMax
-    ] = await Promise.all([
-      retrieveConfigValue("models.chat.model"),
-      retrieveConfigValue("samplers.chat.maxTokens"),
-      retrieveConfigValue("samplers.chat.generateWindow"),
-      retrieveConfigValue("samplers.chat.topK"),
-      retrieveConfigValue("samplers.chat.minP"),
-      retrieveConfigValue("samplers.chat.xtcThreshold"),
-      retrieveConfigValue("samplers.chat.xtcProbability"),
-      retrieveConfigValue("samplers.chat.topP"),
-      retrieveConfigValue("samplers.chat.typicalP"),
-      retrieveConfigValue("samplers.chat.minTokens"),
-      retrieveConfigValue("samplers.chat.repetitionPenalty"),
-      retrieveConfigValue("samplers.chat.presencePenalty"),
-      retrieveConfigValue("samplers.chat.repetitionRange"),
-      retrieveConfigValue("samplers.chat.presenceRange"),
-      retrieveConfigValue("samplers.chat.temperature"),
-      retrieveConfigValue("samplers.chat.dynTemp"),
-      retrieveConfigValue("samplers.chat.dynTempMin"),
-      retrieveConfigValue("samplers.chat.dynTempMax")
-    ]);
-
-    // Assign and parse all configuration values
-    this.model = model;
-    this.max_tokens = parseInt(maxTokens);
-    this.generate_window = parseInt(generateWindow);
-    this.top_k = parseInt(topK);
-    this.min_p = parseFloat(minP);
-    this.xtc_threshold = parseFloat(xtcThreshold);
-    this.xtc_probability = parseFloat(xtcProbability);
-    this.top_p = parseFloat(topP);
-    this.typical_p = parseFloat(typicalP);
-    this.min_tokens = parseInt(minTokens);
-    this.repetition_penalty = parseFloat(repetitionPenalty);
-    this.presence_penalty = parseFloat(presencePenalty);
-    this.repetition_range = parseInt(repetitionRange);
-    this.presence_range = parseInt(presenceRange);
-    this.temperature = parseFloat(temperature);
-    this.stream = true;
-    this.dynatemp = dynTemp;
-    this.dynatemp_min = parseFloat(dynTempMin);
-    this.dynatemp_max = parseFloat(dynTempMax);
   }
 }

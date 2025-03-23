@@ -127,12 +127,12 @@ async function routes(fastify, options) {
       const formattedDate = now.format("MMMM Do [at] h:mmA");
       const finalResp = await aiHelper.findRelevantVoiceInMilvus(
         data.message,
-        authObject.player_name,
+        authObject.user_name,
         authObject.user_id,
       );
       logger.log(
         "API",
-        `${authObject.player_name} sent a voice message: ${data.message}`,
+        `${authObject.user_name} sent a voice message: ${data.message}`,
       );
 
       if (finalResp.response !== "") {
@@ -140,12 +140,12 @@ async function routes(fastify, options) {
           data.message,
           authObject.user_id,
         );
-        const summaryString = `On ${formattedDate} ${authObject.player_name} said to you: "${data.message}". You responded to them by saying: ${voiceData.response}`;
+        const summaryString = `On ${formattedDate} ${authObject.user_name} said to you: "${data.message}". You responded to them by saying: ${voiceData.response}`;
         await maintainVoiceContext(summaryString);
         await aiHelper.addVoiceMessageAsVector(
           summaryString,
           data.message,
-          authObject.player_name,
+          authObject.user_name,
           formattedDate,
           voiceData.response,
         );
@@ -221,7 +221,7 @@ async function routes(fastify, options) {
         data.user,
         authObject.user_id,
       ))
-        ? `${authObject.player_name}`
+        ? `${authObject.user_name}`
         : `${data.user}`;
 
       if (
@@ -340,7 +340,7 @@ async function handleChatMessage(data, authObject, message, user, formattedDate,
     if (containsJailbreakAttempt(message)) {
       logger.log("API", "Processing message as jailbreak attempt.");
       const aiJBResp = await aiHelper.respondWithoutContext(
-        `Creatively be mean towards ${data.user} for trying to stop you from doing your job and ruin ${authObject.player_name}'s stream.`,
+        `Creatively be mean towards ${data.user} for trying to stop you from doing your job and ruin ${authObject.user_name}'s stream.`,
         authObject.user_id
       );
       response.send({ response: aiJBResp });
@@ -640,13 +640,13 @@ async function handleNonChatMessage(
           data,
           authObject.user_id,
         );
-        const contextString = `On ${formattedDate}, ${user} said in ${user === authObject.player_name
+        const contextString = `On ${formattedDate}, ${user} said in ${user === authObject.user_name
           ? "their own"
-          : `${authObject.player_name}'s`
+          : `${authObject.user_name}'s`
           } chat: "${message}". You responded by saying: ${aiResp.response}`;
-        const summaryString = `On ${formattedDate}, ${user} said to you in ${user === authObject.player_name
+        const summaryString = `On ${formattedDate}, ${user} said to you in ${user === authObject.user_name
           ? "their own"
-          : `${authObject.player_name}'s`
+          : `${authObject.user_name}'s`
           } chat: "${message}". You responded by saying: ${aiResp.response}`;
         await aiHelper.addChatMessageAsVector(
           summaryString,
@@ -672,13 +672,13 @@ async function handleNonChatMessage(
           : { response: aiResp.response };
         response.send({ ...ttsResponse });
       } else {
-        const summaryString = `On ${formattedDate} ${user} said in ${user === authObject.player_name
+        const summaryString = `On ${formattedDate} ${user} said in ${user === authObject.user_name
           ? "their own"
-          : `${authObject.player_name}'s`
+          : `${authObject.user_name}'s`
           } Twitch chat: "${message}"`;
-        const contextString = `On ${formattedDate}, ${user} said in ${user === authObject.player_name
+        const contextString = `On ${formattedDate}, ${user} said in ${user === authObject.user_name
           ? "their own"
-          : `${authObject.player_name}'s`
+          : `${authObject.user_name}'s`
           } chat: "${message}"`;
         await aiHelper.addChatMessageAsVector(
           summaryString,
