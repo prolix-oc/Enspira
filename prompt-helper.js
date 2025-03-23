@@ -11,7 +11,7 @@ import { jsonrepair } from 'jsonrepair'
 import OpenAI from "openai";
 import { performance } from "node:perf_hooks";
 import { logger } from './create-global-logger.js';
-
+import { request } from "node:http";
 const templateCache = {};
 
 async function getTemplate(filePath) {
@@ -28,7 +28,98 @@ async function getTemplate(filePath) {
   }
 }
 
-export async function sendChatCompletionRequest(requestBody, modelConfig) {
+/**
+ * Sends a chat completion request for tool tasks like query writing and reranking.
+ * Simplified version without reasoning or chain-of-thought features.
+ * 
+ * @param {object} requestBody - The request body for the completion.
+ * @param {object} modelConfig - Configuration for the model.
+ * @returns {Promise<object>} - The completion response.
+ */
+export async function sendToolCompletionRequest(requestBody, modelConfig) {
+  const openai = new OpenAI({
+    baseURL: modelConfig.endpoint,
+    apiKey: modelConfig.apiKey,
+  });
+
+  const startTime = performance.now();
+  let fullResponse = "";
+  const MAX_RESPONSE_SIZE = 50000; // 50KB limit for tool responses
+
+  try {
+    const stream = await openai.chat.completions.create({
+      ...requestBody,
+      stream: true,
+    });
+
+    for await (const part of stream) {
+      const content = part.choices[0]?.delta?.content;
+      if (content) {
+        // Add content to full response, but check size limit
+        fullResponse += content;
+        
+        // If exceeded max size, stop processing stream
+        if (fullResponse.length > MAX_RESPONSE_SIZE) {
+          logger.log("API", `Tool response exceeded ${MAX_RESPONSE_SIZE/1000}KB limit, truncating`);
+          break; // Exit the loop to stop processing more tokens
+        }
+      }
+    }
+    
+    // Calculate total processing time
+    const totalTime = (performance.now() - startTime) / 1000;
+    
+    // For JSON responses, make sure we have valid JSON
+    if (requestBody.response_format?.type === "json_schema") {
+      try {
+        // Try parsing the JSON response
+        const jsonResponse = JSON.parse(fullResponse);
+        return {
+          response: jsonResponse,
+          rawResponse: fullResponse,
+          processingTime: totalTime.toFixed(3)
+        };
+      } catch (jsonError) {
+        // If JSON parsing fails, try to fix it using jsonrepair
+        try {
+          const fixedResponse = jsonrepair(fullResponse);
+          const jsonResponse = JSON.parse(fixedResponse);
+          
+          logger.log("API", "Fixed malformed JSON in tool response");
+          
+          return {
+            response: jsonResponse,
+            rawResponse: fixedResponse,
+            processingTime: totalTime.toFixed(3),
+            jsonFixed: true
+          };
+        } catch (repairError) {
+          // If repair also fails, return error
+          logger.log("API", `Failed to parse JSON response: ${jsonError.message}`);
+          return { 
+            error: "JSON parsing failed", 
+            rawResponse: fullResponse.substring(0, 1000),
+            processingTime: totalTime.toFixed(3)
+          };
+        }
+      }
+    }
+    
+    // For non-JSON responses, just return the content
+    return {
+      response: fullResponse,
+      processingTime: totalTime.toFixed(3)
+    };
+  } catch (error) {
+    logger.log(
+      "API",
+      `Tool completion error: ${error}; Model: ${modelConfig.model}`
+    );
+    return { error: error.message };
+  }
+}
+
+export async function sendChatCompletionRequest(requestBody, modelConfig, userObj) {
   const openai = new OpenAI({
     baseURL: modelConfig.endpoint,
     apiKey: modelConfig.apiKey,
@@ -38,6 +129,7 @@ export async function sendChatCompletionRequest(requestBody, modelConfig) {
   let firstTokenTimeElapsed = null;
   let backendStartTime;
   let fullResponse = "";
+  const MAX_RESPONSE_SIZE = 100000; // 100KB limit, adjust as needed
 
   try {
     const stream = await openai.chat.completions.create({
@@ -54,19 +146,42 @@ export async function sendChatCompletionRequest(requestBody, modelConfig) {
           // Start backend timer after first token arrives
           backendStartTime = performance.now();
         }
+
+        // Add content to full response, but check size limit
         fullResponse += content;
+
+        // Check if response is getting too large (warn at 50KB)
+        if (fullResponse.length > 50000 && fullResponse.length < 51000) {
+          logger.log("API", "Response size over 50KB, approaching limits");
+        }
+
+        // If exceeded max size, stop processing stream - prevents memory issues
+        if (fullResponse.length > MAX_RESPONSE_SIZE) {
+          logger.log("API", `Response exceeded ${MAX_RESPONSE_SIZE / 1000}KB limit, truncating`);
+          fullResponse += "\n\n[Response truncated due to length limits]";
+          break; // Exit the loop to stop processing more tokens
+        }
       }
     }
+
     // Calculate backend processing time in seconds
     const backendTimeElapsed = (performance.now() - backendStartTime) / 1000;
-    // Tokenize the full response using the remote service
-    const generatedTokens = await tokenizedFromRemote(fullResponse, modelConfig.modelType);
+
+    // Tokenize the full response (use simpler calculation if tokenization fails)
+    let generatedTokens;
+    try {
+      generatedTokens = await tokenizedFromRemote(fullResponse);
+    } catch (tokenizationError) {
+      // Fallback to character-based estimation
+      generatedTokens = Math.ceil(fullResponse.length / 4);
+    }
+
     let backendTokensPerSecond = 0;
     if (backendTimeElapsed > 0 && generatedTokens > 0) {
       backendTokensPerSecond = (generatedTokens / backendTimeElapsed).toFixed(2);
     }
 
-    // Split the full response into the thought process and final response based on the <think> tags.
+    // Split the full response into thought process and final response (if applicable)
     let thoughtProcess = "";
     var finalResponse = fullResponse;
     const startTag = "<think>";
@@ -77,7 +192,7 @@ export async function sendChatCompletionRequest(requestBody, modelConfig) {
       thoughtProcess = fullResponse.substring(startIndex + startTag.length, endIndex).trim();
       finalResponse = fullResponse.substring(endIndex + endTag.length).trim();
     }
-
+    
     return {
       response: finalResponse,
       thoughtProcess,
@@ -87,12 +202,11 @@ export async function sendChatCompletionRequest(requestBody, modelConfig) {
   } catch (error) {
     logger.log(
       "API",
-      `OpenAI chat completion error: ${error}; Model Config: ${JSON.stringify(modelConfig)}`
+      `OpenAI chat completion error: ${error}; Model: ${modelConfig.model}`
     );
     return { error: error.message };
   }
 }
-
 
 export async function sendChatCompletionRequestCoT(requestBody, modelConfig) {
   const openai = new OpenAI({
@@ -106,7 +220,10 @@ export async function sendChatCompletionRequestCoT(requestBody, modelConfig) {
   let fullResponse = "";
 
   try {
-    const stream = await openai.chat.completions.create(requestBody);
+    const stream = await openai.chat.completions.create({
+      ...requestBody,
+      stream: true
+    });
 
     for await (const part of stream) {
       const content = part.choices[0]?.delta?.content;
@@ -116,35 +233,102 @@ export async function sendChatCompletionRequestCoT(requestBody, modelConfig) {
           backendStartTime = performance.now();
         }
         fullResponse += content;
+
+        // Early warning for large responses
+        if (fullResponse.length > 50000) {
+          logger.log("API", "CoT response is becoming very large, may cause issues with API returns");
+        }
       }
     }
 
     const backendTimeElapsed = (performance.now() - backendStartTime) / 1000;
-    const generatedTokens = await tokenizedFromRemote(fullResponse, modelConfig.modelType);
+
+    // Tokenize the full response
+    let generatedTokens;
+    try {
+      generatedTokens = await tokenizedFromRemote(fullResponse, modelConfig.modelType);
+    } catch (tokenizationError) {
+      logger.log("API", `Error tokenizing CoT response: ${tokenizationError}. Using character-based estimate.`);
+      generatedTokens = Math.ceil(fullResponse.length / 4); // Rough estimate
+    }
+
     let backendTokensPerSecond = 0;
     if (backendTimeElapsed > 0 && generatedTokens > 0) {
       backendTokensPerSecond = (generatedTokens / backendTimeElapsed).toFixed(2);
     }
 
+    // Attempt to parse the JSON response with multiple fallback mechanisms
     let formattedResponse;
     let thoughtsArray = [];
     let fullOutput = null;
+
     try {
-      const fixedResponse = jsonrepair(fullResponse);
-      formattedResponse = JSON.parse(fixedResponse);
+      // First attempt with regular JSON.parse
+      try {
+        formattedResponse = JSON.parse(fullResponse);
+      } catch (initialParseError) {
+        // If that fails, try jsonrepair
+        logger.log("API", `Initial JSON parse failed, trying jsonrepair: ${initialParseError.message}`);
+        const fixedResponse = jsonrepair(fullResponse);
+        formattedResponse = JSON.parse(fixedResponse);
+      }
+
+      // Process thoughts array safely
       if (formattedResponse.thoughts) {
-        for (const thought of formattedResponse.thoughts) {
-          if (thought !== "") thoughtsArray.push(thought);
+        // If thoughts is already an array of strings
+        if (Array.isArray(formattedResponse.thoughts)) {
+          thoughtsArray = formattedResponse.thoughts.filter(thought => thought && thought !== "");
+        }
+        // If thoughts is an array of objects with 'thought' property
+        else if (Array.isArray(formattedResponse.thoughts) &&
+          formattedResponse.thoughts.length > 0 &&
+          formattedResponse.thoughts[0].thought) {
+          thoughtsArray = formattedResponse.thoughts
+            .map(t => t.thought)
+            .filter(thought => thought && thought !== "");
+        } else {
+          // Invalid format for thoughts, create a default
+          logger.log("API", "Invalid thoughts format in response, using empty array");
+          thoughtsArray = [];
         }
       }
-      fullOutput = formattedResponse.final_response;
+
+      // Extract final response safely
+      fullOutput = formattedResponse.final_response || formattedResponse.response || "";
+
+      // Truncate if too long
+      if (fullOutput && fullOutput.length > 100000) {
+        logger.log("API", `CoT response too large (${fullOutput.length} bytes), truncating`);
+        fullOutput = fullOutput.substring(0, 100000) + "\n[Response truncated due to length...]";
+      }
+
     } catch (parseError) {
       logger.log(
         "API",
-        `Error parsing JSON response: ${parseError}; Response: ${fullResponse}`,
+        `Error parsing JSON response: ${parseError}; Response: ${fullResponse.substring(0, 500)}...`,
         "error"
       );
-      return { error: `Error parsing JSON: ${parseError.message}`, rawResponse: fullResponse };
+
+      // Last resort emergency parsing attempt
+      try {
+        // Try to extract anything that looks like a final response
+        const finalResponseMatch = fullResponse.match(/"final_response"\s*:\s*"([^"]+)"/);
+        if (finalResponseMatch && finalResponseMatch[1]) {
+          fullOutput = finalResponseMatch[1];
+        } else {
+          fullOutput = "I apologize, but I encountered an error processing your message.";
+        }
+
+        // Log the parse failure
+        logger.error("API", `All JSON parsing attempts failed. Constructed basic response.`);
+        thoughtsArray = ["Error parsing JSON response"];
+      } catch (emergencyError) {
+        logger.error("API", `Emergency parsing also failed: ${emergencyError.message}`);
+        return {
+          error: `Error parsing JSON: ${parseError.message}`,
+          rawResponse: fullResponse.substring(0, 1000)
+        };
+      }
     }
 
     return {
@@ -156,7 +340,8 @@ export async function sendChatCompletionRequestCoT(requestBody, modelConfig) {
   } catch (error) {
     logger.log(
       "API",
-      `OpenAI chat completion error: ${error}; Model Config: ${JSON.stringify(modelConfig)}`
+      `OpenAI chat completion error: ${error}; Model Config: ${JSON.stringify(modelConfig)}`,
+      "error"
     );
     return { error: error.message };
   }
@@ -165,7 +350,7 @@ export async function sendChatCompletionRequestCoT(requestBody, modelConfig) {
 const moderatorPrompt = async (message, userId) => {
   const userObject = await returnAuthObject(userId);
   const instructTemplate = await getTemplate("./instructs/helpers/moderation.prompt");
-  
+
   const replacements = {
     "{{player}}": userObject.player_name,
     "{{char}}": userObject.bot_name,

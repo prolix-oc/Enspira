@@ -12,6 +12,15 @@ import fastifyFormbody from "@fastify/formbody";
 import cors from "@fastify/cors";
 import fastifyCompress from "@fastify/compress";
 
+const chatResponseSchema = {
+  type: 'object',
+  properties: {
+    response: { type: 'string' },
+    thoughts: { type: 'string' },
+    audio_url: { type: 'string' }
+  }
+};
+
 const endPointDoc = {
   "chat": {
     endpoint: "/v1/chats",
@@ -55,6 +64,7 @@ function containsJailbreakAttempt(input) {
 }
 
 async function routes(fastify, options) {
+  await configureResponseHandling(fastify);
   await fastify.addContentTypeParser(
     "application/json",
     { parseAs: "string" },
@@ -78,7 +88,14 @@ async function routes(fastify, options) {
 
   await fastify.register(fastifyCompress, {
     global: true,
-    encodings: ["gzip", "deflate", "br"],
+    threshold: 1024, // Start compressing at 1KB
+    encodings: ['gzip', 'deflate', 'br'],
+    inflateIfDeflated: true, // Handle already compressed payloads
+    zlibOptions: {
+      level: 4, // Balance between compression level and CPU usage
+      memLevel: 8, // Use more memory for better compression
+      windowBits: 15 // Maximum window size
+    }
   });
   await fastify.register(fastifyFormbody);
 
@@ -118,7 +135,7 @@ async function routes(fastify, options) {
         `${authObject.player_name} sent a voice message: ${data.message}`,
       );
 
-      if (finalResp !== "") {
+      if (finalResp.response !== "") {
         const voiceData = await aiHelper.respondToDirectVoice(
           data.message,
           authObject.user_id,
@@ -133,18 +150,22 @@ async function routes(fastify, options) {
           voiceData.response,
         );
         reply.send(voiceData);
+        return reply
       } else {
-        reply.send({ response: "error" });
+        reply.sendSafe({ response: "error" });
+        return reply
       }
     } catch (error) {
-      reply.code(400).send({ success: false, error: error.message });
+      reply.code(400).sendSafe({ success: false, error: error.message });
+      return reply
     }
   });
   fastify.get('/testchat', async (request, response) => {
     logger.log("API", "Received test endpoint req.")
     const testChats = await aiHelper.findRecentChats(request.body.userId)
     logger.log("Milvus", `Returned the following results: ${JSON.stringify(testChats)}`)
-    response.code(200).send({ ...testChats });
+    response.code(200).sendSafe({ ...testChats });
+    return response
   })
   /**
    * Handles chat requests, processes them, and sends responses.
@@ -231,10 +252,12 @@ async function routes(fastify, options) {
           response,
         );
       } else {
-        response.send({ response: "OK" });
+        response.sendSafe({ response: "OK" });
+        return response;
       }
     } catch (error) {
       response.code(500).send({ error: error.message });
+      return response;
     }
   });
   fastify.post(endPoints.tts, async (request, response) => {
@@ -255,6 +278,7 @@ async function routes(fastify, options) {
       await handleVoiceConversion(data, authObject, response);
     } catch (error) {
       response.code(500).send({ error: error.message });
+      return response;
     }
   });
   /**
@@ -263,7 +287,7 @@ async function routes(fastify, options) {
    * @param {object} response - The response object.
    * @returns {Promise<void>} - A promise that resolves when the response is sent.
    */
-  fastify.post(endPoints.events, async (request, response) => {
+  fastify.post(endPoints.events, { schema: { response: { 200: chatResponseSchema } } }, async (request, response) => {
     try {
       const authObject = await checkForAuth(
         request.headers.authorization.split(" ")[1]
@@ -284,6 +308,7 @@ async function routes(fastify, options) {
       await handleEventMessage(data, authObject, response);
     } catch (error) {
       response.code(500).send({ error: error.message });
+      return response
     }
   });
 
@@ -321,33 +346,63 @@ async function handleChatMessage(data, authObject, message, user, formattedDate,
       response.send({ response: aiJBResp });
     } else {
       let finalResp;
-      if (data.firstMessage) {
-        finalResp = await aiHelper.respondToEvent(data, authObject.user_id);
-      } else {
-        finalResp = await aiHelper.respondWithContext(message, user, authObject.user_id);
-      }
-      if (finalResp) {
-        const contextString = `On ${formattedDate}, ${user} said in chat: "${message}".`;
-        const summaryString = `On ${formattedDate}, ${user} said: "${message}". You responded: ${finalResp}`;
+      try {
+        if (data.firstMessage) {
+          finalResp = await aiHelper.respondToEvent(data, authObject.user_id);
+        } else {
+          finalResp = await aiHelper.respondWithContext(message, user, authObject.user_id);
+        }
+
+        logger.log("LLM", `Thought tokens: ${finalResp.thoughtProcess}`)
+        logger.log("LLM", `Response tokens: ${finalResp.response}`)
+
+        if (!finalResp.response) {
+          logger.log("API", "Received empty response from AI model, sending error response to client");
+          response.send({
+            response: "I'm sorry, I encountered an issue processing your request. Please try again.",
+            error: "Empty response from AI model"
+          });
+          return;
+        }
+
+        // Check if response is too large
+        if (finalResp.response && finalResp.response.length > 1000000) { // 1MB threshold
+          logger.log("API", `Response size (${finalResp.length} bytes) exceeds safe limit, truncating`);
+          finalResp = finalResp.response.substring(0, 500000) + "\n[Response truncated due to excessive length]";
+        }
+
+        const summaryString = `On ${formattedDate}, ${user} said: "${message}". You responded by saying: ${finalResp.response}`;
+
         // Optimization: Fire-and-forget vector saving instead of awaiting it.
-        aiHelper.addChatMessageAsVector(summaryString, message, user, formattedDate, finalResp, authObject.user_id)
+        aiHelper.addChatMessageAsVector(summaryString, message, user, formattedDate, finalResp.response, authObject.user_id)
           .catch(err => logger.log("API", "Error saving chat message vector:", err));
+
         logger.log("API", "Processing message as normal.");
+
         if (data.withVoice) {
           // Optionally, run TTS in parallel
-          const audio_url = authObject.tts_enabled
-            ? await aiHelper.respondWithVoice(finalResp, authObject.user_id)
-            : null;
-          response.send({ response: finalResp, audio_url });
+          try {
+            const audio_url = authObject.tts_enabled
+              ? await aiHelper.respondWithVoice(finalResp.response, authObject.user_id)
+              : null;
+            response.send({ response: finalResp.response, audio_url, thoughtProcess: finalResp.thoughtProcess });
+          } catch (ttsError) {
+            logger.log("API", `TTS error: ${ttsError.message}`);
+            response.send({ response: finalResp.response, thoughtProcess: finalResp.thoughtProcess, tts_error: "TTS failed but text response is available" });
+          }
         } else {
-          response.send({ response: finalResp });
+          response.send({ response: finalResp.response, thoughtProcess: finalResp.thoughtProcess });
         }
-      } else {
-        response.send({ response: "error" });
+      } catch (error) {
+        logger.log("API", `Error in AI response generation: ${error.message}`);
+        response.send({
+          response: "I'm sorry, I encountered an error while processing your message.",
+          error: error.message
+        });
       }
     }
   } else {
-    response.send({ response: "OK" })
+    response.send({ response: "OK" });
   }
 }
 
@@ -392,6 +447,74 @@ async function handleGameUpdate(
   }
 }
 
+async function configureResponseHandling(fastify) {
+  if (fastify.hasPlugin('fastify-compress')) {
+    logger.log("API", "Compression plugin already registered, updating configuration");
+  }
+
+  // Configure response timeouts if server is available
+  if (fastify.server) {
+    // Use safer timeout values
+    if (typeof fastify.server.keepAliveTimeout === 'number') {
+      fastify.server.keepAliveTimeout = 120000; // 2 minutes
+    }
+    if (typeof fastify.server.headersTimeout === 'number') {
+      fastify.server.headersTimeout = 65000; // Just above default 60s
+    }
+  }
+
+  // Add hook to handle large responses - this should work regardless of server setup
+  fastify.addHook('onRequest', (request, reply, done) => {
+    // Set default headers for all responses
+    reply.header('Content-Type', 'application/json; charset=utf-8');
+    done();
+  });
+
+  // Add response monitoring middleware
+  fastify.addHook('onSend', (request, reply, payload, done) => {
+    // For debugging, log payload size
+    if (payload) {
+      const size = typeof payload === 'json' ? payload.length : JSON.stringify(payload).length;
+      logger.log("API", `Response payload size: ${size} bytes for ${request.url}`);
+
+      // Check for suspiciously small payloads
+      if (size < 5 && request.method !== 'HEAD' && request.method !== 'OPTIONS') {
+        logger.log("API", `WARNING: Very small response detected for ${request.url}: ${payload}`);
+      }
+    }
+
+    // Make sure content type is set
+    if (!reply.getHeader('content-type')) {
+      reply.header('Content-Type', 'application/json; charset=utf-8');
+    }
+
+    done(null, payload);
+  });
+
+  // Add a simple response helper method to the reply object
+  fastify.decorateReply('sendSafe', function (data) {
+    // If the data is already a string, use it directly
+    if (typeof data === 'string') {
+      return this.type('text/plain; charset=utf-8').send(data);
+    }
+
+    try {
+      // Try to stringify the data safely
+      const safeJSON = JSON.stringify(data);
+      return this.type('application/json; charset=utf-8').send(safeJSON);
+    } catch (error) {
+      logger.log("API", `Error stringifying response: ${error.message}`);
+      // Send a fallback response
+      return this.code(500).send(JSON.stringify({
+        error: "Error generating response",
+        message: "Failed to serialize response data"
+      }));
+    }
+  });
+
+  logger.log("API", "Response handling configuration completed");
+}
+
 /**
  * Handles event messages, processes them, generates responses, and optionally triggers voice responses.
  * @param {object} data - The event data object.
@@ -405,25 +528,59 @@ async function handleEventMessage(data, authObject, response) {
       "API",
       `A Twitch event fired for ${authObject.user_id}, type: ${data.eventType}`
     );
-    const finalResp = await aiHelper.respondToEvent(data, authObject.user_id);
 
-    if (finalResp) {
-      const ttsResponse = authObject.tts_enabled
-        ? {
-          response: finalResp,
-          audio_url: await aiHelper.respondWithVoice(
-            finalResp,
-            authObject.user_id,
-          ),
-        }
-        : { response: finalResp };
-      response.send({ ...ttsResponse });
-    } else {
-      response.send({ error: "Unsuccessful generation. Try again later." });
+    // Get the response from the AI
+    const aiResponse = await aiHelper.respondToEvent(data, authObject.user_id);
+
+    // Check if response is valid
+    if (!aiResponse) {
+      logger.log("API", "Empty AI response received");
+      response.code(500).send({
+        error: "Error generating response",
+        success: false
+      });
+      return;
     }
+
+    // Log the full response structure for debugging
+    logger.log("API", `AI response structure: ${JSON.stringify(Object.keys(aiResponse))}`);
+
+    // Make a new object with just what we need to return
+    const responseToSend = {
+      response: aiResponse.response || "",
+      thoughts: aiResponse.thoughtProcess || ""
+    };
+
+    // If TTS is enabled, add the audio URL
+    if (authObject.tts_enabled) {
+      try {
+        // Only send the text response to TTS, not the thought process
+        const textToVocalize = aiResponse.response || "";
+        const audio_url = await aiHelper.respondWithVoice(
+          textToVocalize,
+          authObject.user_id,
+        );
+
+        if (audio_url) {
+          responseToSend.audio_url = audio_url;
+        }
+      } catch (ttsError) {
+        logger.log("API", `TTS error: ${ttsError.message}`);
+        // Continue without audio if TTS fails
+      }
+    }
+
+    // Set explicit content type and send response
+    response.type('application/json').send(responseToSend);
+    return response;
   } catch (error) {
-    logger.log("API", `Error handling event message: ${error}`);
-    response.code(500).send({ error: error.message });
+    logger.log("API", `Error handling event message: ${error.message}`);
+    response.code(500).send({
+      error: "Server error",
+      message: error.message,
+      success: false
+    });
+    return response;
   }
 }
 
@@ -486,17 +643,17 @@ async function handleNonChatMessage(
         const contextString = `On ${formattedDate}, ${user} said in ${user === authObject.player_name
           ? "their own"
           : `${authObject.player_name}'s`
-          } chat: "${message}". You responded by saying: ${aiResp}`;
+          } chat: "${message}". You responded by saying: ${aiResp.response}`;
         const summaryString = `On ${formattedDate}, ${user} said to you in ${user === authObject.player_name
           ? "their own"
           : `${authObject.player_name}'s`
-          } chat: "${message}". You responded by saying: ${aiResp}`;
+          } chat: "${message}". You responded by saying: ${aiResp.response}`;
         await aiHelper.addChatMessageAsVector(
           summaryString,
           message,
           user,
           formattedDate,
-          aiResp,
+          aiResp.response,
           authObject.user_id,
         );
         logger.log(
@@ -505,13 +662,14 @@ async function handleNonChatMessage(
         );
         const ttsResponse = authObject.tts_enabled
           ? {
-            response: aiResp,
+            response: aiResp.response,
             audio_url: await aiHelper.respondWithVoice(
-              aiResp,
+              aiResp.response,
               authObject.user_id,
             ),
+            thoughtProcess: aiResp.thoughtProcess
           }
-          : { response: aiResp };
+          : { response: aiResp.response };
         response.send({ ...ttsResponse });
       } else {
         const summaryString = `On ${formattedDate} ${user} said in ${user === authObject.player_name

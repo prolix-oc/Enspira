@@ -442,7 +442,7 @@ export class ChatRequestBodyCoT {
     this.messages = [
       {
         role: "system",
-        content: prompt,
+        content: prompt + "\n\nIMPORTANT: Keep your thoughts concise and focused. Limit each thought to 250 words maximum. Your final response should be optimized for Twitch chat and be no longer than 500 characters whenever possible.",
       },
     ];
 
@@ -457,7 +457,7 @@ export class ChatRequestBodyCoT {
     // Add the assistant's acknowledgment message
     this.messages.push({
       role: "assistant",
-      content: "I understand all given instructions and who I am now. I'll ensure I think deeply about the message and respond according to my thoughts.",
+      content: "I understand all given instructions and who I am now. I'll ensure I think deeply but concisely about the message and respond according to my thoughts.",
     });
 
     // Add the user's message
@@ -469,7 +469,6 @@ export class ChatRequestBodyCoT {
     // Set streaming to true by default
     this.stream = true;
 
-    // Initialize the response format schema for chain-of-thought responses
     this.response_format = {
       type: "json_schema",
       json_schema: {
@@ -480,20 +479,15 @@ export class ChatRequestBodyCoT {
             thoughts: {
               type: "array",
               items: {
-                type: "object",
-                properties: {
-                  thought: {
-                    type: "string",
-                    description: "The result of one unique iteration of rich, deliberate thought regarding the user's message and it's meaning."
-                  }
-                },
-                required: ["thought"],
-                additionalProperties: false
-              }
+                type: "string",
+                description: "One brief thought about the user's message. Keep each thought under 250 words maximum."
+              },
+              maxItems: 6,
+              description: "A short list of key thoughts that capture your reasoning process."
             },
             final_response: {
               type: "string",
-              description: "Deliberate with yourself via the reasoning and thought you've performed, and form the thoughts into a single, coherent response that feels appropriate to use towards the user's message."
+              description: "Your final response to the user, optimized for Twitch chat. Keep it under 500 characters when possible."
             }
           },
           required: ["thoughts", "final_response"],
@@ -513,7 +507,6 @@ export class ChatRequestBodyCoT {
 
   // Private method handles all async initialization
   async initialize() {
-    // Load all configuration values in parallel for better performance
     const [
       model,
       maxTokens,
@@ -530,6 +523,7 @@ export class ChatRequestBodyCoT {
       repetitionRange,
       presenceRange,
       temperature,
+      dynTemp,
       dynTempMin,
       dynTempMax
     ] = await Promise.all([
@@ -548,6 +542,7 @@ export class ChatRequestBodyCoT {
       retrieveConfigValue("samplers.chat.repetitionRange"),
       retrieveConfigValue("samplers.chat.presenceRange"),
       retrieveConfigValue("samplers.chat.temperature"),
+      retrieveConfigValue("samplers.chat.dynTemp"),
       retrieveConfigValue("samplers.chat.dynTempMin"),
       retrieveConfigValue("samplers.chat.dynTempMax")
     ]);
@@ -569,9 +564,8 @@ export class ChatRequestBodyCoT {
     this.presence_range = parseInt(presenceRange);
     this.temperature = parseFloat(temperature);
     this.stream = true;
-    if (retrieveConfigValue("samplers.chat.dynTemp") == true) {
-      this.dynatemp_min = parseFloat(dynTempMin);
-      this.dynatemp_max = parseFloat(dynTempMax);
-    }
+    this.dynatemp = dynTemp;
+    this.dynatemp_min = parseFloat(dynTempMin);
+    this.dynatemp_max = parseFloat(dynTempMax);
   }
 }

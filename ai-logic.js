@@ -25,6 +25,7 @@ import {
   rerankPrompt,
   fixTTSString,
   sendChatCompletionRequest,
+  sendToolCompletionRequest
 } from "./prompt-helper.js";
 import { SummaryRequestBody } from "./oai-requests.js"
 import { returnTwitchEvent } from "./twitch-helper.js";
@@ -1278,7 +1279,7 @@ async function summarizePage(pageContent, subject) {
     await retrieveConfigValue("models.summary.model"),
     pageContent
   );
-  const chatTask = await sendChatCompletionRequest(instruct, await retrieveConfigValue("models.summary"));
+  const chatTask = await sendToolCompletionRequest(instruct, await retrieveConfigValue("models.summary"));
   // Parse the JSON response according to our fixed schema
   return JSON.parse(chatTask.response);
 }
@@ -1298,7 +1299,7 @@ async function finalCombinedSummary(summaries, subject) {
     await retrieveConfigValue("models.summary.model"),
     combinedText // you can also pass an empty message if you rely solely on the prompt
   );
-  const chatTask = await sendChatCompletionRequest(instruct, await retrieveConfigValue("models.summary"));
+  const chatTask = await sendToolCompletionRequest(instruct, await retrieveConfigValue("models.summary"));
   return JSON.parse(chatTask.response);
 }
 
@@ -1403,7 +1404,7 @@ async function inferSearchParam(query, userId) {
   try {
     var instruct = await queryPrompt(query, userId);
 
-    const chatTask = await sendChatCompletionRequest(instruct, await retrieveConfigValue("models.query"))
+    const chatTask = await sendToolCompletionRequest(instruct, await retrieveConfigValue("models.query"))
 
     const fullChat = JSON.parse(chatTask.response)
 
@@ -1944,8 +1945,9 @@ async function respondWithContext(message, username, userID) {
     if (chatTask.response) {
       setCachedResult(responseCacheKey, chatTask.response, 10000);
     }
+    const strippedResp = await replyStripped(chatTask.response, userID)
 
-    return chatTask.response;
+    return { response: strippedResp, thoughtProcess: chatTask.thoughtProcess };
   } catch (error) {
     logger.log("System", `Error calling respondWithContext: ${error}`);
     // Return a fallback response rather than throwing
@@ -1955,15 +1957,16 @@ async function respondWithContext(message, username, userID) {
 
 async function rerankString(message, userId) {
   const promptRerank = await rerankPrompt(message, userId);
-  const chatTask = await sendChatCompletionRequest(promptRerank, await retrieveConfigValue("models.rerankTransform"))
+  const chatTask = await sendToolCompletionRequest(promptRerank, await retrieveConfigValue("models.rerankTransform"))
   return chatTask.response;
 }
 
 async function respondWithoutContext(message, userId) {
+  const userObj = await returnAuthObject(userId)
   const instruct = await nonContextChatPrompt(message, userId);
   const chatTask = await sendChatCompletionRequest(instruct, await retrieveConfigValue("models.chat"))
-  const strippedResp = await replyStripped(chatTask.response, userId);
-  return strippedResp;
+  const strippedResp = await replyStripped(chatTask.response, userId)
+  return { response: strippedResp, thoughtProcess: chatTask.thoughtProcess };
 }
 
 async function respondWithVoice(message, userId) {
@@ -2209,14 +2212,9 @@ async function respondToEvent(event, userId) {
   const instructPrompt = await eventPromptChat(eventMessage, userId);
 
   const chatTask = await sendChatCompletionRequest(instructPrompt, await retrieveConfigValue("models.chat"))
-  logger.log("LLM", `Thought tokens: ${chatTask.thoughtProcess}`)
-  logger.log("LLM", `Response tokens: ${chatTask.response}`)
   logger.log("LLM", `Generated event response. Time to first token: ${chatTask.timeToFirstToken} seconds. Process speed: ${chatTask.tokensPerSecond}tps`);
-  const strippedResponse = await replyStripped(
-    chatTask.response,
-    userId,
-  );
-  return strippedResponse;
+  const strippedResp = await replyStripped(chatTask.response, userId)
+  return { response: strippedResp, thoughtProcess: chatTask.thoughtProcess };
 }
 
 async function startIndexingVectors(userId) {

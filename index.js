@@ -29,8 +29,17 @@ const createServer = async () => {
     },
     logger: false,
     requestTimeout: 30000,
-  });
+    // Add these options
+    // For http/1 header size
+    http: {
+      maxHeaderSize: 81920, // 80KB
+      keepAliveTimeout: 120000, // 2 minutes
+      headersTimeout: 65000 // 65 seconds
+    },
+    bodyLimit: 10485760, // 10MB for request body size (default is 1MB)
+    maxParamLength: 2000, // Increase param length limit
 
+  });
   const endPointDoc = {
     "chat": {
       endpoint: "/v1/chats",
@@ -176,7 +185,7 @@ export async function preflightChecks() {
   try {
     // Axios import might be needed if not already imported
     const axios = (await import('axios')).default;
-    
+
     const allTalkRes = await axios.get(
       await retrieveConfigValue("alltalk.healthcheck.internal"),
     );
@@ -215,7 +224,7 @@ export async function preflightChecks() {
       restIsOnline: true,
       dbIsOnline: databaseRes,
     };
-    
+
     return checkResult;
   } catch (error) {
     logger.error("System", `Error during preflight checks: ${error.message}`);
@@ -274,7 +283,7 @@ export async function initializeApp() {
       await retrieveConfigValue("milvus.collections.chat"),
       await retrieveConfigValue("milvus.collections.voice"),
     ];
-    
+
     await loadConfig();
     for await (const user of allUsers) {
       for await (const collectionName of collectionNames) {
@@ -309,13 +318,13 @@ export async function initializeApp() {
     );
 
     await preloadAllTokenizers();
-    
+
     const server = await createServer();
     await launchRest(server);
-    
+
     const status = await preflightChecks();
     await initAllAPIs();
-    
+
     return { server, status };
   } catch (error) {
     logger.error("System", `Failed to initialize application: ${error.message}`);
