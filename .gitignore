@@ -147,3 +147,4 @@ go.mod
 go.sum
 bin/*
 logs/*
+*.sh
