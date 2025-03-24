@@ -1,16 +1,18 @@
 import * as aiHelper from "../ai-logic.js";
 import {
   containsCharacterName,
-  containsAuxBotName,
-  containsPlayerSocials,
+  containsAuxBotName
 } from "../prompt-helper.js";
-import { checkForAuth, updateUserParameter } from "../api-helper.js";
+import { checkForAuth, updateUserParameter, returnAPIKeys, returnAuthObject } from "../api-helper.js";
 import { maintainVoiceContext } from "../data-helper.js";
 import * as twitchHelper from "../twitch-helper.js";
+import { retrieveConfigValue } from "../config-helper.js";
 import moment from "moment";
 import fastifyFormbody from "@fastify/formbody";
 import cors from "@fastify/cors";
 import fastifyCompress from "@fastify/compress";
+import fs from 'fs-extra'
+import * as crypto from 'crypto'
 
 const chatResponseSchema = {
   type: 'object',
@@ -65,18 +67,7 @@ function containsJailbreakAttempt(input) {
 
 async function routes(fastify, options) {
   await configureResponseHandling(fastify);
-  await fastify.addContentTypeParser(
-    "application/json",
-    { parseAs: "string" },
-    async (req, body) => {
-      try {
-        return JSON.parse(body);
-      } catch (err) {
-        err.statusCode = 400;
-        return err;
-      }
-    },
-  );
+
   await fastify.register(import("@fastify/rate-limit"), {
     max: 100,
     timeWindow: "20 seconds",
@@ -203,19 +194,7 @@ async function routes(fastify, options) {
       const mentionsChar = await containsCharacterName(data.message, authObject.user_id)
       // Moved to separate function to prevent duplication error
       if (!fromBot && !isCharMessage) {
-        // moderationResult = await getModerationResult(
-        //   data,
-        //   authObject.user_id,
-        //   data.message,
-        //   fromBot
-        // );
       } else if (!fromBot && isCharMessage) {
-        // moderationResult = await getModerationResult(
-        //   data,
-        //   authObject.user_id,
-        //   data.message,
-        //   fromBot
-        // );
       }
       const user = (await twitchHelper.checkForUser(
         data.user,
@@ -315,6 +294,7 @@ async function routes(fastify, options) {
   fastify.get(endPoints.healthcheck, async (request, response) => {
     logger.log("API", `Received healthcheck request from ${request.ip}`);
     response.code(200).send({ status: "up" });
+    return response;
   });
 
   fastify.get("/", async (request, response) => {
@@ -322,14 +302,414 @@ async function routes(fastify, options) {
     response.code(200).send({ error: "Please specify an endpoint before sending a request.", ...endPointDoc })
   })
   fastify.setErrorHandler((error, request, reply) => {
-    if (error instanceof fastify.errorCodes.FST_ERR_ROUTE_METHOD_NOT_SUPPORTED) {
+    if (error && error.code === 'FST_ERR_ROUTE_METHOD_NOT_SUPPORTED') {
       reply.code(405).send({
         error: "Method Not Allowed",
         message: `HTTP method "${request.method}" is not supported for this route.`,
-        allowedMethods: reply.context.config.allowedMethods // List of allowed methods
+        allowedMethods: reply.context.config.allowedMethods
       });
+      return reply;
     } else {
       reply.send(error);
+      return reply;
+    }
+  });
+  fastify.get('/auth/twitch/login', async (request, reply) => {
+    // Simple HTML form with user_id and password fields
+    const loginForm = await fs.readFile('./pages/twitch-login.html')
+
+    reply.type('text/html').send(loginForm);
+    return reply;
+  });
+
+  // 2. Authentication endpoint that verifies credentials
+  fastify.post('/auth/twitch/authenticate', async (request, reply) => {
+    try {
+      // 1. Validate request body
+      if (!request.body || typeof request.body !== 'object') {
+        return reply.code(400).send({ error: 'Invalid request format' });
+      }
+
+      const { user_id, password } = request.body;
+
+      // 2. Check for required fields
+      if (!user_id || !password) {
+        return reply.code(400).send({ error: 'Missing required fields' });
+      }
+
+      // 3. Log for debugging (remove in production)
+      logger.log("Auth", `Authenticating user: ${user_id}`);
+
+      // 4. Get user details
+      const user = await returnAuthObject(user_id);
+
+      if (!user) {
+        return reply.code(401).send({ error: 'User not found' });
+      }
+
+      // 5. Check if password hash and salt exist
+      if (!user.webPasswordHash || !user.webPasswordSalt) {
+        logger.log("Auth", `User ${user_id} has no password set`);
+        return reply.code(401).send({
+          error: 'No password set for this account',
+          setupRequired: true
+        });
+      }
+
+      // 6. Validate parameters for isPasswordCorrect
+      const iterations = user.webPasswordIterations || 20480;
+
+      logger.log("Auth", `Verifying password with hash=${user.webPasswordHash ? 'exists' : 'missing'}, salt=${user.webPasswordSalt ? 'exists' : 'missing'}`);
+
+      // 7. Verify password with explicit parameter validation
+      const passwordCorrect = await isPasswordCorrect(
+        user.webPasswordHash,
+        user.webPasswordSalt,
+        iterations,
+        password
+      );
+
+      if (!passwordCorrect) {
+        return reply.code(401).send({ error: 'Invalid credentials' });
+      }
+
+      // Rest of the authentication process...
+      const authToken = crypto.randomBytes(32).toString('hex');
+
+      global.pendingTwitchAuths = global.pendingTwitchAuths || new Map();
+      global.pendingTwitchAuths.set(authToken, {
+        userId: user_id,
+        createdAt: Date.now()
+      });
+
+      let scopeValue;
+      try {
+        // Get the scopes from config
+        const configScopes = await retrieveConfigValue("twitch.scopes.bot");
+
+        // Handle different possible formats
+        if (Array.isArray(configScopes)) {
+          // If it's already an array, just join it
+          scopeValue = configScopes.join(' ');
+        } else if (typeof configScopes === 'string') {
+          // If it's a single string, use it directly
+          scopeValue = configScopes;
+        } else if (configScopes === null || configScopes === undefined) {
+          // If not configured, use default scopes
+          scopeValue = 'channel:read:broadcast channel:read:subscriptions channel:read:hype_train channel:read:follows bits:read chat:read chat:edit user:read:email';
+          logger.log("Auth", "No twitch.scopes found in config, using defaults");
+        } else {
+          // Unexpected type, convert to string
+          scopeValue = String(configScopes);
+          logger.log("Auth", `Unexpected type for twitch.scopes: ${typeof configScopes}. Converting to string.`);
+        }
+      } catch (error) {
+        // Fallback to default scopes if there's an error
+        logger.error("Auth", `Error getting Twitch scopes: ${error.message}. Using defaults.`);
+        scopeValue = 'channel:read:broadcast channel:read:subscriptions channel:read:hype_train channel:read:follows bits:read chat:read chat:edit user:read:email';
+      }
+
+      // Now use scopeValue in the URL
+
+      const authUrl = new URL('https://id.twitch.tv/oauth2/authorize');
+      authUrl.searchParams.set('client_id', await retrieveConfigValue("twitch.clientId"));
+      authUrl.searchParams.set('redirect_uri', await retrieveConfigValue("twitch.redirectUri"));
+      authUrl.searchParams.set('response_type', 'code');
+      authUrl.searchParams.set('scope', scopeValue);
+      authUrl.searchParams.set('state', authToken);
+
+      return reply.redirect(authUrl.toString());
+    } catch (error) {
+      logger.error("Auth", `Error during Twitch authentication: ${error.message}`);
+      return reply.code(500).send({ error: 'Authentication error', details: error.message });
+    }
+  });
+
+  // 3. Callback from Twitch OAuth
+  fastify.get('/auth/twitch/callback', async (request, reply) => {
+    const { code, state } = request.query;
+
+    // Verify state token exists in our pending auths
+    if (!global.pendingTwitchAuths || !global.pendingTwitchAuths.has(state)) {
+      return reply.code(400).send('Invalid or expired authorization request');
+    }
+
+    // Get user ID from the stored mapping
+    const { userId, createdAt } = global.pendingTwitchAuths.get(state);
+
+    // Check if the token has expired (e.g., after 10 minutes)
+    if (Date.now() - createdAt > 10 * 60 * 1000) {
+      global.pendingTwitchAuths.delete(state);
+      return reply.code(400).send('Authorization request expired');
+    }
+
+    try {
+      // Exchange code for access token
+      const tokenResponse = await axios.post('https://id.twitch.tv/oauth2/token', {
+        client_id: await retrieveConfigValue("twitch.clientId"),
+        client_secret: await retrieveConfigValue("twitch.clientSecret"),
+        code,
+        grant_type: 'authorization_code',
+        redirect_uri: await retrieveConfigValue("twitch.redirectUri")
+      });
+
+      const { access_token, refresh_token, expires_in } = tokenResponse.data;
+
+      // Store tokens in user record
+      await updateUserParameter(userId, "twitch_tokens", {
+        access_token,
+        refresh_token,
+        expires_at: Date.now() + (expires_in * 1000)
+      });
+
+      // Clean up the pending auth
+      global.pendingTwitchAuths.delete(state);
+
+      // Show success page
+      const successPage = await fs.readFile('./pages/success.html')
+
+      return reply.type('text/html').send(successPage);
+    } catch (error) {
+      logger.log("Auth", `Error during Twitch token exchange: ${error.message}`);
+      return reply.code(500).send('Failed to complete Twitch authorization');
+    }
+  });
+  fastify.get('/auth/setup', async (request, reply) => {
+    const setupForm = `<!doctype html>
+<html>
+  <head>
+    <title>Enspira Password Setup</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        max-width: 500px;
+        margin: 0 auto;
+        padding: 20px;
+      }
+      .form-group {
+        margin-bottom: 15px;
+      }
+      label {
+        display: block;
+        margin-bottom: 5px;
+      }
+      input[type="text"],
+      input[type="email"],
+      input[type="password"] {
+        width: 100%;
+        padding: 8px;
+      }
+      button {
+        background: #6441a4;
+        color: white;
+        border: none;
+        padding: 10px 15px;
+        cursor: pointer;
+      }
+      .error {
+        color: #e74c3c;
+      }
+      .success {
+        color: #2ecc71;
+      }
+    </style>
+  </head>
+  <body>
+    <h2>Set Up Your Enspira Password</h2>
+    <p>
+      Enter your account details to set up your password for Twitch integration.
+    </p>
+
+    ${request.query.error ? `
+    <p class="error">${request.query.error}</p>
+    ` : ''} ${request.query.success ? `
+    <p class="success">${request.query.success}</p>
+    ` : ''}
+
+    <form action="/api/v1/auth/setup" method="POST">
+      <div class="form-group">
+        <label for="user_id">User ID:</label>
+        <input type="text" id="user_id" name="user_id" required />
+      </div>
+      <div class="form-group">
+        <label for="email">Email Address:</label>
+        <input type="email" id="email" name="email" required />
+      </div>
+      <div class="form-group">
+        <label for="password">New Password:</label>
+        <input
+          type="password"
+          id="password"
+          name="password"
+          required
+          minlength="8"
+        />
+      </div>
+      <div class="form-group">
+        <label for="confirm_password">Confirm Password:</label>
+        <input
+          type="password"
+          id="confirm_password"
+          name="confirm_password"
+          required
+          minlength="8"
+        />
+      </div>
+      <button type="submit">Set Password</button>
+    </form>
+  </body>
+</html>
+`
+    reply.type('text/html').send(setupForm)
+    return reply;
+  });
+
+  fastify.post('/auth/setup', async (request, reply) => {
+    const { user_id, email, password, confirm_password } = request.body;
+
+    // Basic validation
+    if (!user_id || !email || !password || !confirm_password) {
+      return reply.redirect('/v1/auth/setup?error=All fields are required');
+    }
+
+    if (password !== confirm_password) {
+      return reply.redirect('/v1/auth/setup?error=Passwords do not match');
+    }
+
+    try {
+      // Get all users to find a match
+      const allUsers = await returnAPIKeys();
+      const user = allUsers.find(u => u.user_id === user_id && u.email === email);
+
+      if (!user) {
+        return reply.redirect('/v1/auth/setup?error=User ID or email not found');
+      }
+
+      // Check if user already has password hash/salt set
+      if (user.webPasswordHash && user.webPasswordSalt) {
+        return reply.redirect('/v1/auth/setup?error=Password already set for this account');
+      }
+
+      // Hash the password
+      const passwordData = await hashPassword(password);
+
+      // Update user parameters
+      await updateUserParameter(user_id, "webPasswordHash", passwordData.hash);
+      await updateUserParameter(user_id, "webPasswordSalt", passwordData.salt);
+
+      // Success - redirect to login page or show success message
+      return reply.redirect('/v1/auth/setup?success=Password set successfully! You can now connect your Twitch account.');
+
+    } catch (error) {
+      logger.log("Auth", `Error setting up password: ${error.message}`);
+      return reply.redirect(`/v1/auth/setup?error=${encodeURIComponent('Server error. Please try again.')}`);
+    }
+  });
+
+}
+
+export async function refreshTwitchToken(userId) {
+  try {
+    const user = await returnAuthObject(userId);
+
+    if (!user.twitch_tokens || !user.twitch_tokens.refresh_token) {
+      logger.log("Twitch", `No refresh token found for user ${userId}`);
+      return false;
+    }
+
+    // Check if token is expired or close to expiring (within 10 minutes)
+    const isExpired = !user.twitch_tokens.expires_at ||
+      Date.now() > (user.twitch_tokens.expires_at - (10 * 60 * 1000));
+
+    if (!isExpired) {
+      return user.twitch_tokens.access_token; // Return existing token if still valid
+    }
+
+    // Refresh the token
+    const response = await axios.post('https://id.twitch.tv/oauth2/token', {
+      client_id: await retrieveConfigValue("twitch.clientId"),
+      client_secret: await retrieveConfigValue("twitch.clientSecret"),
+      grant_type: 'refresh_token',
+      refresh_token: user.twitch_tokens.refresh_token
+    });
+
+    const { access_token, refresh_token, expires_in } = response.data;
+
+    // Update token in user record
+    await updateUserParameter(userId, "twitch_tokens", {
+      access_token,
+      refresh_token,
+      expires_at: Date.now() + (expires_in * 1000)
+    });
+
+    logger.log("Twitch", `Refreshed token for user ${userId}`);
+    return access_token;
+  } catch (error) {
+    logger.log("Twitch", `Failed to refresh token: ${error.message}`);
+
+    // If refresh fails, clear token data to force re-authentication
+    await updateUserParameter(userId, "twitch_tokens", null);
+    return false;
+  }
+}
+
+async function hashPassword(password) {
+  return new Promise((resolve, reject) => {
+    try {
+      const salt = crypto.randomBytes(128).toString('base64');
+      const iterations = 20480;
+      const keylen = 64;
+      const digest = 'sha512';
+
+      crypto.pbkdf2(password, salt, iterations, keylen, digest, (err, derivedKey) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+
+        resolve({
+          salt: salt,
+          hash: derivedKey.toString('hex'),
+          iterations: iterations,
+          digest: digest
+        });
+      });
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
+async function isPasswordCorrect(savedHash, savedSalt, savedIterations, passwordAttempt) {
+  // Validate parameters
+  if (!savedHash || !savedSalt || !passwordAttempt) {
+    throw new Error('Missing required parameters for password verification');
+  }
+
+  // Ensure all parameters are strings
+  savedHash = String(savedHash);
+  savedSalt = String(savedSalt);
+  passwordAttempt = String(passwordAttempt);
+
+  // Ensure iterations is a number
+  const iterations = Number(savedIterations) || 20480;
+
+  return new Promise((resolve, reject) => {
+    try {
+      const digest = 'sha512';
+      const keylen = 64;
+
+      crypto.pbkdf2(passwordAttempt, savedSalt, iterations, keylen, digest, (err, derivedKey) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+
+        const hash = derivedKey.toString('hex');
+        resolve(savedHash === hash);
+      });
+    } catch (error) {
+      reject(error);
     }
   });
 }

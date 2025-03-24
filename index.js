@@ -1,8 +1,8 @@
-// index.js - Updated for single-process application
 import Fastify from "fastify";
 import fs from "fs-extra";
 import { join } from "path";
 import { audioRoutes } from './routes/audio.js';
+import twitchEventSubRoutes from './routes/twitch.js';
 import { processAudio } from './audio-processor.js';
 import * as aiHelper from "./ai-logic.js";
 import path from "path";
@@ -172,6 +172,10 @@ const createServer = async () => {
     outputDir: 'final',
     prefix: '/files/audio',
     addContentDisposition: true
+  });
+
+  await fastify.register(twitchEventSubRoutes, {
+    prefix: "/v1/twitch"
   });
 
   return fastify;

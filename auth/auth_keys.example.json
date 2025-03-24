@@ -4,6 +4,7 @@
     "email": "player@player.com",
     "user_id": "player1",
     "user_name": "Player",
+    "twitch_name": "Player_TTV",
     "socials": {
       "ttv": "Player_TTV",
       "tt": "Player_TT",
@@ -29,6 +30,16 @@
     "latitude": "",
     "longitude": "",
     "timeZone": "",
-    "lastIp": ""
+    "lastIp": "",
+    "weather": true,
+    "max_chats": 40,
+    "ttsEqPref": "",
+    "twitch_tokens": {
+      "access_token": "",
+      "refresh_token": "",
+      "expires_at": 0
+    },
+    "webPasswordHash": "",
+    "webPasswordSalt": ""
   }
 ]

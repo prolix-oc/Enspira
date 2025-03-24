@@ -23,7 +23,46 @@
   },
   "twitch": {
     "maxChatsToSave": 40,
-    "maxCharLimit": 500
+    "maxCharLimit": 500,
+    "clientId": "qy6zyxqkh4uu243paz4l29nxtr9jg5",
+    "clientSecret": "vbfjx1y7xkpvzwaoysqx5uiuwwtcz7",
+    "redirectUri": "https://enspira.tools/api/v1/auth/twitch/callback",
+    "scopes": {
+      "streamer": [
+        "analytics:read:games",
+        "analytics:read:extensions",
+        "channel:edit:commercial",
+        "channel:read:subscriptions",
+        "channel:read:hype_train",
+        "channel:read:goals",
+        "channel:read:redemptions",
+        "channel:read:charity",
+        "channel:read:polls",
+        "channel:read:predictions",
+        "channel:manage:broadcast",
+        "channel:manage:raids",
+        "channel:manage:ads",
+        "channel:manage:raids"
+      ],
+      "bot": [
+        "bits:read",
+        "chat:read",
+        "chat:edit",
+        "moderator:read:chatters",
+        "moderator:read:followers",
+        "moderator:read:shoutouts",
+        "moderator:manage:announcements",
+        "moderator:read:suspicious_users",
+        "moderator:manage:chat_messages",
+        "moderator:read:guest_star",
+        "moderator:manage:guest_star",
+        "moderator:read:moderators",
+        "moderator:manage:shoutouts",
+        "user:read:email",
+        "user:read:chat",
+        "user:write:chat"
+      ]
+    }
   },
   "models": {
     "summary": {

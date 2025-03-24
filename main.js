@@ -154,7 +154,7 @@ function updateStatusBar(apiActive = false, dbConnected = false, llmStackConnect
   const apiStatus = apiActive
     ? "{left}REST: {green-fg}✓{/green-fg} Up{/left}"
     : "{left}REST: {red-fg}❌{/red-fg} Down{/left}";
-    
+
   switch (dbConnected) {
     case false:
       screen.clearRegion(
@@ -186,7 +186,7 @@ function updateStatusBar(apiActive = false, dbConnected = false, llmStackConnect
       screen.render();
       break;
   }
-  
+
   switch (llmStackConnected) {
     case 0:
       screen.title = "🌟 [DOWN] Enspira";
@@ -212,7 +212,7 @@ function updateStatusBar(apiActive = false, dbConnected = false, llmStackConnect
     default:
       break;
   }
-  
+
   apiStatusText.setContent("");
   apiStatusText.setContent(apiStatus);
   screen.render();
@@ -260,7 +260,7 @@ let isShuttingDown = false;
 
 // Function to reset the app module cache
 function clearModuleCache() {
-  Object.keys(require.cache).forEach(function(key) {
+  Object.keys(require.cache).forEach(function (key) {
     if (!key.includes('node_modules')) {
       delete require.cache[key];
     }
@@ -270,17 +270,17 @@ function clearModuleCache() {
 // Application restart function
 async function restartApplication() {
   logger.log("System", "Restarting application...");
-  
+
   // Clean up and save anything important
   await saveAuthToDisk();
   await saveConfigToDisk();
-  
+
   // For ES modules, we'll use a different approach with child_process
   const restartProcess = fork('./restart-helper.js', [], {
     detached: true,
     stdio: 'ignore'
   });
-  
+
   restartProcess.unref();
   process.exit(0);
 }
@@ -288,15 +288,15 @@ async function restartApplication() {
 // Function to perform a clean shutdown
 async function shutdown() {
   if (isShuttingDown) return;
-  
+
   isShuttingDown = true;
   logger.log("System", "Saving data before shutdown...");
-  
+
   try {
     await saveAuthToDisk();
     await saveConfigToDisk();
     logger.log("System", "All data saved. Shutting down...");
-    
+
     // Give time for message to display
     setTimeout(() => {
       process.exit(0);
@@ -314,100 +314,100 @@ inputBar.on("submit", async (text) => {
     screen.render();
     return;
   }
-  
+
   const firstWord = text.trim().split(/\s+/)[0].toLowerCase();
   const args = text.trim().slice(firstWord.length).trim();
-  
+
   inputBar.clearValue();
   screen.render();
-  
+
   try {
     switch (firstWord) {
       case "exit":
         shutdown();
         break;
-        
+
       case "restart":
         logger.log("System", "Restarting framework...");
         restartApplication();
         break;
-        
+
       case "flush_chat":
         await saveChatContextToDisk(args);
         break;
-        
+
       case "test_chats":
         const testChats = await aiHelper.returnRecentChats(args, true);
         logger.log("Milvus", `Got the following content: ${JSON.stringify(testChats.chatList)} in ${testChats.executionTime} seconds.`);
         break;
-        
+
       case "reload_db":
         if (!args) {
           logger.log("System", `Please specify a database to reload.`);
           break;
         }
-        
+
         const items = args.split(" ");
         const collectionName = items[0];
         const userId = items[1];
-        
+
         logger.log("System", `Issuing reload DB command...`);
         const done = await aiHelper.weGottaGoBald(collectionName, userId);
-        
+
         if (done) {
           logger.log("System", `Database reload initiated.`);
         } else {
           logger.log("System", `Database reload failed.`);
         }
         break;
-        
+
       case "get":
         if (!args) {
           logger.log("System", `Please specify a setting to retrieve.`);
           break;
         }
-        
+
         const getSetValue = await retrieveConfigValue(args);
-        logger.log("System", `'${args}' is set to: ${typeof (getSetValue) === "object" ? 
+        logger.log("System", `'${args}' is set to: ${typeof (getSetValue) === "object" ?
           `${JSON.stringify(getSetValue, { spaces: 2 })}` : `${getSetValue}`}`);
         break;
-        
+
       case "set":
         if (!args) {
           logger.log("System", `Please specify a setting and value to set.`);
           break;
         }
-        
+
         const choices = args.split(' ');
         if (choices.length < 2) {
           logger.log("System", `Please provide both a setting name and value.`);
           break;
         }
-        
+
         const didSave = await saveConfigValue(choices[0], choices[1]);
         didSave ?
           logger.log("Config", `Value '${choices[1]}' for parameter '${choices[0]}' saved.`) :
           logger.log("Config", `Value '${choices[1]}' for parameter '${choices[0]}' failed to save.`);
         break;
-        
+
       case "setuser":
         if (!args) {
           logger.log("System", `Please specify a user, setting, and value.`);
           break;
         }
-        
+
         const userChoices = args.split(' ');
         if (userChoices.length < 3) {
           logger.log("System", `Please provide a user ID, setting name, and value.`);
           break;
         }
-        
+
         const updated = await updateUserParameter(userChoices[0], userChoices[1], userChoices[2]);
         updated ?
           logger.log("Config", `Value '${userChoices[2]}' for parameter '${userChoices[1]}' for user '${userChoices[0]}' saved.`) :
           logger.log("Config", `Value '${userChoices[2]}' for parameter '${userChoices[1]}' for user '${userChoices[0]}' failed to save.`);
         break;
-        
+
       case "augment":
         logger.log("System", `Sending augmentation request...`);
         const augArgs = args.split(' ');
@@ -417,7 +417,7 @@ inputBar.on("submit", async (text) => {
         }
         await manualRetrieveWebContext(augArgs[0], augArgs[1]);
         break;
-        
+
       case "reindex":
         logger.log("System", "Issuing RAG rebuild...");
         if (!args) {
@@ -426,7 +426,7 @@ inputBar.on("submit", async (text) => {
         }
         await aiHelper.startIndexingVectors(args);
         break;
-        
+
       case "infer":
         if (!args) {
           logger.log("System", "Please enter a search inference");
@@ -435,7 +435,7 @@ inputBar.on("submit", async (text) => {
         logger.log("LLM", `Generating inference optimized search for term ${args}`);
         await aiHelper.inferSearchParam(args);
         break;
-        
+
       default:
         logger.log("System", `Invalid command '${firstWord}'. Try again.`);
         break;
@@ -443,7 +443,7 @@ inputBar.on("submit", async (text) => {
   } catch (error) {
     logger.error("System", `Error executing command: ${error.message}`);
   }
-  
+
   logBox.focus();
 });
 
@@ -451,16 +451,16 @@ inputBar.on("submit", async (text) => {
 const showConfirmationBox = (title, message) => {
   return new Promise((resolve) => {
     const boxWidth = Math.floor(screen.width * 0.8);
-    
+
     const lines = message.split("\n").reduce((acc, line) => {
       const wrappedLines = Math.ceil(line.length / (boxWidth - 4));
       return acc + wrappedLines;
     }, 0);
-    
+
     const boxHeight = Math.min(lines + 5, Math.floor(screen.height * 0.5));
     const buttonHeight = 3;
     const totalHeight = boxHeight + buttonHeight;
-    
+
     const confirmBox = blessed.box({
       parent: screen,
       border: "line",
@@ -483,7 +483,7 @@ const showConfirmationBox = (title, message) => {
         },
       },
     });
-    
+
     const messageText = blessed.text({
       parent: confirmBox,
       content: message,
@@ -495,7 +495,7 @@ const showConfirmationBox = (title, message) => {
         fg: "white",
       },
     });
-    
+
     const yesButton = blessed.button({
       parent: confirmBox,
       mouse: true,
@@ -517,7 +517,7 @@ const showConfirmationBox = (title, message) => {
         },
       },
     });
-    
+
     const noButton = blessed.button({
       parent: confirmBox,
       mouse: true,
@@ -539,27 +539,27 @@ const showConfirmationBox = (title, message) => {
         },
       },
     });
-    
+
     yesButton.on("press", () => {
       confirmBox.destroy();
       screen.render();
       resolve(true);
     });
-    
+
     noButton.on("press", () => {
       confirmBox.destroy();
       screen.render();
       resolve(false);
     });
-    
+
     yesButton.key(["tab"], () => {
       noButton.focus();
     });
-    
+
     noButton.key(["tab"], () => {
       yesButton.focus();
     });
-    
+
     confirmBox.key(["enter"], () => {
       if (yesButton.hasFocus()) {
         yesButton.emit("press");
@@ -567,23 +567,23 @@ const showConfirmationBox = (title, message) => {
         noButton.emit("press");
       }
     });
-    
+
     yesButton.focus();
-    
+
     yesButton.on("focus", () => {
       yesButton.style.bg = "white";
       yesButton.style.fg = "black";
       noButton.style.bg = "red";
       noButton.style.fg = "white";
     });
-    
+
     noButton.on("focus", () => {
       noButton.style.bg = "white";
       noButton.style.fg = "black";
       yesButton.style.bg = "green";
       yesButton.style.fg = "white";
     });
-    
+
     screen.render();
   });
 };
@@ -597,14 +597,13 @@ async function initializeApp() {
   try {
     // Log application startup
     logger.log("System", "Enspira application starting...");
-    
     // Import and start the API server
     const { initializeApp: startApp } = await import('./index.js');
-    
+
     // Start the application and get the server and status
     logger.log("System", "Starting REST server and initializing services...");
     const { server, status } = await startApp();
-    
+
     // Process preflight status
     let failed = 0;
     let available = 0;
@@ -615,7 +614,7 @@ async function initializeApp() {
         failed += 1;
       }
     });
-    
+
     if (failed == available) {
       logger.log(
         "System",
@@ -632,7 +631,14 @@ async function initializeApp() {
       logger.log("System", "All pre-flight checks for LLM services passed.");
       updateStatusBar(status.restIsOnline, status.dbIsOnline, 2);
     }
-    
+    const { registerAllUsersEventSub } = await import('./twitch-eventsub-manager.js');
+    logger.log("System", "Registering Twitch EventSub subscriptions...");
+    try {
+      const eventSubResults = await registerAllUsersEventSub();
+      logger.log("System", `EventSub registration complete: ${eventSubResults.success} successful, ${eventSubResults.failures} failed`);
+    } catch (eventSubError) {
+      logger.error("System", `Error registering EventSub: ${eventSubError.message}`);
+    }
     logger.log("System", "Enspira is fully initialized and ready!");
     return { server, status };
   } catch (error) {
