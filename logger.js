@@ -1,7 +1,6 @@
 // logger.js - Updated for single-process application
 import moment from "moment";
 import fs from 'fs/promises';
-import path from 'path';
 
 // Create logs directory if it doesn't exist
 try {
@@ -67,11 +66,6 @@ export const createLogger = (
   };
 
   const logMessage = (source, message, type = "info") => {
-    if (message === undefined) {
-      message = source;
-      source = "System";
-    }
-
     // Log to UI
     logToScreen(source, message);
     
@@ -81,11 +75,11 @@ export const createLogger = (
 
   return {
     log: (source, message, type = "info") => logMessage(source, message, type),
-    system: (message) => logMessage("System", message, "info"),
-    error: (message) => logMessage("Error", message, "error"),
-    warn: (message) => logMessage("Warning", message, "warn"),
-    info: (message) => logMessage("Info", message, "info"),
-    debug: (message) => logMessage("Debug", message, "debug"),
+    system: (message) => logMessage(source, message, "info"),
+    error: (message) => logMessage(source, message, "error"),
+    warn: (message) => logMessage(source, message, "warn"),
+    info: (message) => logMessage(source, message, "info"),
+    debug: (message) => logMessage(source, message, "debug"),
     trace: (trace, dest) => writeTrace(trace, dest)
   };
 };

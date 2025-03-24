@@ -18,6 +18,40 @@ const MESSAGE_TYPE_REVOCATION = 'revocation';
 // Prepend this string to the HMAC that's created from the message
 const HMAC_PREFIX = 'sha256=';
 
+async function getWebhookSecret(userId) {
+    try {
+        const user = await returnAuthObject(userId);
+
+        // Check if user has webhook secret
+        if (!user || !user.twitch_tokens || !user.twitch_tokens.streamer || !user.twitch_tokens.streamer.webhook_secret) {
+            logger.log("Twitch", `No webhook secret found for user ${userId}, generating temporary one`);
+
+            // If there's no webhook secret, we should create one for future use
+            // But for this verification, we'll return a dummy one that will fail verification
+            if (user && user.twitch_tokens && user.twitch_tokens.streamer) {
+                const newSecret = crypto.randomBytes(32).toString('hex');
+
+                // Try to ensure path exists and set the webhook secret
+                await ensureParameterPath(userId, "twitch_tokens.streamer");
+                await updateUserParameter(userId, "twitch_tokens.streamer.webhook_secret", newSecret);
+
+                // Log but still return a dummy secret for this verification
+                logger.log("Twitch", `Generated new webhook secret for future use, but current verification will fail`);
+            }
+
+            // Return a dummy secret that will cause verification to fail (this is intentional)
+            return "invalid-verification-will-fail";
+        }
+
+        // Return the actual webhook secret
+        return user.twitch_tokens.streamer.webhook_secret;
+    } catch (error) {
+        logger.error("Twitch", `Error getting webhook secret: ${error.message}`);
+        // Return a dummy secret that will cause verification to fail
+        return "error-getting-secret";
+    }
+}
+
 async function twitchEventSubRoutes(fastify, options) {
     // Configure the raw body parser specifically for this route
     fastify.addContentTypeParser('application/json', { parseAs: 'buffer' }, (req, body, done) => {
@@ -41,12 +75,28 @@ async function twitchEventSubRoutes(fastify, options) {
     };
 
     const getHmacMessage = (headers, body) => {
-        return headers[TWITCH_MESSAGE_ID] +
-            headers[TWITCH_MESSAGE_TIMESTAMP] +
-            body;
+        if (!headers || !body) {
+            logger.error("Twitch", "Missing headers or body for HMAC calculation");
+            return "";
+        }
+
+        const messageId = headers[TWITCH_MESSAGE_ID];
+        const timestamp = headers[TWITCH_MESSAGE_TIMESTAMP];
+
+        if (!messageId || !timestamp) {
+            logger.error("Twitch", "Missing required headers for HMAC calculation");
+            return "";
+        }
+
+        return messageId + timestamp + body;
     };
 
     const getHmac = (secret, message) => {
+        if (!secret || !message) {
+            logger.error("Twitch", "Missing secret or message for HMAC calculation");
+            return "";
+        }
+
         return crypto.createHmac('sha256', secret)
             .update(message)
             .digest('hex');
@@ -131,28 +181,36 @@ async function twitchEventSubRoutes(fastify, options) {
         }
 
         // Get the webhook secret for this user
-        const secret = await getSecret(userId);
-
-        if (!secret) {
-            logger.error("Twitch", `No webhook secret configured for user ${userId}`);
-            return reply.code(403).send({ error: "Invalid webhook configuration" });
-        }
+        const secret = await getWebhookSecret(userId);
 
         // Get and verify the signature
         const headers = request.headers;
         const rawBody = request.body;
 
-        // Verify the request is actually from Twitch
-        const message = getHmacMessage(headers, rawBody);
-        const hmac = HMAC_PREFIX + getHmac(secret, message);
-
-        if (!verifyMessage(hmac, headers[TWITCH_MESSAGE_SIGNATURE])) {
-            logger.error("Twitch", "EventSub signature verification failed");
-            return reply.code(403).send({ error: "Signature verification failed" });
-        }
-
-        // Signature verified, process the notification
         try {
+            // Calculate the expected signature
+            const message = getHmacMessage(headers, rawBody);
+            const hmac = HMAC_PREFIX + getHmac(secret, message);
+
+            // Verify the request is actually from Twitch
+            if (!verifyMessage(hmac, headers[TWITCH_MESSAGE_SIGNATURE])) {
+                logger.error("Twitch", "EventSub signature verification failed");
+
+                // If the secret was a dummy one, it means we don't have a valid webhook secret
+                if (secret === "invalid-verification-will-fail" || secret === "error-getting-secret") {
+                    logger.error("Twitch", `Invalid webhook secret for user ${userId}, verification was expected to fail`);
+
+                    // Register EventSub for this user to generate a valid webhook secret for next time
+                    const { registerUserSubscriptions } = await import('../twitch-eventsub-manager.js');
+                    registerUserSubscriptions(userId).catch(err => {
+                        logger.error("Twitch", `Failed to register EventSub subscriptions: ${err.message}`);
+                    });
+                }
+
+                return reply.code(403).send({ error: "Signature verification failed" });
+            }
+
+            // Signature verified, process the notification
             const notification = JSON.parse(rawBody.toString());
             const messageType = headers[MESSAGE_TYPE];
 
@@ -180,10 +238,67 @@ async function twitchEventSubRoutes(fastify, options) {
                 logger.log("Twitch", `Unknown message type: ${messageType}`);
                 return reply.code(204).send();
             }
-
         } catch (error) {
             logger.error("Twitch", `Error processing EventSub notification: ${error.message}`);
             return reply.code(500).send({ error: "Internal server error" });
+        }
+    });
+
+    fastify.post('/eventsub/register/:userId', async (request, reply) => {
+        const { userId } = request.params;
+
+        try {
+            // Import registration function
+            const { registerUserSubscriptions } = await import('../twitch-eventsub-manager.js');
+
+            // Register subscriptions
+            const result = await registerUserSubscriptions(userId);
+
+            return {
+                success: result.success,
+                created: result.created,
+                skipped: result.skipped,
+                error: result.error
+            };
+        } catch (error) {
+            logger.error("Twitch", `Error registering subscriptions: ${error.message}`);
+            return reply.code(500).send({ error: error.message });
+        }
+    });
+
+    fastify.get('/eventsub/subscriptions/:userId', async (request, reply) => {
+        const { userId } = request.params;
+
+        try {
+            const user = await returnAuthObject(userId);
+
+            if (!user || !user.twitch_tokens?.streamer?.access_token) {
+                return reply.code(400).send({ error: "User has no Twitch integration" });
+            }
+
+            // Import axios if needed
+            const axios = (await import('axios')).default;
+            
+            // Get subscriptions from Twitch API
+            const response = await axios.get(
+                'https://api.twitch.tv/helix/eventsub/subscriptions',
+                {
+                    headers: {
+                        'Client-ID': await retrieveConfigValue("twitch.clientId"),
+                        'Authorization': `Bearer ${user.twitch_tokens.streamer.access_token}`
+                    }
+                }
+            );
+
+            return {
+                success: true,
+                subscriptions: response.data.data,
+                total: response.data.total,
+                max: response.data.max_total_cost
+            };
+        } catch (error) {
+            logger.error("Twitch", `Error listing subscriptions: ${error.message}`);
+            return reply.code(500).send({ error: error.message });
         }
     });
 
@@ -480,25 +595,30 @@ async function twitchEventSubRoutes(fastify, options) {
 
     // Handle EventSub revocation
     async function handleEventSubRevocation(notification, userId) {
-        const subscriptionId = notification.subscription.id;
-
         try {
-            const user = await returnAuthObject(userId);
-
-            if (!user || !user.twitch_tokens || !user.twitch_tokens.subscriptions) {
+            const subscriptionId = notification.subscription.id;
+            
+            if (!userId || !subscriptionId) {
+                logger.error("Twitch", "Missing userId or subscriptionId for revocation");
                 return;
             }
-
+            
+            const user = await returnAuthObject(userId);
+            
+            if (!user || !user.twitch_tokens?.streamer?.subscriptions) {
+                logger.error("Twitch", `No subscriptions found for user ${userId}`);
+                return;
+            }
+            
             // Filter out the revoked subscription
-            const subscriptions = user.twitch_tokens.subscriptions.filter(
+            const subscriptions = user.twitch_tokens.streamer.subscriptions.filter(
                 sub => sub.id !== subscriptionId
             );
-
+            
             // Update the subscriptions list
-            await updateUserParameter(userId, "twitch_tokens.subscriptions", subscriptions);
-
+            await updateUserParameter(userId, "twitch_tokens.streamer.subscriptions", subscriptions);
+            
             logger.log("Twitch", `Removed revoked subscription ${subscriptionId} for user ${userId}`);
-
         } catch (error) {
             logger.error("Twitch", `Error handling revocation: ${error.message}`);
         }

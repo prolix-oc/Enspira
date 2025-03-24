@@ -3,7 +3,7 @@ import {
   containsCharacterName,
   containsAuxBotName
 } from "../prompt-helper.js";
-import { checkForAuth, updateUserParameter, returnAPIKeys, returnAuthObject } from "../api-helper.js";
+import { checkForAuth, updateUserParameter, returnAuthObject } from "../api-helper.js";
 import { maintainVoiceContext } from "../data-helper.js";
 import * as twitchHelper from "../twitch-helper.js";
 import { retrieveConfigValue } from "../config-helper.js";
@@ -13,6 +13,7 @@ import cors from "@fastify/cors";
 import fastifyCompress from "@fastify/compress";
 import fs from 'fs-extra'
 import * as crypto from 'crypto'
+import fastifyCookie from '@fastify/cookie';
 
 const chatResponseSchema = {
   type: 'object',
@@ -54,6 +55,89 @@ const endPoints = {
   healthcheck: "/healthcheck",
 };
 
+const requireAuth = async (request, reply) => {
+  const sessionToken = request.cookies.enspira_session;
+  
+  if (!sessionToken) {
+    return reply.redirect('/v1/auth/login');
+  }
+  
+  try {
+    // Verify and decode the session token
+    const decoded = verifySessionToken(sessionToken);
+    
+    if (!decoded || !decoded.userId) {
+      // Invalid token
+      reply.clearCookie('enspira_session');
+      return reply.redirect('/v1/auth/login');
+    }
+    
+    // Get user from database
+    const user = await returnAuthObject(decoded.userId);
+    
+    if (!user) {
+      // User doesn't exist
+      reply.clearCookie('enspira_session');
+      return reply.redirect('/v1/auth/login');
+    }
+    
+    // Add user to request for use in route handlers
+    request.user = user;
+    
+    // Continue to route handler
+    return;
+  } catch (error) {
+    logger.error("Auth", `Session validation error: ${error.message}`);
+    reply.clearCookie('enspira_session');
+    return reply.redirect('/v1/auth/login');
+  }
+};
+
+function createSessionToken(userId, expiresIn = '7d') {
+  // Create a token payload
+  const payload = {
+    userId,
+    exp: Math.floor(Date.now() / 1000) + (60 * 60 * 24 * 7) // 7 days
+  };
+  
+  // Sign the token
+  const token = crypto.createHmac('sha256', process.env.COOKIE_SECRET || 'enspira-secret-key')
+    .update(JSON.stringify(payload))
+    .digest('hex');
+  
+  // Return token and payload together
+  return `${token}.${Buffer.from(JSON.stringify(payload)).toString('base64')}`;
+}
+
+// Function to verify a session token
+function verifySessionToken(token) {
+  try {
+    const [signature, payloadBase64] = token.split('.');
+    
+    // Decode the payload
+    const payload = JSON.parse(Buffer.from(payloadBase64, 'base64').toString());
+    
+    // Check if token is expired
+    if (payload.exp < Math.floor(Date.now() / 1000)) {
+      return null;
+    }
+    
+    // Verify the signature
+    const expectedSignature = crypto.createHmac('sha256', process.env.COOKIE_SECRET || 'enspira-secret-key')
+      .update(JSON.stringify(payload))
+      .digest('hex');
+    
+    if (signature !== expectedSignature) {
+      return null;
+    }
+    
+    return payload;
+  } catch (error) {
+    logger.error("Auth", `Token verification error: ${error.message}`);
+    return null;
+  }
+}
+
 /**
  * Checks if the input contains a jailbreak attempt.
  * @param {string} input - The input string to check.
@@ -72,7 +156,10 @@ async function routes(fastify, options) {
     max: 100,
     timeWindow: "20 seconds",
   });
-
+  await fastify.register(fastifyCookie, {
+    secret: await retrieveConfigValue("server.cookieSecret") || crypto.randomBytes(32).toString('hex'), // Use a stored secret or generate one
+    parseOptions: {}
+  });
   await fastify.register(cors, {
     origin: true,
   });
@@ -314,12 +401,420 @@ async function routes(fastify, options) {
       return reply;
     }
   });
-  fastify.get('/auth/twitch/login', async (request, reply) => {
-    // Simple HTML form with user_id and password fields
-    const loginForm = await fs.readFile('./pages/twitch-login.html')
 
+  fastify.get('/auth/login', async (request, reply) => {
+    const loginForm = `<!doctype html>
+    <html>
+      <head>
+        <title>Enspira Login</title>
+        <style>
+          body {
+            font-family: Arial, sans-serif;
+            max-width: 500px;
+            margin: 0 auto;
+            padding: 20px;
+          }
+          .form-group {
+            margin-bottom: 15px;
+          }
+          label {
+            display: block;
+            margin-bottom: 5px;
+          }
+          input[type="text"],
+          input[type="password"] {
+            width: 100%;
+            padding: 8px;
+          }
+          button {
+            background: #6441a4;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            cursor: pointer;
+          }
+          .error {
+            color: #e74c3c;
+            margin-bottom: 15px;
+          }
+        </style>
+      </head>
+      <body>
+        <h2>Enspira Login</h2>
+        ${request.query.error ? `<div class="error">${request.query.error}</div>` : ''}
+        
+        <form action="/api/v1/auth/login" method="POST">
+          <div class="form-group">
+            <label for="user_id">User ID:</label>
+            <input type="text" id="user_id" name="user_id" required />
+          </div>
+          <div class="form-group">
+            <label for="password">Password:</label>
+            <input type="password" id="password" name="password" required />
+          </div>
+          <button type="submit">Login</button>
+        </form>
+      </body>
+    </html>`;
+    
     reply.type('text/html').send(loginForm);
     return reply;
+  });
+  
+  // Login POST handler
+  fastify.post('/auth/login', async (request, reply) => {
+    try {
+      const { user_id, password } = request.body;
+      
+      if (!user_id || !password) {
+        return reply.redirect('/v1/auth/login?error=Missing+required+fields');
+      }
+      
+      // Get user
+      const user = await returnAuthObject(user_id);
+      
+      if (!user) {
+        return reply.redirect('/v1/auth/login?error=Invalid+credentials');
+      }
+      
+      // Check password
+      if (!user.webPasswordHash || !user.webPasswordSalt) {
+        return reply.redirect('/v1/auth/login?error=No+password+set');
+      }
+      
+      const passwordCorrect = await isPasswordCorrect(
+        user.webPasswordHash,
+        user.webPasswordSalt,
+        user.webPasswordIterations || 20480,
+        password
+      );
+      
+      if (!passwordCorrect) {
+        return reply.redirect('/v1/auth/login?error=Invalid+credentials');
+      }
+      
+      // Create session
+      const sessionToken = createSessionToken(user_id);
+      
+      // Set cookie
+      reply.setCookie('enspira_session', sessionToken, {
+        path: '/',
+        httpOnly: true, // Prevents JavaScript access
+        secure: process.env.NODE_ENV === 'production', // Use secure in production
+        sameSite: 'lax', // Protects against CSRF
+        maxAge: 60 * 60 * 24 * 7 // 7 days
+      });
+      
+      // Redirect to dashboard or Twitch management
+      return reply.redirect('/v1/auth/twitch/manage');
+    } catch (error) {
+      logger.error("Auth", `Login error: ${error.message}`);
+      return reply.redirect('/v1/auth/login?error=An+error+occurred');
+    }
+  });
+  
+  // Logout route
+  fastify.get('/auth/logout', async (request, reply) => {
+    reply.clearCookie('enspira_session');
+    return reply.redirect('/v1/auth/login');
+  });
+  
+  // Twitch management dashboard
+  fastify.get('/auth/twitch/manage', { preHandler: requireAuth }, async (request, reply) => {
+    try {
+      const user = request.user;
+      
+      // Format date for display
+      const formatDate = (timestamp) => {
+        if (!timestamp) return 'Never';
+        return new Date(timestamp).toLocaleString();
+      };
+      
+      // Check bot connection
+      const botConnected = user.twitch_tokens?.bot?.access_token ? true : false;
+      
+      // Check streamer connection
+      const streamerConnected = user.twitch_tokens?.streamer?.access_token ? true : false;
+      
+      // Get scopes from config
+      const streamerScopes = await retrieveConfigValue("twitch.scopes.streamer");
+      const botScopes = await retrieveConfigValue("twitch.scopes.bot");
+      
+      // Build the HTML
+      const html = `<!doctype html>
+      <html>
+        <head>
+          <title>Twitch Integration - ${user.user_name}</title>
+          <style>
+            body {
+              font-family: Arial, sans-serif;
+              max-width: 800px;
+              margin: 0 auto;
+              padding: 20px;
+              line-height: 1.6;
+            }
+            .container {
+              background: #f9f9f9;
+              border-radius: 8px;
+              padding: 20px;
+              margin-bottom: 20px;
+              border: 1px solid #eee;
+            }
+            .header {
+              display: flex;
+              justify-content: space-between;
+              align-items: center;
+              border-bottom: 2px solid #6441a4;
+              padding-bottom: 10px;
+              margin-bottom: 20px;
+            }
+            .account-status {
+              display: flex;
+              margin-bottom: 15px;
+            }
+            .status-icon {
+              width: 24px;
+              height: 24px;
+              margin-right: 10px;
+            }
+            .connected {
+              color: #2ecc71;
+              font-weight: bold;
+            }
+            .not-connected {
+              color: #e74c3c;
+            }
+            .button {
+              display: inline-block;
+              background: #6441a4;
+              color: white;
+              padding: 10px 15px;
+              border-radius: 4px;
+              text-decoration: none;
+              margin-top: 10px;
+              transition: background 0.3s;
+            }
+            .button:hover {
+              background: #7d5bbe;
+            }
+            .logout {
+              color: #e74c3c;
+              text-decoration: none;
+            }
+            .scopes {
+              font-size: 0.9em;
+              margin-top: 10px;
+              color: #666;
+            }
+            .scope-list {
+              display: flex;
+              flex-wrap: wrap;
+              margin-top: 5px;
+            }
+            .scope {
+              background: #f1f1f1;
+              padding: 3px 8px;
+              border-radius: 12px;
+              margin-right: 5px;
+              margin-bottom: 5px;
+              font-size: 0.85em;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <h1>Twitch Integration</h1>
+            <div>
+              <span>Logged in as ${user.user_name}</span> | 
+              <a href="/api/v1/auth/logout" class="logout">Logout</a>
+            </div>
+          </div>
+  
+          <div class="container">
+            <h2>Streamer Account</h2>
+            <div class="account-status">
+              ${streamerConnected ? 
+                `<svg class="status-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#2ecc71">
+                  <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/>
+                </svg>
+                <div>
+                  <p class="connected">Connected as: ${user.twitch_tokens.streamer.twitch_display_name}</p>
+                  <p>Last authenticated: ${formatDate(user.twitch_tokens.streamer.expires_at)}</p>
+                </div>` : 
+                `<svg class="status-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#e74c3c">
+                  <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41z"/>
+                </svg>
+                <div>
+                  <p class="not-connected">No streamer account connected</p>
+                </div>`
+              }
+            </div>
+            
+            <p>The streamer account allows Enspira to access your channel information, manage raids, read subscriptions, and more.</p>
+            
+            <div class="scopes">
+              <p>Permissions required:</p>
+              <div class="scope-list">
+                ${Array.isArray(streamerScopes) ? 
+                  streamerScopes.map(scope => `<span class="scope">${scope}</span>`).join('') : 
+                  (typeof streamerScopes === 'string' ? 
+                    streamerScopes.split(' ').map(scope => `<span class="scope">${scope}</span>`).join('') : 
+                    '')
+                }
+              </div>
+            </div>
+            
+            <a href="/api/v1/auth/twitch/connect?type=streamer" class="button">
+              ${streamerConnected ? 'Reconnect Streamer Account' : 'Connect Streamer Account'}
+            </a>
+          </div>
+  
+          <div class="container">
+            <h2>Bot Account</h2>
+            <div class="account-status">
+              ${botConnected ? 
+                `<svg class="status-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#2ecc71">
+                  <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/>
+                </svg>
+                <div>
+                  <p class="connected">Connected as: ${user.twitch_tokens.bot.twitch_display_name}</p>
+                  <p>Last authenticated: ${formatDate(user.twitch_tokens.bot.expires_at)}</p>
+                </div>` : 
+                `<svg class="status-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#e74c3c">
+                  <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41z"/>
+                </svg>
+                <div>
+                  <p class="not-connected">No bot account connected</p>
+                </div>`
+              }
+            </div>
+            
+            <p>The bot account allows Enspira to send chat messages, read chat, create clips, and more. This should be the Twitch account that will act as your AI assistant in chat.</p>
+            
+            <div class="scopes">
+              <p>Permissions required:</p>
+              <div class="scope-list">
+                ${Array.isArray(botScopes) ? 
+                  botScopes.map(scope => `<span class="scope">${scope}</span>`).join('') : 
+                  (typeof botScopes === 'string' ? 
+                    botScopes.split(' ').map(scope => `<span class="scope">${scope}</span>`).join('') : 
+                    '')
+                }
+              </div>
+            </div>
+            
+            <a href="/api/v1/auth/twitch/connect?type=bot" class="button">
+              ${botConnected ? 'Reconnect Bot Account' : 'Connect Bot Account'}
+            </a>
+          </div>
+  
+          <div class="container">
+            <h2>What's Next?</h2>
+            <p>With your accounts connected, Enspira can now:</p>
+            <ul>
+              <li>Respond to channel events (follows, subscriptions, etc.)</li>
+              <li>Send chat messages as your bot</li>
+              <li>Track channel statistics</li>
+              <li>Create clips and shoutouts</li>
+            </ul>
+          </div>
+        </body>
+      </html>`;
+      
+      reply.type('text/html').send(html);
+      return reply;
+    } catch (error) {
+      logger.error("Auth", `Error in Twitch management: ${error.message}`);
+      return reply.code(500).send("An error occurred loading the Twitch management page");
+    }
+  });
+
+  fastify.get('/auth/twitch/login', async (request, reply) => {
+    // Simple HTML form with user_id and password fields
+    const loginForm = await fs.readFile('./pages/twitch-login.html', 'utf-8');
+
+    // Add auth type as a hidden field if provided
+    const authType = request.query.type || '';
+    const loginFormWithType = loginForm.replace(
+      '<form action="/api/v1/auth/twitch/authenticate" method="POST">',
+      `<form action="/api/v1/auth/twitch/authenticate" method="POST">
+        <input type="hidden" name="auth_type" value="${authType}">`
+    );
+
+    reply.type('text/html').send(loginFormWithType);
+    return reply;
+  });
+
+  fastify.get('/auth/twitch/connect', { preHandler: requireAuth }, async (request, reply) => {
+    try {
+      const { type } = request.query;
+      const user = request.user;
+      
+      if (!type || (type !== 'bot' && type !== 'streamer')) {
+        return reply.code(400).send({ error: 'Invalid account type' });
+      }
+      
+      // Generate auth token and store it temporarily
+      const authToken = crypto.randomBytes(32).toString('hex');
+  
+      global.pendingTwitchAuths = global.pendingTwitchAuths || new Map();
+      global.pendingTwitchAuths.set(authToken, {
+        userId: user.user_id,
+        createdAt: Date.now(),
+        authType: type
+      });
+  
+      // Get the scopes based on auth type
+      const scopeType = type;
+      let scopeValue;
+      
+      try {
+        // Get the scopes from config
+        const configScopes = await retrieveConfigValue(`twitch.scopes.${scopeType}`);
+  
+        // Handle different possible formats
+        if (Array.isArray(configScopes)) {
+          scopeValue = configScopes.join(' ');
+        } else if (typeof configScopes === 'string') {
+          scopeValue = configScopes;
+        } else if (configScopes === null || configScopes === undefined) {
+          if (scopeType === 'bot') {
+            scopeValue = 'chat:read chat:edit user:read:email';
+          } else {
+            scopeValue = 'channel:read:broadcast channel:read:subscriptions channel:read:hype_train channel:read:follows';
+          }
+          logger.log("Auth", `No twitch.scopes.${scopeType} found in config, using defaults`);
+        } else {
+          scopeValue = String(configScopes);
+          logger.log("Auth", `Unexpected type for twitch.scopes.${scopeType}: ${typeof configScopes}. Converting to string.`);
+        }
+      } catch (error) {
+        logger.error("Auth", `Error getting Twitch scopes: ${error.message}. Using defaults.`);
+        if (scopeType === 'bot') {
+          scopeValue = 'chat:read chat:edit user:read:email';
+        } else {
+          scopeValue = 'channel:read:broadcast channel:read:subscriptions channel:read:hype_train channel:read:follows';
+        }
+      }
+  
+      // Create the Twitch OAuth URL
+      const authUrl = new URL('https://id.twitch.tv/oauth2/authorize');
+      authUrl.searchParams.set('client_id', await retrieveConfigValue("twitch.clientId"));
+      authUrl.searchParams.set('redirect_uri', await retrieveConfigValue("twitch.redirectUri"));
+      authUrl.searchParams.set('response_type', 'code');
+      authUrl.searchParams.set('scope', scopeValue);
+      authUrl.searchParams.set('state', authToken);
+      
+      // Force login prompt if connecting a bot account
+      if (type === 'bot') {
+        authUrl.searchParams.set('force_verify', 'true');
+      }
+  
+      return reply.redirect(authUrl.toString());
+    } catch (error) {
+      logger.error("Auth", `Error in Twitch connect: ${error.message}`);
+      return reply.code(500).send({ error: 'An error occurred' });
+    }
   });
 
   // 2. Authentication endpoint that verifies credentials
@@ -330,15 +825,15 @@ async function routes(fastify, options) {
         return reply.code(400).send({ error: 'Invalid request format' });
       }
 
-      const { user_id, password } = request.body;
+      const { user_id, password, auth_type } = request.body;
 
       // 2. Check for required fields
       if (!user_id || !password) {
         return reply.code(400).send({ error: 'Missing required fields' });
       }
 
-      // 3. Log for debugging (remove in production)
-      logger.log("Auth", `Authenticating user: ${user_id}`);
+      // Log the auth_type to debug
+      logger.log("Auth", `Authenticating user: ${user_id} for ${auth_type || 'streamer'} account`);
 
       // 4. Get user details
       const user = await returnAuthObject(user_id);
@@ -373,19 +868,23 @@ async function routes(fastify, options) {
         return reply.code(401).send({ error: 'Invalid credentials' });
       }
 
-      // Rest of the authentication process...
+      // Generate auth token and store it temporarily
       const authToken = crypto.randomBytes(32).toString('hex');
 
       global.pendingTwitchAuths = global.pendingTwitchAuths || new Map();
       global.pendingTwitchAuths.set(authToken, {
         userId: user_id,
-        createdAt: Date.now()
+        createdAt: Date.now(),
+        authType: auth_type || 'streamer' // Default to streamer if not specified
       });
 
+      // Get the scopes based on auth type (bot or streamer)
+      const scopeType = auth_type === 'bot' ? 'bot' : 'streamer';
       let scopeValue;
+
       try {
         // Get the scopes from config
-        const configScopes = await retrieveConfigValue("twitch.scopes.bot");
+        const configScopes = await retrieveConfigValue(`twitch.scopes.${scopeType}`);
 
         // Handle different possible formats
         if (Array.isArray(configScopes)) {
@@ -395,29 +894,38 @@ async function routes(fastify, options) {
           // If it's a single string, use it directly
           scopeValue = configScopes;
         } else if (configScopes === null || configScopes === undefined) {
-          // If not configured, use default scopes
-          scopeValue = 'channel:read:broadcast channel:read:subscriptions channel:read:hype_train channel:read:follows bits:read chat:read chat:edit user:read:email';
-          logger.log("Auth", "No twitch.scopes found in config, using defaults");
+          // If not configured, use default scopes based on type
+          if (scopeType === 'bot') {
+            scopeValue = 'chat:read chat:edit user:read:email';
+          } else {
+            scopeValue = 'channel:read:broadcast channel:read:subscriptions channel:read:hype_train channel:read:follows';
+          }
+          logger.log("Auth", `No twitch.scopes.${scopeType} found in config, using defaults`);
         } else {
           // Unexpected type, convert to string
           scopeValue = String(configScopes);
-          logger.log("Auth", `Unexpected type for twitch.scopes: ${typeof configScopes}. Converting to string.`);
+          logger.log("Auth", `Unexpected type for twitch.scopes.${scopeType}: ${typeof configScopes}. Converting to string.`);
         }
       } catch (error) {
         // Fallback to default scopes if there's an error
         logger.error("Auth", `Error getting Twitch scopes: ${error.message}. Using defaults.`);
-        scopeValue = 'channel:read:broadcast channel:read:subscriptions channel:read:hype_train channel:read:follows bits:read chat:read chat:edit user:read:email';
+        if (scopeType === 'bot') {
+          scopeValue = 'chat:read chat:edit user:read:email';
+        } else {
+          scopeValue = 'channel:read:broadcast channel:read:subscriptions channel:read:hype_train channel:read:follows';
+        }
       }
 
       // Now use scopeValue in the URL
-
       const authUrl = new URL('https://id.twitch.tv/oauth2/authorize');
       authUrl.searchParams.set('client_id', await retrieveConfigValue("twitch.clientId"));
       authUrl.searchParams.set('redirect_uri', await retrieveConfigValue("twitch.redirectUri"));
       authUrl.searchParams.set('response_type', 'code');
       authUrl.searchParams.set('scope', scopeValue);
       authUrl.searchParams.set('state', authToken);
-
+      if (auth_type === 'bot') {
+        authUrl.searchParams.set('force_verify', 'true');
+      }
       return reply.redirect(authUrl.toString());
     } catch (error) {
       logger.error("Auth", `Error during Twitch authentication: ${error.message}`);
@@ -428,22 +936,23 @@ async function routes(fastify, options) {
   // 3. Callback from Twitch OAuth
   fastify.get('/auth/twitch/callback', async (request, reply) => {
     const { code, state } = request.query;
-
+  
     // Verify state token exists in our pending auths
     if (!global.pendingTwitchAuths || !global.pendingTwitchAuths.has(state)) {
       return reply.code(400).send('Invalid or expired authorization request');
     }
-
+  
     // Get user ID from the stored mapping
-    const { userId, createdAt } = global.pendingTwitchAuths.get(state);
-
+    const { userId, createdAt, authType } = global.pendingTwitchAuths.get(state);
+  
     // Check if the token has expired (e.g., after 10 minutes)
     if (Date.now() - createdAt > 10 * 60 * 1000) {
       global.pendingTwitchAuths.delete(state);
       return reply.code(400).send('Authorization request expired');
     }
-
+  
     try {
+      const axios = (await import('axios')).default;
       // Exchange code for access token
       const tokenResponse = await axios.post('https://id.twitch.tv/oauth2/token', {
         client_id: await retrieveConfigValue("twitch.clientId"),
@@ -452,203 +961,199 @@ async function routes(fastify, options) {
         grant_type: 'authorization_code',
         redirect_uri: await retrieveConfigValue("twitch.redirectUri")
       });
-
+  
       const { access_token, refresh_token, expires_in } = tokenResponse.data;
-
-      // Store tokens in user record
-      await updateUserParameter(userId, "twitch_tokens", {
+  
+      // Get user info from Twitch
+      const userResponse = await axios.get('https://api.twitch.tv/helix/users', {
+        headers: {
+          'Client-ID': await retrieveConfigValue("twitch.clientId"),
+          'Authorization': `Bearer ${access_token}`
+        }
+      });
+      
+      const twitchUserInfo = userResponse.data.data[0];
+      
+      // Store tokens in user record - use the appropriate field based on auth type
+      const tokenPath = authType === 'bot' ? "twitch_tokens.bot" : "twitch_tokens.streamer";
+      
+      await updateUserParameter(userId, tokenPath, {
         access_token,
         refresh_token,
-        expires_at: Date.now() + (expires_in * 1000)
+        expires_at: Date.now() + (expires_in * 1000),
+        twitch_user_id: twitchUserInfo.id,
+        twitch_login: twitchUserInfo.login,
+        twitch_display_name: twitchUserInfo.display_name
       });
-
+  
       // Clean up the pending auth
       global.pendingTwitchAuths.delete(state);
-
-      // Show success page
-      const successPage = await fs.readFile('./pages/success.html')
-
-      return reply.type('text/html').send(successPage);
+      
+      // Redirect back to the management page
+      return reply.redirect('/v1/auth/twitch/manage');
     } catch (error) {
       logger.log("Auth", `Error during Twitch token exchange: ${error.message}`);
       return reply.code(500).send('Failed to complete Twitch authorization');
     }
   });
-  fastify.get('/auth/setup', async (request, reply) => {
-    const setupForm = `<!doctype html>
-<html>
-  <head>
-    <title>Enspira Password Setup</title>
-    <style>
-      body {
-        font-family: Arial, sans-serif;
-        max-width: 500px;
-        margin: 0 auto;
-        padding: 20px;
-      }
-      .form-group {
-        margin-bottom: 15px;
-      }
-      label {
-        display: block;
-        margin-bottom: 5px;
-      }
-      input[type="text"],
-      input[type="email"],
-      input[type="password"] {
-        width: 100%;
-        padding: 8px;
-      }
-      button {
-        background: #6441a4;
-        color: white;
-        border: none;
-        padding: 10px 15px;
-        cursor: pointer;
-      }
-      .error {
-        color: #e74c3c;
-      }
-      .success {
-        color: #2ecc71;
-      }
-    </style>
-  </head>
-  <body>
-    <h2>Set Up Your Enspira Password</h2>
-    <p>
-      Enter your account details to set up your password for Twitch integration.
-    </p>
 
-    ${request.query.error ? `
-    <p class="error">${request.query.error}</p>
-    ` : ''} ${request.query.success ? `
-    <p class="success">${request.query.success}</p>
-    ` : ''}
+  fastify.get('/auth/twitch/status', async (request, reply) => {
+    const { userId } = request.query;
 
-    <form action="/api/v1/auth/setup" method="POST">
-      <div class="form-group">
-        <label for="user_id">User ID:</label>
-        <input type="text" id="user_id" name="user_id" required />
-      </div>
-      <div class="form-group">
-        <label for="email">Email Address:</label>
-        <input type="email" id="email" name="email" required />
-      </div>
-      <div class="form-group">
-        <label for="password">New Password:</label>
-        <input
-          type="password"
-          id="password"
-          name="password"
-          required
-          minlength="8"
-        />
-      </div>
-      <div class="form-group">
-        <label for="confirm_password">Confirm Password:</label>
-        <input
-          type="password"
-          id="confirm_password"
-          name="confirm_password"
-          required
-          minlength="8"
-        />
-      </div>
-      <button type="submit">Set Password</button>
-    </form>
-  </body>
-</html>
-`
-    reply.type('text/html').send(setupForm)
-    return reply;
-  });
-
-  fastify.post('/auth/setup', async (request, reply) => {
-    const { user_id, email, password, confirm_password } = request.body;
-
-    // Basic validation
-    if (!user_id || !email || !password || !confirm_password) {
-      return reply.redirect('/v1/auth/setup?error=All fields are required');
-    }
-
-    if (password !== confirm_password) {
-      return reply.redirect('/v1/auth/setup?error=Passwords do not match');
+    if (!userId) {
+      return reply.code(400).send('Missing user ID');
     }
 
     try {
-      // Get all users to find a match
-      const allUsers = await returnAPIKeys();
-      const user = allUsers.find(u => u.user_id === user_id && u.email === email);
+      const user = await returnAuthObject(userId);
 
       if (!user) {
-        return reply.redirect('/v1/auth/setup?error=User ID or email not found');
+        return reply.code(404).send('User not found');
       }
 
-      // Check if user already has password hash/salt set
-      if (user.webPasswordHash && user.webPasswordSalt) {
-        return reply.redirect('/v1/auth/setup?error=Password already set for this account');
+      // Get templates
+      const statusTemplate = await fs.readFile('./pages/twitch-status.html', 'utf-8');
+
+      // Format date for display
+      const formatDate = (timestamp) => {
+        if (!timestamp) return 'Never';
+        return new Date(timestamp).toLocaleString();
+      };
+
+      // Check bot connection
+      const botConnected = user.twitch_tokens?.bot?.access_token ? true : false;
+
+      // Check streamer connection
+      const streamerConnected = user.twitch_tokens?.streamer?.access_token ? true : false;
+
+      // Get scopes from config
+      const streamerScopes = await retrieveConfigValue("twitch.scopes.streamer");
+      const botScopes = await retrieveConfigValue("twitch.scopes.bot");
+
+      // Build template data
+      const templateData = {
+        username: user.user_name,
+
+        botConnected,
+        botName: user.twitch_tokens?.bot?.twitch_display_name || '',
+        botDate: formatDate(user.twitch_tokens?.bot?.expires_at),
+        botScopes: Array.isArray(botScopes) ? botScopes : (typeof botScopes === 'string' ? botScopes.split(' ') : []),
+
+        streamerConnected,
+        streamerName: user.twitch_tokens?.streamer?.twitch_display_name || '',
+        streamerDate: formatDate(user.twitch_tokens?.streamer?.expires_at),
+        streamerScopes: Array.isArray(streamerScopes) ? streamerScopes : (typeof streamerScopes === 'string' ? streamerScopes.split(' ') : []),
+      };
+
+      // Simple template rendering (in a real app, use a proper template engine)
+      let renderedTemplate = statusTemplate;
+
+      // Replace conditionals
+      renderedTemplate = renderedTemplate
+        .replace(/\{\{#if botConnected\}\}([\s\S]*?)\{\{else\}\}([\s\S]*?)\{\{\/if\}\}/g,
+          botConnected ? '$1' : '$2')
+        .replace(/\{\{#if streamerConnected\}\}([\s\S]*?)\{\{else\}\}([\s\S]*?)\{\{\/if\}\}/g,
+          streamerConnected ? '$1' : '$2');
+
+      // Replace variables
+      for (const [key, value] of Object.entries(templateData)) {
+        if (typeof value === 'string' || typeof value === 'number') {
+          renderedTemplate = renderedTemplate.replace(new RegExp(`\\{\\{${key}\\}\\}`, 'g'), value);
+        }
       }
 
-      // Hash the password
-      const passwordData = await hashPassword(password);
+      // Handle scope arrays
+      renderedTemplate = renderedTemplate
+        .replace(/\{\{#each botScopes\}\}([\s\S]*?)\{\{\/each\}\}/g,
+          templateData.botScopes.map(scope => {
+            return `<span class="scope">${scope}</span>`;
+          }).join('\n'))
+        .replace(/\{\{#each streamerScopes\}\}([\s\S]*?)\{\{\/each\}\}/g,
+          templateData.streamerScopes.map(scope => {
+            return `<span class="scope">${scope}</span>`;
+          }).join('\n'));
 
-      // Update user parameters
-      await updateUserParameter(user_id, "webPasswordHash", passwordData.hash);
-      await updateUserParameter(user_id, "webPasswordSalt", passwordData.salt);
+      // Fix return to dashboard button to point to the right location
+      renderedTemplate = renderedTemplate.replace(
+        '<a href="/" class="button">Return to Dashboard</a>',
+        '<a href="/api/v1/auth/twitch/login" class="button">Return to Login</a>'
+      );
 
-      // Success - redirect to login page or show success message
-      return reply.redirect('/v1/auth/setup?success=Password set successfully! You can now connect your Twitch account.');
+      // Fix links in the status page to use /api/v1 for HTML pages
+      renderedTemplate = renderedTemplate.replace(
+        'href="/v1/auth/twitch/login?type=bot"',
+        'href="/api/v1/auth/twitch/login?type=bot"'
+      );
+
+      renderedTemplate = renderedTemplate.replace(
+        'href="/v1/auth/twitch/login?type=streamer"',
+        'href="/api/v1/auth/twitch/login?type=streamer"'
+      );
+
+      reply.type('text/html').send(renderedTemplate);
+      return reply;
 
     } catch (error) {
-      logger.log("Auth", `Error setting up password: ${error.message}`);
-      return reply.redirect(`/v1/auth/setup?error=${encodeURIComponent('Server error. Please try again.')}`);
+      logger.error("Auth", `Error showing Twitch status: ${error.message}`);
+      return reply.code(500).send('Error loading Twitch status');
     }
   });
-
 }
 
-export async function refreshTwitchToken(userId) {
+export async function refreshTwitchToken(userId, tokenType = 'streamer') {
   try {
     const user = await returnAuthObject(userId);
 
-    if (!user.twitch_tokens || !user.twitch_tokens.refresh_token) {
-      logger.log("Twitch", `No refresh token found for user ${userId}`);
+    // Validate token type
+    if (tokenType !== 'bot' && tokenType !== 'streamer') {
+      logger.log("Twitch", `Invalid token type: ${tokenType}`);
+      return false;
+    }
+
+    // Get the tokens for the specified type
+    const tokens = user.twitch_tokens?.[tokenType];
+
+    if (!tokens || !tokens.refresh_token) {
+      logger.log("Twitch", `No refresh token found for ${tokenType} account of user ${userId}`);
       return false;
     }
 
     // Check if token is expired or close to expiring (within 10 minutes)
-    const isExpired = !user.twitch_tokens.expires_at ||
-      Date.now() > (user.twitch_tokens.expires_at - (10 * 60 * 1000));
+    const isExpired = !tokens.expires_at ||
+      Date.now() > (tokens.expires_at - (10 * 60 * 1000));
 
     if (!isExpired) {
-      return user.twitch_tokens.access_token; // Return existing token if still valid
+      return tokens.access_token; // Return existing token if still valid
     }
+
+    // Import axios if needed
+    const axios = (await import('axios')).default;
 
     // Refresh the token
     const response = await axios.post('https://id.twitch.tv/oauth2/token', {
       client_id: await retrieveConfigValue("twitch.clientId"),
       client_secret: await retrieveConfigValue("twitch.clientSecret"),
       grant_type: 'refresh_token',
-      refresh_token: user.twitch_tokens.refresh_token
+      refresh_token: tokens.refresh_token
     });
 
     const { access_token, refresh_token, expires_in } = response.data;
 
     // Update token in user record
-    await updateUserParameter(userId, "twitch_tokens", {
+    await updateUserParameter(userId, `twitch_tokens.${tokenType}`, {
+      ...tokens, // Keep existing data like user_id
       access_token,
       refresh_token,
       expires_at: Date.now() + (expires_in * 1000)
     });
 
-    logger.log("Twitch", `Refreshed token for user ${userId}`);
+    logger.log("Twitch", `Refreshed ${tokenType} token for user ${userId}`);
     return access_token;
   } catch (error) {
-    logger.log("Twitch", `Failed to refresh token: ${error.message}`);
+    logger.log("Twitch", `Failed to refresh ${tokenType} token: ${error.message}`);
 
     // If refresh fails, clear token data to force re-authentication
-    await updateUserParameter(userId, "twitch_tokens", null);
+    await updateUserParameter(userId, `twitch_tokens.${tokenType}`, null);
     return false;
   }
 }

@@ -83,6 +83,43 @@ async function updateEmptyTokens() {
   }
 }
 
+export async function ensureParameterPath(userId, parameterPath) {
+  try {
+    const user = await returnAuthObject(userId);
+    if (!user) {
+      logger.log("API", `User not found: ${userId}`);
+      return false;
+    }
+
+    const pathParts = parameterPath.split(".");
+    let current = user;
+    let currentPath = "";
+    
+    // Traverse and create path as needed
+    for (let i = 0; i < pathParts.length - 1; i++) {
+      const part = pathParts[i];
+      currentPath = currentPath ? `${currentPath}.${part}` : part;
+      
+      if (!current[part]) {
+        // This part of the path doesn't exist, create it
+        await updateUserParameter(userId, currentPath, {});
+        current[part] = {};
+      } else if (typeof current[part] !== "object") {
+        // This part exists but is not an object, which would cause problems
+        logger.log("API", `Cannot ensure path ${parameterPath}: ${currentPath} is not an object`);
+        return false;
+      }
+      
+      current = current[part];
+    }
+    
+    return true;
+  } catch (error) {
+    logger.log("API", `Error ensuring parameter path ${parameterPath}: ${error}`);
+    return false;
+  }
+}
+
 /**
  * Updates a specific parameter for a user in the cached auth keys and saves the changes to disk.
  *

@@ -20,6 +20,6 @@ export const logConsole = {
   log: (message) => logger.log("Console", message),
   info: (message) => logger.info(message),
   warn: (message) => logger.warn(message),
-  error: (message) => logger.error(message),
+  error: (message) => logger.error("Console", message),
   debug: (message) => logger.debug(message)
 };
