@@ -1,7 +1,7 @@
 // ffmpeg-processor.js - Fixed version with proper promise handling
 import fs from 'fs-extra';
 import path from 'path';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { logger } from './create-global-logger.js';
 
 /**
@@ -38,8 +38,8 @@ export function processAudio(inputFilePath, options = {}) {
         logger.debug("Audio", `Executing command: ${ffmpegCommand}`);
         
         // Execute ffmpeg command synchronously
-        execSync(ffmpegCommand, {
-            stdio: ['ignore', 'ignore', 'pipe'] // Capture stderr only for errors
+        execFileSync("ffmpeg", ["-y", "-i", inputFilePath, "-af", filterString, "-ar", "48000", "-ac", "1", "-codec:a", "pcm_s24le", "-threads", "4", outputFilePath], {
+            stdio: ['ignore'] // Capture stderr only for errors
         });
         
         // Check that the output file exists

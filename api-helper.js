@@ -83,7 +83,7 @@ async function updateEmptyTokens() {
   }
 }
 
-export async function ensureParameterPath(userId, parameterPath) {
+async function ensureParameterPath(userId, parameterPath) {
   try {
     const user = await returnAuthObject(userId);
     if (!user) {

@@ -278,7 +278,7 @@ async function twitchEventSubRoutes(fastify, options) {
 
             // Import axios if needed
             const axios = (await import('axios')).default;
-            
+
             // Get subscriptions from Twitch API
             const response = await axios.get(
                 'https://api.twitch.tv/helix/eventsub/subscriptions',
@@ -517,30 +517,38 @@ async function twitchEventSubRoutes(fastify, options) {
         try {
             const user = await returnAuthObject(userId);
 
-            if (!user || !user.twitch_tokens || !user.twitch_tokens.access_token) {
-                throw new Error('No Twitch access token available');
+            if (!user) {
+                throw new Error('User not found');
             }
 
             // Generate a new secret if one doesn't exist
-            if (!user.twitch_tokens.webhook_secret) {
+            if (!user.twitch_tokens?.streamer?.webhook_secret) {
                 const newSecret = crypto.randomBytes(32).toString('hex');
 
-                // Save the new secret
-                if (!user.twitch_tokens) {
-                    user.twitch_tokens = {};
-                }
+                // Ensure the path exists
+                await ensureParameterPath(userId, "twitch_tokens.streamer");
 
-                await updateUserParameter(userId, "twitch_tokens.webhook_secret", newSecret);
-                user.twitch_tokens.webhook_secret = newSecret;
+                // Save the new secret
+                await updateUserParameter(userId, "twitch_tokens.streamer.webhook_secret", newSecret);
             }
 
             // Default condition uses the broadcaster's ID
             if (Object.keys(condition).length === 0) {
-                condition = { broadcaster_user_id: user.twitch_tokens.user_id };
+                if (!user.twitch_tokens?.streamer?.twitch_user_id) {
+                    throw new Error('No broadcaster user ID available');
+                }
+                condition = { broadcaster_user_id: user.twitch_tokens.streamer.twitch_user_id };
             }
+
+            // Import needed functions
+            const { getAppAccessToken } = await import('../twitch-eventsub-manager.js');
+            const appToken = await getAppAccessToken();
 
             // Prepare the subscription payload
             const callbackUrl = `${await retrieveConfigValue("server.endpoints.external")}/api/v1/twitch/eventsub/${userId}`;
+
+            // Get fresh user data to ensure we have the webhook secret
+            const freshUser = await returnAuthObject(userId);
 
             const subscriptionBody = {
                 type,
@@ -549,7 +557,7 @@ async function twitchEventSubRoutes(fastify, options) {
                 transport: {
                     method: 'webhook',
                     callback: callbackUrl,
-                    secret: user.twitch_tokens.webhook_secret
+                    secret: freshUser.twitch_tokens.streamer.webhook_secret
                 }
             };
 
@@ -561,7 +569,7 @@ async function twitchEventSubRoutes(fastify, options) {
                 {
                     headers: {
                         'Client-ID': await retrieveConfigValue("twitch.clientId"),
-                        'Authorization': `Bearer ${user.twitch_tokens.access_token}`,
+                        'Authorization': `Bearer ${appToken}`, // Use app token here
                         'Content-Type': 'application/json'
                     }
                 }
@@ -571,14 +579,14 @@ async function twitchEventSubRoutes(fastify, options) {
             const subscriptionId = response.data.data[0].id;
 
             // Update user's subscriptions list
-            const subscriptions = user.twitch_tokens.subscriptions || [];
+            const subscriptions = freshUser.twitch_tokens.streamer.subscriptions || [];
             subscriptions.push({
                 id: subscriptionId,
                 type,
                 created_at: new Date().toISOString()
             });
 
-            await updateUserParameter(userId, "twitch_tokens.subscriptions", subscriptions);
+            await updateUserParameter(userId, "twitch_tokens.streamer.subscriptions", subscriptions);
 
             logger.log("Twitch", `Created EventSub subscription for ${userId}: ${type}`);
 
@@ -597,27 +605,27 @@ async function twitchEventSubRoutes(fastify, options) {
     async function handleEventSubRevocation(notification, userId) {
         try {
             const subscriptionId = notification.subscription.id;
-            
+
             if (!userId || !subscriptionId) {
                 logger.error("Twitch", "Missing userId or subscriptionId for revocation");
                 return;
             }
-            
+
             const user = await returnAuthObject(userId);
-            
+
             if (!user || !user.twitch_tokens?.streamer?.subscriptions) {
                 logger.error("Twitch", `No subscriptions found for user ${userId}`);
                 return;
             }
-            
+
             // Filter out the revoked subscription
             const subscriptions = user.twitch_tokens.streamer.subscriptions.filter(
                 sub => sub.id !== subscriptionId
             );
-            
+
             // Update the subscriptions list
             await updateUserParameter(userId, "twitch_tokens.streamer.subscriptions", subscriptions);
-            
+
             logger.log("Twitch", `Removed revoked subscription ${subscriptionId} for user ${userId}`);
         } catch (error) {
             logger.error("Twitch", `Error handling revocation: ${error.message}`);
@@ -643,6 +651,33 @@ async function processEvent(notification, userId) {
         await storeEventData(eventType, event, userId);
     } catch (error) {
         logger.error("Twitch", `Error processing event: ${error.message}`);
+    }
+}
+
+async function storeEventData(eventType, event, userId) {
+    try {
+        // Create directory for events if it doesn't exist
+        const userDir = `./data/events/${userId}`;
+        await fs.promises.mkdir(userDir, { recursive: true });
+
+        // Create a unique filename with timestamp
+        const timestamp = new Date().toISOString().replace(/:/g, '-');
+        const filename = `${userDir}/${eventType}_${timestamp}.json`;
+
+        // Store the event data
+        await fs.promises.writeFile(
+            filename,
+            JSON.stringify({
+                type: eventType,
+                data: event,
+                timestamp: new Date().toISOString()
+            }, null, 2)
+        );
+
+        logger.log("Twitch", `Stored ${eventType} event data for user ${userId}`);
+    } catch (error) {
+        logger.error("Twitch", `Error storing event data: ${error.message}`);
+        // Don't throw the error - this is a non-critical operation
     }
 }
 

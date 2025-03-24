@@ -15,6 +15,7 @@ import { retrieveConfigValue, loadConfig } from "./config-helper.js";
 import routes from './routes/v1.js';
 import './create-global-logger.js'; // This ensures the logger is properly set up
 import { logger } from './create-global-logger.js';
+const controller = new AbortController();
 
 // Create the fastify instance
 const createServer = async () => {
@@ -108,7 +109,7 @@ const createServer = async () => {
       // Download and process the audio
       const axios = (await import('axios')).default;
       const fs = await import('fs/promises');
-
+      
       // Create temp directory
       const tempDir = path.join(process.cwd(), 'temp');
       await fs.mkdir(tempDir, { recursive: true }).catch(() => { });
@@ -189,16 +190,30 @@ export async function preflightChecks() {
   try {
     // Axios import might be needed if not already imported
     const axios = (await import('axios')).default;
+    let ttsRes;
+    switch (await retrieveConfigValue("ttsPreference")) {
+      case "fish":
+        ttsRes = await axios.get(
+          await retrieveConfigValue("fishTTS.healthcheck.internal")
+        )
+        break;
+      case "alltalk":
+        ttsRes = await axios.get(
+          await retrieveConfigValue("alltalk.healthcheck.internal"),
+        );
+        break;
+      default:
+        ttsRes.status = 201
+        break;
+    }    
 
-    const allTalkRes = await axios.get(
-      await retrieveConfigValue("alltalk.healthcheck.internal"),
-    );
+    logger.log("API", `Current TTS engine: ${await retrieveConfigValue("ttsPreference")}, ${ttsRes.status == 200 ? "is alive." : "is not alive."}`)
 
     const databaseRes = await aiHelper.checkMilvusHealth();
 
     const checkResult = {
       llmStatuses: {
-        allTalkIsOnline: allTalkRes.status == 200 ? true : false,
+        allTalkIsOnline: ttsRes.status == 200 ? true : false,
         embeddingIsOnline: await aiHelper.checkEndpoint(
           await retrieveConfigValue("models.embedding.endpoint"),
           await retrieveConfigValue("models.embedding.apiKey"),

@@ -1,4 +1,4 @@
-// logger.js - Updated for single-process application
+// logger.js - Updated with fixed error handling
 import moment from "moment";
 import fs from 'fs/promises';
 
@@ -75,11 +75,11 @@ export const createLogger = (
 
   return {
     log: (source, message, type = "info") => logMessage(source, message, type),
-    system: (message) => logMessage(source, message, "info"),
-    error: (message) => logMessage(source, message, "error"),
-    warn: (message) => logMessage(source, message, "warn"),
-    info: (message) => logMessage(source, message, "info"),
-    debug: (message) => logMessage(source, message, "debug"),
+    system: (message) => logMessage("System", message, "info"),
+    error: (source, message) => logMessage(source, message, "error"),
+    warn: (source, message) => logMessage(source, message, "warn"),
+    info: (source, message) => logMessage(source, message, "info"),
+    debug: (source, message) => logMessage(source, message, "debug"),
     trace: (trace, dest) => writeTrace(trace, dest)
   };
 };

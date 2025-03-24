@@ -20,6 +20,56 @@ const SUBSCRIPTION_TYPES = [
 ];
 
 /**
+ * Get an app access token for Twitch API calls that require it
+ * @returns {Promise<string>} The app access token
+ */
+export async function getAppAccessToken() {
+    try {
+      // Check for cached token first
+      if (global.twitchAppToken && global.twitchAppTokenExpiry && Date.now() < global.twitchAppTokenExpiry) {
+        return global.twitchAppToken;
+      }
+  
+      logger.log("Twitch", "Getting new app access token");
+      
+      const clientId = await retrieveConfigValue("twitch.clientId");
+      const clientSecret = await retrieveConfigValue("twitch.clientSecret");
+      
+      if (!clientId || !clientSecret) {
+        throw new Error("Missing Twitch client ID or secret in configuration");
+      }
+      
+      const axios = (await import('axios')).default;
+      const response = await axios.post(
+        'https://id.twitch.tv/oauth2/token',
+        new URLSearchParams({
+          client_id: clientId,
+          client_secret: clientSecret,
+          grant_type: 'client_credentials'
+        }),
+        {
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded'
+          }
+        }
+      );
+  
+      const { access_token, expires_in } = response.data;
+      
+      // Cache the token with a safety margin
+      global.twitchAppToken = access_token;
+      global.twitchAppTokenExpiry = Date.now() + (expires_in * 900); // 90% of expiry time
+      
+      logger.log("Twitch", "Successfully obtained app access token");
+      return access_token;
+    } catch (error) {
+      logger.error("Twitch", `Failed to get app access token: ${error.message}`);
+      throw error;
+    }
+  }
+  
+
+/**
  * Main function to register EventSub for all users
  * @returns {Promise<{success: number, failures: number}>}
  */
@@ -238,131 +288,133 @@ export async function registerUserSubscriptions(userId) {
  */
 async function createSubscription(userId, type, condition) {
     try {
-        const user = await returnAuthObject(userId);
-
-        if (!user.twitch_tokens || !user.twitch_tokens.streamer) {
-            return { success: false, error: "No streamer account connected" };
+      const user = await returnAuthObject(userId);
+  
+      if (!user.twitch_tokens || !user.twitch_tokens.streamer) {
+        return { success: false, error: "No streamer account connected" };
+      }
+  
+      // Double-check webhook secret exists
+      if (!user.twitch_tokens.streamer.webhook_secret) {
+        // Try to create it one more time
+        const newSecret = crypto.randomBytes(32).toString('hex');
+        await updateUserParameter(userId, "twitch_tokens.streamer.webhook_secret", newSecret);
+        // Refresh user
+        const refreshedUser = await returnAuthObject(userId);
+        if (!refreshedUser.twitch_tokens.streamer.webhook_secret) {
+          return { success: false, error: "Could not create webhook secret" };
         }
-
-        // Double-check webhook secret exists
-        if (!user.twitch_tokens.streamer.webhook_secret) {
-            // Try to create it one more time
-            const newSecret = crypto.randomBytes(32).toString('hex');
-            await updateUserParameter(userId, "twitch_tokens.streamer.webhook_secret", newSecret);
-            // Refresh user
-            const refreshedUser = await returnAuthObject(userId);
-            if (!refreshedUser.twitch_tokens.streamer.webhook_secret) {
-                return { success: false, error: "Could not create webhook secret" };
-            }
+      }
+  
+      // Validate broadcaster_user_id
+      if (!condition.broadcaster_user_id) {
+        logger.error("Twitch", `Missing broadcaster_user_id for user ${userId}`);
+        return { success: false, error: "Missing broadcaster_user_id in condition" };
+      }
+  
+      // Get app access token instead of using user access token
+      const appAccessToken = await getAppAccessToken();
+      
+      // Debug log the condition
+      logger.log("Twitch", `Creating subscription for ${type} with condition: ${JSON.stringify(condition)}`);
+  
+      const callbackUrl = `${await retrieveConfigValue("server.endpoints.external")}/api/v1/twitch/eventsub/${userId}`;
+  
+      const subscriptionBody = {
+        type,
+        version: '1',
+        condition,
+        transport: {
+          method: 'webhook',
+          callback: callbackUrl,
+          secret: user.twitch_tokens.streamer.webhook_secret
         }
-
-        // Validate broadcaster_user_id
-        if (!condition.broadcaster_user_id) {
-            logger.error("Twitch", `Missing broadcaster_user_id for user ${userId}`);
-            return { success: false, error: "Missing broadcaster_user_id in condition" };
+      };
+  
+      // Debug log the full subscription request body
+      logger.log("Twitch", `Subscription request body: ${JSON.stringify(subscriptionBody)}`);
+  
+      // Import axios if needed
+      const axios = (await import('axios')).default;
+  
+      const response = await axios.post(
+        'https://api.twitch.tv/helix/eventsub/subscriptions',
+        subscriptionBody,
+        {
+          headers: {
+            'Client-ID': await retrieveConfigValue("twitch.clientId"),
+            'Authorization': `Bearer ${appAccessToken}`, // Use app token here
+            'Content-Type': 'application/json'
+          }
         }
-
-        // Debug log the condition
-        logger.log("Twitch", `Creating subscription for ${type} with condition: ${JSON.stringify(condition)}`);
-
-        const callbackUrl = `${await retrieveConfigValue("server.endpoints.external")}/api/v1/twitch/eventsub/${userId}`;
-
-        const subscriptionBody = {
-            type,
-            version: '1',
-            condition,
-            transport: {
-                method: 'webhook',
-                callback: callbackUrl,
-                secret: user.twitch_tokens.streamer.webhook_secret
-            }
-        };
-
-        // Debug log the full subscription request body
-        logger.log("Twitch", `Subscription request body: ${JSON.stringify(subscriptionBody)}`);
-
-        // Import axios if needed
-        const axios = (await import('axios')).default;
-
-        const response = await axios.post(
-            'https://api.twitch.tv/helix/eventsub/subscriptions',
-            subscriptionBody,
-            {
-                headers: {
-                    'Client-ID': await retrieveConfigValue("twitch.clientId"),
-                    'Authorization': `Bearer ${user.twitch_tokens.streamer.access_token}`,
-                    'Content-Type': 'application/json'
-                }
-            }
-        );
-
-        // Make sure subscriptions array exists
-        if (!user.twitch_tokens.streamer.subscriptions) {
-            await ensureParameterPath(userId, "twitch_tokens.streamer");
-            await updateUserParameter(userId, "twitch_tokens.streamer.subscriptions", []);
-        }
-
-        // Save subscription ID
-        const subscriptionId = response.data.data[0].id;
-
-        // Get the current subscriptions array
-        const currentUser = await returnAuthObject(userId);
-        const subscriptions = currentUser.twitch_tokens.streamer.subscriptions || [];
-
-        // Add new subscription and update
-        subscriptions.push({
-            id: subscriptionId,
-            type,
-            created_at: new Date().toISOString()
-        });
-
-        await updateUserParameter(userId, "twitch_tokens.streamer.subscriptions", subscriptions);
-
-        return { success: true, id: subscriptionId };
+      );
+  
+      // Make sure subscriptions array exists
+      if (!user.twitch_tokens.streamer.subscriptions) {
+        await ensureParameterPath(userId, "twitch_tokens.streamer");
+        await updateUserParameter(userId, "twitch_tokens.streamer.subscriptions", []);
+      }
+  
+      // Save subscription ID
+      const subscriptionId = response.data.data[0].id;
+  
+      // Get the current subscriptions array
+      const currentUser = await returnAuthObject(userId);
+      const subscriptions = currentUser.twitch_tokens.streamer.subscriptions || [];
+  
+      // Add new subscription and update
+      subscriptions.push({
+        id: subscriptionId,
+        type,
+        created_at: new Date().toISOString()
+      });
+  
+      await updateUserParameter(userId, "twitch_tokens.streamer.subscriptions", subscriptions);
+  
+      return { success: true, id: subscriptionId };
     } catch (error) {
-        // Detailed error logging
-        logger.error("Twitch", `Error creating subscription ${type} for ${userId}: ${error.message}`);
-
-        // Check for specific error conditions
-        if (error.response) {
-            const status = error.response.status;
-            const data = error.response.data;
-
-            logger.error("Twitch", `Response status: ${status}, data: ${JSON.stringify(data)}`);
-
-            // Handle common error cases
-            if (status === 400) {
-                // Bad request - likely an issue with the subscription format
-                if (data.message) {
-                    return { success: false, error: `Bad request: ${data.message}` };
-                }
-
-                // Check for specific error messages
-                if (data.error === "Bad Request" && data.message.includes("condition.broadcaster_user_id")) {
-                    return { success: false, error: "Invalid broadcaster ID" };
-                }
-            } else if (status === 401) {
-                // Unauthorized - token issue
-                // Try to refresh the token
-                logger.log("Twitch", `Attempting to refresh token for user ${userId}`);
-                const refreshed = await refreshToken(userId, 'streamer');
-                if (refreshed) {
-                    logger.log("Twitch", "Token refreshed, retry subscription creation");
-                    return { success: false, error: "Token refreshed, please try again" };
-                }
-                return { success: false, error: "Unauthorized. Token refresh failed." };
-            } else if (status === 403) {
-                // Forbidden - likely scope issues
-                return { success: false, error: "Insufficient permissions. Check Twitch scopes." };
-            } else if (status === 429) {
-                // Rate limited
-                return { success: false, error: "Rate limited by Twitch. Try again later." };
-            }
+      // Detailed error logging
+      logger.error("Twitch", `Error creating subscription ${type} for ${userId}: ${error.message}`);
+  
+      // Check for specific error conditions
+      if (error.response) {
+        const status = error.response.status;
+        const data = error.response.data;
+  
+        logger.error("Twitch", `Response status: ${status}, data: ${JSON.stringify(data)}`);
+  
+        // Handle common error cases
+        if (status === 400) {
+          // Bad request - likely an issue with the subscription format
+          if (data.message) {
+            return { success: false, error: `Bad request: ${data.message}` };
+          }
+  
+          // Check for specific error messages
+          if (data.error === "Bad Request" && data.message.includes("condition.broadcaster_user_id")) {
+            return { success: false, error: "Invalid broadcaster ID" };
+          }
+        } else if (status === 401) {
+          // Unauthorized - token issue
+          logger.log("Twitch", `Token unauthorized, trying to get a new app token`);
+          
+          // Clear cached token to force refresh next time
+          global.twitchAppToken = null;
+          global.twitchAppTokenExpiry = null;
+          
+          return { success: false, error: "Unauthorized. Token refresh needed." };
+        } else if (status === 403) {
+          // Forbidden - likely scope issues
+          return { success: false, error: "Insufficient permissions. Check Twitch API credentials." };
+        } else if (status === 429) {
+          // Rate limited
+          return { success: false, error: "Rate limited by Twitch. Try again later." };
         }
-
-        return { success: false, error: error.message };
+      }
+  
+      return { success: false, error: error.message };
     }
-}
+  }
 
 /**
  * Ensure token is valid and refresh if needed

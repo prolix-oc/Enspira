@@ -2018,11 +2018,32 @@ async function respondWithVoice(message, userId) {
   voiceForm.append("temperature", "0.80");
   voiceForm.append("repetition_penalty", "2.0");
 
+  const fishParameters = {
+    "text": message,
+    "chunk_length": 400,
+    "format": "wav",
+    "reference_id": userObj.fishTTSVoice,
+    "seed": null,
+    "normalize": false,
+    "streaming": false,
+    "max_new_tokens": 4096,
+    "top_p": 0.8,
+    "repetition_penalty": 1.15,
+    "temperature": 0.76
+  }
   try {
-    const res = await axios.post(
-      new URL(await retrieveConfigValue("alltalk.ttsGenEndpoint.internal")),
-      voiceForm,
-    );
+    let res;
+    if (userObj.useFishTTS) {
+      res = await axios.post(
+        new URL(await retrieveConfigValue("alltalk.ttsGenEndpoint.internal")),
+        fishParameters,
+      );
+    } else {
+      res = await axios.post(
+        new URL(await retrieveConfigValue("alltalk.ttsGenEndpoint.internal")),
+        voiceForm,
+      );
+    }
     const timeElapsed = (performance.now() - startTime) / 1000;
     logger.log("API", `Download URL for AT: ${await retrieveConfigValue("alltalk.ttsServeEndpoint.internal")}${res.data.output_file_url}`)
 
