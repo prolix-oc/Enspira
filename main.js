@@ -151,71 +151,75 @@ console.debug = (...args) => logger.debug(args.join(' '));
 
 // Setup status bar update function
 function updateStatusBar(apiActive = false, dbConnected = false, llmStackConnected = 0) {
-  const apiStatus = apiActive
-    ? "{left}REST: {green-fg}✓{/green-fg} Up{/left}"
-    : "{left}REST: {red-fg}❌{/red-fg} Down{/left}";
+  try {
+    const apiStatus = apiActive
+      ? "{left}REST: {green-fg}✓{/green-fg} Up{/left}"
+      : "{left}REST: {red-fg}❌{/red-fg} Down{/left}";
 
-  switch (dbConnected) {
-    case false:
-      screen.clearRegion(
-        dbStatus.left,
-        dbStatus.top,
-        dbStatus.width,
-        dbStatus.height,
-      );
-      dbStatus.setContent(`{left}DB: {red-fg}❌{/red-fg} Down{/left}`);
-      break;
-    case true:
-      screen.clearRegion(
-        dbStatus.left,
-        dbStatus.top,
-        dbStatus.width,
-        dbStatus.height,
-      );
-      dbStatus.setContent(`{left}DB: {green-fg}✓{/green-fg} Up{/left}`);
+    // Update DB status
+    try {
+      if (dbStatus) {
+        screen.clearRegion(
+          dbStatus.left,
+          dbStatus.top,
+          dbStatus.width,
+          dbStatus.height
+        );
+        dbStatus.setContent(dbConnected
+          ? `{left}DB: {green-fg}✓{/green-fg} Up{/left}`
+          : `{left}DB: {red-fg}❌{/red-fg} Down{/left}`
+        );
+      }
+    } catch (dbError) {
+      logger.error("UI", `Error updating DB status: ${dbError.message}`);
+    }
+
+    // Update LLM stack status
+    try {
+      if (servicesText && llmStackStatus) {
+        switch (llmStackConnected) {
+          case 0:
+            screen.title = "🌟 [DOWN] Enspira";
+            servicesText.setContent(`{bold}Services: {red-fg}Down{/red-fg}{/bold}`);
+            llmStackStatus.setContent(`{left}LLM: {red-fg}❌{/red-fg} Down{/left}`);
+            break;
+          case 1:
+            screen.title = "🌟 [DEGRADED] Enspira";
+            servicesText.setContent(`{bold}Services: {yellow-fg}Degraded{/yellow-fg}{/bold}`);
+            llmStackStatus.setContent(`{left}LLM: {yellow-fg}⚠{/yellow-fg}{/left}`);
+            break;
+          case 2:
+            screen.title = "🌟 [HEALTHY] Enspira";
+            servicesText.setContent(`{bold}Services: {green-fg}All Online{/green-fg}{/bold}`);
+            llmStackStatus.setContent(`{left}LLM: {green-fg}✓{/green-fg} Up{/left}`);
+            break;
+          default:
+            break;
+        }
+      }
+    } catch (llmError) {
+      logger.error("UI", `Error updating LLM status: ${llmError.message}`);
+    }
+
+    // Update API status
+    try {
+      if (apiStatusText) {
+        apiStatusText.setContent(apiStatus);
+      }
+    } catch (apiError) {
+      logger.error("UI", `Error updating API status: ${apiError.message}`);
+    }
+
+    // Render screen only once at the end
+    try {
       screen.render();
-      break;
-    default:
-      screen.clearRegion(
-        dbStatus.left,
-        dbStatus.top,
-        dbStatus.width,
-        dbStatus.height,
-      );
-      dbStatus.setContent(`{left}DB: ❓{/left}`);
-      screen.render();
-      break;
+    } catch (renderError) {
+      logger.error("UI", `Error rendering screen: ${renderError.message}`);
+    }
+  } catch (error) {
+    logger.error("UI", `Error in updateStatusBar: ${error.message}`);
+    // Don't propagate UI errors
   }
-
-  switch (llmStackConnected) {
-    case 0:
-      screen.title = "🌟 [DOWN] Enspira";
-      servicesText.setContent("");
-      servicesText.setContent(`{bold}Services: {red-fg}Down{/red-fg}{/bold}`);
-      llmStackStatus.setContent("");
-      llmStackStatus.setContent(`{left}LLM: {red-fg}❌{/red-fg} Down{/left}`);
-      break;
-    case 1:
-      screen.title = "🌟 [DEGRADED] Enspira";
-      servicesText.setContent("");
-      servicesText.setContent(`{bold}Services: {yellow-fg}Degraded{/yellow-fg}{/bold}`);
-      llmStackStatus.setContent("");
-      llmStackStatus.setContent(`{left}LLM: {yellow-fg}⚠{/yellow-fg}{/left}`);
-      break;
-    case 2:
-      screen.title = "🌟 [HEALTHY] Enspira";
-      servicesText.setContent("");
-      servicesText.setContent(`{bold}Services: {green-fg}All Online{/green-fg}{/bold}`);
-      llmStackStatus.setContent("");
-      llmStackStatus.setContent(`{left}LLM: {green-fg}✓{/green-fg} Up{/left}`);
-      break;
-    default:
-      break;
-  }
-
-  apiStatusText.setContent("");
-  apiStatusText.setContent(apiStatus);
-  screen.render();
 }
 
 // Handle scrolling and navigation events
@@ -615,35 +619,49 @@ async function initializeApp() {
       }
     });
 
-    if (failed == available) {
-      logger.log(
-        "System",
-        "Pre-flight checks failed for all LLM services. Check your URLs and API keys, and try again.",
-      );
-      updateStatusBar(status.restIsOnline, status.dbIsOnline, 0);
-    } else if (failed < available && failed > 0) {
-      logger.log(
-        "System",
-        "Some pre-flight checks failed for LLM services. Check your URLs and API keys, and try again.",
-      );
-      updateStatusBar(status.restIsOnline, status.dbIsOnline, 1);
-    } else {
-      logger.log("System", "All pre-flight checks for LLM services passed.");
-      updateStatusBar(status.restIsOnline, status.dbIsOnline, 2);
-    }
-    const { registerAllUsersEventSub } = await import('./twitch-eventsub-manager.js');
-    logger.log("System", "Registering Twitch EventSub subscriptions...");
     try {
+      if (failed == available) {
+        logger.log(
+          "System",
+          "Pre-flight checks failed for all LLM services. Check your URLs and API keys, and try again.",
+        );
+        updateStatusBar(status.restIsOnline, status.dbIsOnline, 0);
+      } else if (failed < available && failed > 0) {
+        logger.log(
+          "System",
+          "Some pre-flight checks failed for LLM services. Check your URLs and API keys, and try again.",
+        );
+        updateStatusBar(status.restIsOnline, status.dbIsOnline, 1);
+      } else {
+        logger.log("System", "All pre-flight checks for LLM services passed.");
+        updateStatusBar(status.restIsOnline, status.dbIsOnline, 2);
+      }
+    } catch (uiError) {
+      logger.error("System", `Error updating status bar UI: ${uiError.message}`);
+      // Continue execution even if UI update fails
+    }
+
+    try {
+      logger.log("System", "Importing Twitch EventSub manager...");
+      const { registerAllUsersEventSub } = await import('./twitch-eventsub-manager.js');
+
+      logger.log("System", "Registering Twitch EventSub subscriptions...");
       const eventSubResults = await registerAllUsersEventSub();
       logger.log("System", `EventSub registration complete: ${eventSubResults.success} successful, ${eventSubResults.failures} failed`);
     } catch (eventSubError) {
-      logger.error("System", `Error registering EventSub: ${eventSubError.message}`);
+      logger.error("System", `Error with Twitch EventSub: ${eventSubError.message}`);
+      // Continue execution even if EventSub registration fails
     }
+
     logger.log("System", "Enspira is fully initialized and ready!");
     return { server, status };
   } catch (error) {
     logger.error("System", `Failed to initialize application: ${error.message}`);
-    updateStatusBar(false, false, 0);
+    try {
+      updateStatusBar(false, false, 0);
+    } catch (uiError) {
+      // Ignore UI errors during failure state
+    }
     throw error;
   }
 }

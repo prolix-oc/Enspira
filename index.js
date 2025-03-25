@@ -188,27 +188,30 @@ const createServer = async () => {
  */
 export async function preflightChecks() {
   try {
-    // Axios import might be needed if not already imported
     const axios = (await import('axios')).default;
-    let ttsRes;
-    switch (await retrieveConfigValue("ttsPreference")) {
-      case "fish":
-        ttsRes = await axios.get(
-          await retrieveConfigValue("fishTTS.healthcheck.internal")
-        )
-        break;
-      case "alltalk":
-        ttsRes = await axios.get(
-          await retrieveConfigValue("alltalk.healthcheck.internal"),
-        );
-        break;
-      default:
-        ttsRes.status = 201
-        break;
-    }    
+    let ttsRes = { status: 0 };
+    const ttsPreference = await retrieveConfigValue("ttsPreference");
+    try {
+      switch (ttsPreference) {
+        case "fish":
+          ttsRes = await axios.get(
+            await retrieveConfigValue("fishTTS.healthcheck.internal")
+          );
+          break;
+        case "alltalk":
+          ttsRes = await axios.get(
+            await retrieveConfigValue("alltalk.healthcheck.internal")
+          );
+          break;
+        default:
+          ttsRes = { status: 200 };
+          break;
+      }    
+    } catch (ttsError) {
+      logger.log("API", `TTS healthcheck error: ${ttsError.message}`);
+    }
 
-    logger.log("API", `Current TTS engine: ${await retrieveConfigValue("ttsPreference")}, ${ttsRes.status == 200 ? "is alive." : "is not alive."}`)
-
+    logger.log("API", `Current TTS engine: ${ttsPreference}, ${ttsRes.status == 200 ? "is alive." : "is not alive."}`);
     const databaseRes = await aiHelper.checkMilvusHealth();
 
     const checkResult = {

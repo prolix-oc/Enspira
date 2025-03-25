@@ -83,42 +83,99 @@ async function updateEmptyTokens() {
   }
 }
 
-async function ensureParameterPath(userId, parameterPath) {
+/**
+ * Ensures a nested parameter path exists in the user object
+ * @param {string} userId - The user ID
+ * @param {string} parameterPath - The dot-notation path to ensure exists
+ * @returns {Promise<boolean>} - True if successful, false otherwise
+ */
+export async function ensureParameterPath(userId, parameterPath) {
   try {
+    // Get the user object
     const user = await returnAuthObject(userId);
     if (!user) {
-      logger.log("API", `User not found: ${userId}`);
+      logger.error("API", `User not found: ${userId}`);
       return false;
     }
 
+    // Split the path into segments
     const pathParts = parameterPath.split(".");
-    let current = user;
+
+    // Start with the user object
     let currentPath = "";
-    
-    // Traverse and create path as needed
-    for (let i = 0; i < pathParts.length - 1; i++) {
+    let current = user;
+
+    // For each path segment
+    for (let i = 0; i < pathParts.length; i++) {
       const part = pathParts[i];
+
+      // Update the current path for logging
       currentPath = currentPath ? `${currentPath}.${part}` : part;
-      
-      if (!current[part]) {
-        // This part of the path doesn't exist, create it
-        await updateUserParameter(userId, currentPath, {});
-        current[part] = {};
-      } else if (typeof current[part] !== "object") {
-        // This part exists but is not an object, which would cause problems
-        logger.log("API", `Cannot ensure path ${parameterPath}: ${currentPath} is not an object`);
+
+      // If we're at the last segment, we don't need to create anything
+      // We just verify it exists or will be created by the caller
+      if (i === pathParts.length - 1) {
+        break;
+      }
+
+      // If this segment doesn't exist in the user object
+      if (current[part] === undefined) {
+        logger.log("API", `Creating missing path segment: ${currentPath}`);
+
+        // Create a temporary clone of the user object to work with
+        const userClone = JSON.parse(JSON.stringify(user));
+
+        // Navigate to the right position in the clone
+        let pointer = userClone;
+        for (let j = 0; j < i; j++) {
+          pointer = pointer[pathParts[j]];
+        }
+
+        // Add the missing object
+        pointer[part] = {};
+
+        // Update the whole user object with this change
+        const updated = await updateUserParameter(userId, "", userClone);
+        if (!updated) {
+          logger.error("API", `Failed to update user with new path segment: ${currentPath}`);
+          return false;
+        }
+
+        // Get a fresh copy of the user object
+        const updatedUser = await returnAuthObject(userId);
+        if (!updatedUser) {
+          logger.error("API", `Failed to reload user after path update: ${userId}`);
+          return false;
+        }
+
+        // Update our working variables
+        current = updatedUser;
+        for (let j = 0; j <= i; j++) {
+          if (current[pathParts[j]] === undefined) {
+            logger.error("API", `Path segment still missing after update: ${pathParts.slice(0, j + 1).join('.')}`);
+            return false;
+          }
+          current = current[pathParts[j]];
+        }
+      } else {
+        // This segment exists, just advance to it
+        current = current[part];
+      }
+
+      // Verify the current position is an object
+      if (typeof current !== "object" || current === null) {
+        logger.error("API", `Path segment is not an object: ${currentPath}`);
         return false;
       }
-      
-      current = current[part];
     }
-    
+
     return true;
   } catch (error) {
-    logger.log("API", `Error ensuring parameter path ${parameterPath}: ${error}`);
+    logger.error("API", `Error ensuring parameter path ${parameterPath}: ${error.message}`);
     return false;
   }
 }
+
 
 /**
  * Updates a specific parameter for a user in the cached auth keys and saves the changes to disk.
@@ -128,82 +185,93 @@ async function ensureParameterPath(userId, parameterPath) {
  * @param {any} newValue - The new value for the parameter.
  * @returns {Promise<boolean>} - True if the update was successful, false otherwise.
  */
-async function updateUserParameter(userId, parameterPath, newValue) {
+/**
+ * Updates a user parameter directly in the cached auth data and on disk
+ * @param {string} userId - The user ID
+ * @param {string} parameter - The parameter to update (empty string for entire user object)
+ * @param {any} newValue - The new value
+ * @returns {Promise<boolean>} - True if successful, false otherwise
+ */
+async function updateUserParameter(userId, parameter, newValue) {
   try {
     if (!cachedAuthKeys) {
-      await loadAPIKeys(); // Ensure auth keys are loaded
+      await loadAPIKeys();
     }
 
-    const userIndex = cachedAuthKeys.findIndex(
-      (user) => user.user_id === userId,
-    );
-
+    const userIndex = cachedAuthKeys.findIndex((user) => user.user_id === userId);
     if (userIndex === -1) {
-      logger.log("API", `User not found: ${userId}`);
-      return false; // User not found
+      logger.error("API", `User not found: ${userId}`);
+      return false;
     }
 
-    const pathParts = parameterPath.split(".");
+    // If parameter is empty, replace the entire user object
+    if (!parameter) {
+      cachedAuthKeys[userIndex] = newValue;
+      await saveAuthToDisk();
+      return true;
+    }
+
+    // Otherwise, navigate to and update the specified parameter
+    const pathParts = parameter.split(".");
     let current = cachedAuthKeys[userIndex];
 
-    // Traverse the object structure based on the path
+    // Navigate to the container object
     for (let i = 0; i < pathParts.length - 1; i++) {
-      if (!current[pathParts[i]] || typeof current[pathParts[i]] !== "object") {
-        logger.log(
-          "API",
-          `Invalid parameter path: ${parameterPath} for user ${userId}`,
-        );
-        return false; // Invalid path
+      const part = pathParts[i];
+
+      if (current[part] === undefined) {
+        // Create missing intermediate objects
+        current[part] = {};
+      } else if (typeof current[part] !== "object" || current[part] === null) {
+        logger.error("API", `Cannot update parameter: ${pathParts.slice(0, i + 1).join('.')} is not an object`);
+        return false;
       }
-      current = current[pathParts[i]];
+
+      current = current[part];
     }
 
+    // Update the value
     const lastPart = pathParts[pathParts.length - 1];
-    if (current.hasOwnProperty(lastPart)) {
-      // Update the parameter value
-      current[lastPart] = newValue;
-      await saveAuthToDisk(); // Save the updated data to disk
-      logger.log(
-        "API",
-        `Updated parameter '${parameterPath}' for user ${userId} to '${newValue}'.`,
-      );
-      return true; // Update successful
-    } else {
-      logger.log(
-        "API",
-        `Parameter '${parameterPath}' not found for user ${userId}.`,
-      );
-      return false; // Parameter not found
-    }
+    current[lastPart] = newValue;
+
+    // Save changes to disk
+    await saveAuthToDisk();
+    logger.log("API", `Updated parameter '${parameter}' for user ${userId}`);
+    return true;
   } catch (error) {
-    logger.log("API", `Error updating user parameter: ${error}`);
-    return false; // Error during update
+    logger.error("API", `Error updating user parameter: ${error.message}`);
+    return false;
   }
 }
 
 async function getAndStoreLatLong(ipAddr, userId) {
-  const response = await axios.get(
-    new URL(
-      `http://ip-api.com/json/${ipAddr}?fields=status,message,country,regionName,lat,lon,timezone`,
-    ),
-  );
-  if (response.data.status === "fail") {
-    if (response.data.message === "private range") {
-      logger.log("API", "Request from local network determined.");
-      return false;
-    } else if (response.data.message === "reserved range") {
-      logger.log("API", "Request from the feds (???) determined.");
-      return false;
+  try {
+    const response = await axios.get(
+      new URL(
+        `http://ip-api.com/json/${ipAddr}?fields=status,message,country,regionName,lat,lon,timezone`,
+      ),
+    );
+    if (response.data.status === "fail") {
+      if (response.data.message === "private range") {
+        logger.log("API", "Request from local network determined.");
+        return false;
+      } else if (response.data.message === "reserved range") {
+        logger.log("API", "Request from the feds (???) determined.");
+        return false;
+      } else {
+        logger.log("API", "Bad request for IP information.");
+        return false;
+      }
     } else {
-      logger.log("API", "Bad request for IP information.");
-      return false;
+      const { lat, lon, timezone } = response.data; // FIXED: Changed request.data to response.data
+      await updateUserParameter(userId, "latitude", lat);
+      await updateUserParameter(userId, "longitude", lon);
+      await updateUserParameter(userId, "timeZone", timezone);
+      return { latitude: lat, longitude: lon, timezone: timezone };
     }
-  } else {
-    const { lat, lon, timezone } = request.data;
-    await updateUserParameter(userId, "latitude", lat);
-    await updateUserParameter(userId, "longitude", lon);
-    await updateUserParameter(userId, "timeZone", timezone);
-    return { latitude: lat, longitude: lon, timezone: timezone };
+  } catch (error) {
+    logger.log("API", `Error in getAndStoreLatLong: ${error.message}`);
+    return false;
   }
 }
 
@@ -353,9 +421,8 @@ async function fetchWeather() {
                       ? ` It's severely windy outside at ${windSpeed} miles per hour.`
                       : ` It is extremely windy outside, almost like a hurricane, at ${windSpeed} miles per hour.`;
 
-          const timeOfDay = `It is currently ${
-            current["is_day"] ? "day time." : "night time."
-          }`;
+          const timeOfDay = `It is currently ${current["is_day"] ? "day time." : "night time."
+            }`;
           const currWeather = `## Current Weather:\nHere are the current weather conditions for where you and ${user.user_name} live:\n${timeOfDay}${tempString}${cloudString}${rainString}${snowString}${windString}`;
 
           const userDir = path.join("./world_info", user.user_id);
@@ -425,7 +492,7 @@ const funFact = async () => {
 const blackRandomFact = async () => {
   try {
     const response = await axios.get(
-      "https://rest.blackhistoryapi.io/fact/random", { headers: {"x-api-key": await retrieveConfigValue("funFacts.key")}}
+      "https://rest.blackhistoryapi.io/fact/random", { headers: { "x-api-key": await retrieveConfigValue("funFacts.key") } }
     );
     return response.data.Results[0].text;
   } catch (err) {

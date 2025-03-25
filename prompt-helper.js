@@ -855,8 +855,8 @@ const replyStripped = async (message, userId) => {
     .replace(/\(500 characters\)/g, "") // Remove (500 characters)
     .replace(/\\/g, "") // Remove backslashes
     .replace(/\p{Emoji_Presentation}|\p{Extended_Pictographic}/gu, "") // Remove only graphical emojis
-    .replace(/\s+/g, " "); // Replace multiple spaces with a single space
-
+    .replace(/\s+/g, " ") // Replace multiple spaces with a single space
+    .replace("shoutout", "shout out")
   // Remove unmatched quotes ONLY at the beginning or end of the string
   formatted = formatted.replace(/^['"]|['"]$/g, ""); // Trim unmatched quotes at start and end
 

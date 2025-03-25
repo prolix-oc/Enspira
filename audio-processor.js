@@ -38,7 +38,7 @@ export function processAudio(inputFilePath, options = {}) {
         logger.debug("Audio", `Executing command: ${ffmpegCommand}`);
         
         // Execute ffmpeg command synchronously
-        execFileSync("ffmpeg", ["-y", "-i", inputFilePath, "-af", filterString, "-ar", "48000", "-ac", "1", "-codec:a", "pcm_s24le", "-threads", "4", outputFilePath], {
+        execFileSync("ffmpeg", ["-nostdin", "-y", "-i", inputFilePath, "-af", filterString, "-ac", "1", "-threads", "8", outputFilePath], {
             stdio: ['ignore'] // Capture stderr only for errors
         });
         

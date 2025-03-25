@@ -1665,48 +1665,6 @@ async function checkAndCreateCollection(collection, userId) {
 }
 
 /**
- * Sends file content to a vectorization service to convert it into a structured format.
- * @param {object} fileContent - The content of the file to be vectorized.
- * @returns {Promise<object>} - An object containing the relation, content, filename, and position.
- */
-// async function sendFileForVectorization(fileContent) {
-//   try {
-//     const vectorInstruct = await fs.readFile(
-//       "./instructs/helpers/convert.prompt",
-//       "utf-8",
-//     );
-//     const openai = new OpenAI({
-//       baseURL: await retrieveConfigValue("models.conversion.endpoint"),
-//       apiKey: await retrieveConfigValue("models.conversion.apiKey"),
-//     });
-
-//     const completion = await openai.chat.completions.create({
-//       model: await retrieveConfigValue("models.conversion.model"),
-//       messages: [
-//         {
-//           role: "system",
-//           content: vectorInstruct,
-//         },
-//         {
-//           role: "user",
-//           content: JSON.stringify(fileContent.content),
-//         },
-//       ],
-//     });
-//     const returnArray = completion.choices[0].message.content.split(";");
-//     return {
-//       relation: returnArray[0],
-//       content: fileContent.content,
-//       filename: returnArray[1],
-//       position: fileContent.position,
-//     };
-//   } catch (error) {
-//     logger.log("Vectorization", `Error vectorizing file content: ${error}`);
-//     return null; // Indicate failure
-//   }
-// }
-
-/**
  * Compares local and remote documents and determines necessary actions (insert, update, delete).
  *
  * @param {string} directory - The directory containing the local files.
@@ -1804,14 +1762,6 @@ async function compareDocuments(directory, userId, collectionName) {
   return result;
 }
 
-/**
- * Processes files in a directory, comparing them with the corresponding Milvus collection,
- * and performs necessary operations like upsertion and deletions.
- *
- * @param {string} directory - The directory containing the files to process.
- * @param {string} userId - The user ID.
- * @returns {Promise<void>}
- */
 /**
  * Processes files in a directory, comparing them with the corresponding Milvus collection,
  * and performs necessary operations like upsertion and deletions.
@@ -1998,111 +1948,132 @@ async function respondWithoutContext(message, userId) {
 async function respondWithVoice(message, userId) {
   const startTime = performance.now();
 
+  // Process acronyms in the message
   const fixedAcro = await fixTTSString(message);
   const userObj = await returnAuthObject(userId);
+  
   logger.log(
     "LLM",
-    `Converted ${fixedAcro.acronymCount} acronyms in ${userObj.bot_name}'s TTS message.`,
+    `Converted ${fixedAcro.acronymCount} acronyms in ${userObj.bot_name}'s TTS message.`
   );
 
-  const voiceForm = new FormData();
-  voiceForm.append("text_input", fixedAcro.fixedString);
-  voiceForm.append("text_filtering", "standard");
-  voiceForm.append("character_voice_gen", userObj.speaker_file);
-  voiceForm.append("narrator_enabled", "false");
-  voiceForm.append("text_not_inside", "character");
-  voiceForm.append("language", "en");
-  voiceForm.append("output_file_name", userObj.user_id);
-  voiceForm.append("output_file_timestamp", "true");
-  voiceForm.append("autoplay", "false");
-  voiceForm.append("temperature", "0.80");
-  voiceForm.append("repetition_penalty", "2.0");
-
-  const fishParameters = {
-    "text": message,
-    "chunk_length": 400,
-    "format": "wav",
-    "reference_id": userObj.fishTTSVoice,
-    "seed": null,
-    "normalize": false,
-    "streaming": false,
-    "max_new_tokens": 4096,
-    "top_p": 0.8,
-    "repetition_penalty": 1.15,
-    "temperature": 0.76
-  }
   try {
-    let res;
-    if (userObj.useFishTTS) {
-      res = await axios.post(
-        new URL(await retrieveConfigValue("alltalk.ttsGenEndpoint.internal")),
+    // Create temp directory
+    const tempDir = path.join(__dirname, 'temp');
+    await fs.mkdir(tempDir, { recursive: true }).catch(() => {});
+    
+    // Get the TTS preference from config
+    const ttsPreference = await retrieveConfigValue("ttsPreference");
+    
+    let audioFilePath;
+    let outputFileName;
+    
+    // Generate audio based on the preferred TTS engine
+    if (ttsPreference === "fish") {
+      // Fish TTS parameters
+      const fishParameters = {
+        "text": fixedAcro.fixedString,
+        "chunk_length": 400,
+        "format": "wav",
+        "reference_id": userObj.fishTTSVoice,
+        "seed": null,
+        "normalize": false,
+        "streaming": false,
+        "max_new_tokens": 4096,
+        "top_p": 0.82,
+        "repetition_penalty": 1.2,
+        "temperature": 0.75
+      };
+      
+      // Make the API request, specifying responseType as arraybuffer for binary data
+      const res = await axios.post(
+        new URL(await retrieveConfigValue("fishTTS.ttsGenEndpoint.internal")),
         fishParameters,
+        { responseType: 'arraybuffer' }
       );
+      
+      // Generate a filename and save the audio data directly
+      outputFileName = `fish_${userId}_${Date.now()}.wav`;
+      const tempFilePath = path.join('./final', outputFileName);
+      await fs.writeFile(tempFilePath, Buffer.from(res.data));
+      
+      audioFilePath = tempFilePath;
+      
     } else {
-      res = await axios.post(
+      // AllTalk implementation
+      const voiceForm = new FormData();
+      voiceForm.append("text_input", fixedAcro.fixedString);
+      voiceForm.append("text_filtering", "standard");
+      voiceForm.append("character_voice_gen", userObj.speaker_file);
+      voiceForm.append("narrator_enabled", "false");
+      voiceForm.append("text_not_inside", "character");
+      voiceForm.append("language", "en");
+      voiceForm.append("output_file_name", userObj.user_id);
+      voiceForm.append("output_file_timestamp", "true");
+      voiceForm.append("autoplay", "false");
+      voiceForm.append("temperature", "0.9");
+      voiceForm.append("repetition_penalty", "1.5");
+      
+      const res = await axios.post(
         new URL(await retrieveConfigValue("alltalk.ttsGenEndpoint.internal")),
-        voiceForm,
+        voiceForm
       );
-    }
-    const timeElapsed = (performance.now() - startTime) / 1000;
-    logger.log("API", `Download URL for AT: ${await retrieveConfigValue("alltalk.ttsServeEndpoint.internal")}${res.data.output_file_url}`)
-
-    if (userObj.ttsUpsamplePref) {
+      
+      // For AllTalk, download the file from the provided URL
       const fileRes = await axios({
         method: 'GET',
         url: `${await retrieveConfigValue("alltalk.ttsServeEndpoint.internal")}${res.data.output_file_url}`,
         responseType: 'arraybuffer'
       });
+      
+      outputFileName = `alltalk_${userId}_${Date.now()}.wav`;
+      const tempFilePath = path.join('./final', outputFileName);
+      await fs.writeFile(tempFilePath, Buffer.from(fileRes.data));
+      
+      audioFilePath = tempFilePath;
+    }
 
-      const tempDir = path.join(__dirname, 'temp');
-      await fs.mkdir(tempDir, { recursive: true });
-      const tempFilePath = path.join(tempDir, `tts_${Date.now()}.wav`);
+    const timeElapsed = (performance.now() - startTime) / 1000;
+    
+    // Process the audio if user has upsampling preference enabled
+    if (userObj.ttsUpsamplePref) {
+      try {
+        // Process the audio file with the specified preset
+        const processedFilePath = processAudio(audioFilePath, {
+          preset: userObj.ttsEqPref || 'clarity',
+          userId: userObj.user_id
+        });
+        
+        logger.log("API", `Processed audio file to ${processedFilePath}`);
 
-      await fs.writeFile(tempFilePath, fileRes.data);
-
-      if (res.status === 200 && fileRes.status == 200) {
-        try {
-          // Process the audio file (synchronous operation)
-          const processedFilePath = processAudio(tempFilePath, {
-            preset: userObj.ttsEqPref || 'clarity',
-            userId: userObj.user_id
-          });
-
-          logger.log("API", `Processed audio file to ${processedFilePath}`);
-
-          // Clean up temp file
-          await fs.unlink(tempFilePath).catch(() => { });
-
-          let audioUrl;
-          if (userObj.is_local) {
-            audioUrl = `${await retrieveConfigValue("alltalk.ttsServeEndpoint.internal")}${processedFilePath}`;
-          } else {
-            audioUrl = `${await retrieveConfigValue("alltalk.ttsServeEndpoint.external")}${processedFilePath}`;
-          }
-          logger.log("LLM", `TTS request completed in ${timeElapsed.toFixed(2)} seconds.`);
-          return audioUrl;
-
-        } catch (processingError) {
-          logger.error("API", `Error processing audio: ${processingError.message}`);
-          return null
-        }
-      } else {
-        console.error(`Request failed with: ${res.data}`);
-        return { error: `TTS request failed with status: ${res.status}` };
+        // Return the appropriate URL
+        const serviceEndpoint = ttsPreference === "fish" ? "fishTTS" : "alltalk";
+        const audioUrl = userObj.is_local
+          ? `${await retrieveConfigValue(`${serviceEndpoint}.ttsServeEndpoint.internal`)}${processedFilePath}`
+          : `${await retrieveConfigValue(`${serviceEndpoint}.ttsServeEndpoint.external`)}${processedFilePath}`;
+        
+        logger.log("LLM", `TTS request completed in ${timeElapsed.toFixed(2)} seconds.`);
+        return audioUrl;
+      } catch (processingError) {
+        logger.error("API", `Error processing audio: ${processingError.message}`);
+        // Return the original, unprocessed file path if processing fails
+        const serviceEndpoint = ttsPreference === "fish" ? "fishTTS" : "alltalk";
+        return userObj.is_local
+          ? `${await retrieveConfigValue(`${serviceEndpoint}.ttsServeEndpoint.internal`)}/${path.basename(audioFilePath)}`
+          : `${await retrieveConfigValue(`${serviceEndpoint}.ttsServeEndpoint.external`)}/${path.basename(audioFilePath)}`;
       }
     } else {
-      let audioUrl;
-      if (userObj.is_local) {
-        audioUrl = `${await retrieveConfigValue("alltalk.ttsServeEndpoint.internal")}${res.data.output_file_url}`;
-      } else {
-        audioUrl = `${await retrieveConfigValue("alltalk.ttsServeEndpoint.external")}${res.data.output_file_url}`;
-      }
+      // For non-processed audio, just return a URL to the saved file
+      const serviceEndpoint = ttsPreference === "fish" ? "fishTTS" : "alltalk";
+      const audioUrl = userObj.is_local
+        ? `${await retrieveConfigValue(`${serviceEndpoint}.ttsServeEndpoint.internal`)}/${path.basename(audioFilePath)}`
+        : `${await retrieveConfigValue(`${serviceEndpoint}.ttsServeEndpoint.external`)}/${path.basename(audioFilePath)}`;
+      
       logger.log("LLM", `TTS request completed in ${timeElapsed.toFixed(2)} seconds.`);
       return audioUrl;
     }
-
   } catch (error) {
-    console.error("Error during TTS request:", error);
+    logger.error("TTS", `Error during TTS request: ${error.message}`);
     return { error: error.message };
   }
 }

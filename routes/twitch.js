@@ -636,45 +636,47 @@ async function twitchEventSubRoutes(fastify, options) {
 async function processEvent(notification, userId) {
     try {
         const eventType = notification.subscription.type;
+        const eventVersion = notification.subscription.version || '1'; // Default to v1 if not specified
         const event = notification.event;
 
         // Log the event
-        logger.log("Twitch", `Processing ${eventType} event for user ${userId}`);
+        logger.log("Twitch", `Processing ${eventType} (v${eventVersion}) event for user ${userId}`);
 
         // Import the event processor from the manager
         const { processEventSubNotification } = await import('../twitch-eventsub-manager.js');
 
-        // Process the event
-        await processEventSubNotification(eventType, event, userId);
+        // Process the event with version information
+        await processEventSubNotification(eventType, event, userId, eventVersion);
 
         // Store event data for debugging/analytics
-        await storeEventData(eventType, event, userId);
+        await storeEventData(eventType, event, userId, eventVersion);
     } catch (error) {
         logger.error("Twitch", `Error processing event: ${error.message}`);
     }
 }
 
-async function storeEventData(eventType, event, userId) {
+async function storeEventData(eventType, event, userId, version = '1') {
     try {
         // Create directory for events if it doesn't exist
         const userDir = `./data/events/${userId}`;
         await fs.promises.mkdir(userDir, { recursive: true });
-
-        // Create a unique filename with timestamp
+        
+        // Create a unique filename with timestamp and version
         const timestamp = new Date().toISOString().replace(/:/g, '-');
-        const filename = `${userDir}/${eventType}_${timestamp}.json`;
-
+        const filename = `${userDir}/${eventType}_v${version}_${timestamp}.json`;
+        
         // Store the event data
         await fs.promises.writeFile(
-            filename,
+            filename, 
             JSON.stringify({
                 type: eventType,
+                version: version,
                 data: event,
                 timestamp: new Date().toISOString()
             }, null, 2)
         );
-
-        logger.log("Twitch", `Stored ${eventType} event data for user ${userId}`);
+        
+        logger.log("Twitch", `Stored ${eventType} (v${version}) event data for user ${userId}`);
     } catch (error) {
         logger.error("Twitch", `Error storing event data: ${error.message}`);
         // Don't throw the error - this is a non-critical operation
