@@ -60,13 +60,6 @@ export class ChatRequestBody {
       });
     }
 
-    if (promptData.rules) {
-      this.messages.push({
-        role: "user",
-        content: promptData.rules
-      });
-    }
-
     // Add additional context elements if they exist
     if (promptData.additionalContext) {
       Object.entries(promptData.additionalContext).forEach(([key, value]) => {
@@ -228,13 +221,6 @@ export class ChatRequestBodyCoT {
       this.messages.push({
         role: "user",
         content: promptData.weatherInfo
-      });
-    }
-
-    if (promptData.rules) {
-      this.messages.push({
-        role: "user",
-        content: promptData.rules
       });
     }
 
@@ -430,7 +416,7 @@ export class QueryRequestBody {
       },
     ];
 
-    // Initialize the JSON schema response format - this is static and doesn't need async loading
+    // Initialize the JSON schema response format
     this.response_format = {
       type: "json_schema",
       json_schema: {

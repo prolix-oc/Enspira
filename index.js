@@ -202,7 +202,7 @@ export async function preflightChecks() {
           ttsRes = await axios.get(
             await retrieveConfigValue("alltalk.healthcheck.internal")
           );
-          break;
+          break;          
         default:
           ttsRes = { status: 200 };
           break;

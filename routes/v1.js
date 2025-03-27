@@ -318,7 +318,7 @@ async function routes(fastify, options) {
           response,
         );
       } else {
-        response.sendSafe({ response: "OK" });
+        response.send({ response: "OK" });
         return response;
       }
     } catch (error) {
@@ -1274,9 +1274,11 @@ async function handleChatMessage(data, authObject, message, user, formattedDate,
           } catch (ttsError) {
             logger.log("API", `TTS error: ${ttsError.message}`);
             response.send({ response: finalResp.response, thoughtProcess: finalResp.thoughtProcess, tts_error: "TTS failed but text response is available" });
+            return response;
           }
         } else {
           response.send({ response: finalResp.response, thoughtProcess: finalResp.thoughtProcess });
+          return response;
         }
       } catch (error) {
         logger.log("API", `Error in AI response generation: ${error.message}`);
@@ -1284,10 +1286,12 @@ async function handleChatMessage(data, authObject, message, user, formattedDate,
           response: "I'm sorry, I encountered an error while processing your message.",
           error: error.message
         });
+        return response
       }
     }
   } else {
     response.send({ response: "OK" });
+    return response;
   }
 }
 

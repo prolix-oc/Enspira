@@ -130,7 +130,7 @@ export async function sendChatCompletionRequest(requestBody, modelConfig, userOb
   let backendStartTime;
   let fullResponse = "";
   const MAX_RESPONSE_SIZE = 100000; // 100KB limit, adjust as needed
-
+  await fs.writeJSON('./chat-request.json', requestBody)
   try {
     const stream = await openai.chat.completions.create({
       ...requestBody,
@@ -396,23 +396,24 @@ const contextPromptChat = async (promptData, message, userID) => {
     "character_card",
     "weather",
     "twitch_chat",
-    "rules",
     "player_info",
     "voice_messages",
   ]);
 
   const sentiment = await interpretEmotions(message);
   logger.log("LLM", `Analysis of emotions: ${sentiment}`);
-  const user = promptData.user;
+  const user = promptData.chat_user;
 
   // Common replacements for preprocessing text
   const commonReplacements = {
     "{{user}}": currentAuthObject.user_name,
     "{{char}}": currentAuthObject.bot_name,
     "{{char_limit}}": await retrieveConfigValue("twitch.maxCharLimit"),
-    "{{user}}": promptData.user,
+    "{{chat_user}}": user,
     "{{socials}}": await socialMedias(userID),
     "{{soc_tiktok}}": await socialMedias(userID, "tt"),
+    "{{model_author}}": await retrieveConfigValue("models.chat.author"),
+    "{{model_org}}": await retrieveConfigValue("models.chat.organization")
   };
 
   // Process system prompt
@@ -448,10 +449,6 @@ const contextPromptChat = async (promptData, message, userID) => {
     weatherInfo: currentAuthObject.weather && fileContents.weather ? 
       `# Current Weather:\n${replacePlaceholders(fileContents.weather, commonReplacements)}` : null,
     
-    // Rules
-    rules: fileContents.rules ? 
-      `# Rules\n${replacePlaceholders(fileContents.rules, commonReplacements)}` : null,
-    
     // Additional context elements
     additionalContext: {
       // Relevant context search results if available
@@ -479,7 +476,7 @@ const contextPromptChat = async (promptData, message, userID) => {
     },
     
     // The actual user message
-    userMessage: message
+    userMessage: `${promptData.chat_user} says: "message"`
   };
 
   // Create the chat request body with our structured prompt data
@@ -511,28 +508,27 @@ const contextPromptChatCoT = async (promptData, message, userID) => {
     "character_card",
     "weather",
     "twitch_chat",
-    "rules",
     "player_info",
     "voice_messages",
   ]);
 
   const sentiment = await interpretEmotions(message);
   logger.log("LLM", `Analysis of emotions: ${sentiment}`);
-  const user = promptData.user;
 
   // Common replacements for preprocessing text
   const commonReplacements = {
     "{{user}}": currentAuthObject.user_name,
     "{{char}}": currentAuthObject.bot_name,
     "{{char_limit}}": await retrieveConfigValue("twitch.maxCharLimit"),
-    "{{user}}": promptData.user,
+    "{{chat_user}}": promptData.user,
     "{{socials}}": await socialMedias(userID),
     "{{soc_tiktok}}": await socialMedias(userID, "tt"),
+    "{{model_author}}": await retrieveConfigValue("models.chat.author"),
+    "{{model_org}}": await retrieveConfigValue("models.chat.organization")
   };
 
   // Process system prompt and add CoT instructions
   let systemPrompt = replacePlaceholders(instructTemplate, commonReplacements);
-  systemPrompt += "\n\nIMPORTANT: Keep your thoughts concise and focused. Limit each thought to 250 words maximum. Your final response should be optimized for Twitch chat and be no longer than 500 characters whenever possible.";
 
   // Structure the prompt data in the format expected by the ChatRequestBodyCoT
   const structuredPromptData = {
@@ -564,10 +560,6 @@ const contextPromptChatCoT = async (promptData, message, userID) => {
     weatherInfo: currentAuthObject.weather && fileContents.weather ? 
       `# Current Weather:\n${replacePlaceholders(fileContents.weather, commonReplacements)}` : null,
     
-    // Rules
-    rules: fileContents.rules ? 
-      `# Rules\n${replacePlaceholders(fileContents.rules, commonReplacements)}` : null,
-    
     // Additional context elements
     additionalContext: {
       // Relevant context search results if available
@@ -595,7 +587,7 @@ const contextPromptChatCoT = async (promptData, message, userID) => {
     },
     
     // The actual user message
-    userMessage: message,
+    userMessage: `${promptData.chat_user} says: "message"`,
     
     // Flag for chain-of-thought processing
     isChainOfThought: true
@@ -640,7 +632,6 @@ const eventPromptChat = async (message, userId) => {
     "scenario",
     "character_card",
     "weather",
-    "rules",
     "player_info",
   ]);
 
@@ -650,6 +641,8 @@ const eventPromptChat = async (message, userId) => {
     "{{char}}": userObject.bot_name,
     "{{char_limit}}": await retrieveConfigValue("twitch.maxCharLimit"),
     "{{socials}}": await socialMedias(userId),
+    "{{model_author}}": await retrieveConfigValue("models.chat.author"),
+    "{{model_org}}": await retrieveConfigValue("models.chat.organization")
   };
 
   // Process system prompt
@@ -684,11 +677,7 @@ const eventPromptChat = async (message, userId) => {
     // Weather information
     weatherInfo: userObject.weather && fileContents.weather ? 
       `# Current Weather:\n${replacePlaceholders(fileContents.weather, commonReplacements)}` : null,
-    
-    // Rules
-    rules: fileContents.rules ? 
-      `# Rules\n${replacePlaceholders(fileContents.rules, commonReplacements)}` : null,
-    
+
     // Additional context elements
     additionalContext: {
       // Current date/time

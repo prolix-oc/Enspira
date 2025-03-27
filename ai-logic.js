@@ -1215,13 +1215,21 @@ async function insertAugmentVectorsToMilvus(
 
 /**
  * Retrieves web context, summarizes it, and stores it in Milvus.
- * @param {object[]} urls - Array of URL objects from Brave search.
- * @param {string} query - The search query.
- * @param {string} subject - The subject of the search.
- * @param {string} userId - The user ID.
- * @returns {Promise<string|boolean>} - The summary string or false if failed.
+ * @param {object[]} urls - Array of URL objects from search
+ * @param {string} query - The search query
+ * @param {string} subject - The subject of the search
+ * @param {string} userId - The user ID
+ * @returns {Promise<string|object>} - The summary string or error object
  */
-async function retrieveWebContext(urls, query, subject, userId) {
+export async function retrieveWebContext(urls, query, subject, userId) {
+  if (!urls || urls.length === 0) {
+    return createRagError(
+      'context-retrieval', 
+      'No URLs provided for context extraction',
+      { query: query }
+    );
+  }
+
   try {
     logger.log("LLM", `Starting optimized web context retrieval for '${query}'`);
 
@@ -1230,23 +1238,63 @@ async function retrieveWebContext(urls, query, subject, userId) {
       pullFromWebScraper([urlObj], subject)
     );
     const pageContentsArray = await Promise.all(scrapePromises);
-    const validContents = pageContentsArray.filter(content => content && content.trim() !== "");
+    const validContents = pageContentsArray.filter(content => 
+      content && typeof content === 'string' && content.trim() !== ""
+    );
 
     if (validContents.length === 0) {
-      logger.log("Augment", "No valid scraped content to summarize.");
-      return false;
+      return createRagError(
+        'content-scraping', 
+        'No valid content found from scraped URLs',
+        { urlCount: urls.length }
+      );
     }
 
     // Step 2: Summarize each page individually.
     const summaryPromises = validContents.map(content => summarizePage(content, subject));
     const individualSummaries = await Promise.all(summaryPromises);
+    
+    // Filter out failed summaries
+    const validSummaries = individualSummaries.filter(summary => 
+      summary && !summary.error && summary.vectorString && summary.summaryContents
+    );
+    
+    if (validSummaries.length === 0) {
+      return createRagError(
+        'summarization', 
+        'Failed to generate valid summaries from content',
+        { contentCount: validContents.length }
+      );
+    }
 
     // Step 3: Generate a final combined summary.
-    const finalSummary = await finalCombinedSummary(individualSummaries, subject);
+    const finalSummary = await finalCombinedSummary(validSummaries, subject);
+    
+    // Check if we got an error object back
+    if (finalSummary && finalSummary.error) {
+      return finalSummary; // Already a properly formatted error
+    }
+    
+    if (!finalSummary || !finalSummary.vectorString || !finalSummary.summaryContents) {
+      return createRagError(
+        'final-summary', 
+        'Failed to generate final combined summary',
+        { summaryCount: validSummaries.length }
+      );
+    }
 
     // Step 4: Upsert the final summary into the vector DB.
     const finalText = `### Final Summary for ${subject}:\n${finalSummary.summaryContents}`;
     const embeddingArray = await getMessageEmbedding(finalSummary.vectorString);
+    
+    if (!embeddingArray) {
+      return createRagError(
+        'embedding-generation', 
+        'Failed to generate embedding for summary',
+        { vectorString: finalSummary.vectorString.substring(0, 100) + '...' }
+      );
+    }
+    
     const upsertData = [{
       relation: finalSummary.vectorString.slice(0, 512),
       text_content: finalText,
@@ -1259,16 +1307,19 @@ async function retrieveWebContext(urls, query, subject, userId) {
       userId
     );
 
-    if (upsertResult) {
-      logger.log("Augment", `Final combined summary stored for '${subject}'`);
-      return finalText;
-    } else {
-      logger.log("Augment", `Failed to store final summary for '${subject}'`, "err");
-      return false;
+    if (!upsertResult) {
+      return createRagError(
+        'vector-storage', 
+        'Failed to store summary in vector database',
+        { subject: subject }
+      );
     }
+
+    logger.log("Augment", `Final combined summary stored for '${subject}'`);
+    return finalText;
   } catch (error) {
-    logger.log("Augment", `Error in optimized web context retrieval for '${query}': ${error}`, "err");
-    return false;
+    logger.log("Augment", `Error in web context retrieval for '${query}': ${error.message}`, "err");
+    return createRagError('web-context', error.message, { query: query, subject: subject });
   }
 }
 
@@ -1356,13 +1407,14 @@ async function searchBraveAPI(query, freshness) {
   }
 }
 
+
 /**
- * Searches the Brave API for web results.
- * @param {string} query - The search query.
- * @param {string} freshness - The freshness parameter for the search.
- * @returns {Promise<object[]>} - An array of web results.
+ * Searches SearXNG for web results
+ * @param {string} query - The search query
+ * @param {string} freshness - The freshness parameter
+ * @returns {Promise<Array|object>} - Search results or error object
  */
-async function searchSearXNG(query, freshness) {
+export async function searchSearXNG(query, freshness) {
   try {
     const url = new URL("https://search.prolix.dev/search");
     url.searchParams.set("q", query);
@@ -1371,53 +1423,95 @@ async function searchSearXNG(query, freshness) {
     url.searchParams.set("engines", "google,bing");
     url.searchParams.set("format", "json");
 
-    const response = await axios.get(url.toString())
+    const response = await axios.get(url.toString());
 
-    if (Array.isArray(response.data.results)) {
-      const chosenResults = response.data.results.slice(0, 4);
-      let resultStuff = [];
-      for await (const item of chosenResults) {
-        const relevantItems = { url: item.url, title: item.title, source: item.parsed_url[1] }
-        resultStuff.push(relevantItems)
-      }
-      return resultStuff;
-    } else {
-      logger.log(
-        "SearXNG Search",
-        `No web results found from SearXNG for '${query}'`,
-        "err",
+    if (!response.data || !Array.isArray(response.data.results)) {
+      return createRagError(
+        'search-api', 
+        'Invalid response from search API',
+        { query: query, responseStatus: response.status }
       );
-      return [];
     }
+
+    if (response.data.results.length === 0) {
+      return createRagError(
+        'search-results', 
+        'No results found for query',
+        { query: query, freshness: freshness }
+      );
+    }
+
+    const chosenResults = response.data.results.slice(0, 4);
+    let resultStuff = [];
+    
+    for await (const item of chosenResults) {
+      const relevantItems = { 
+        url: item.url, 
+        title: item.title, 
+        source: item.parsed_url[1] 
+      };
+      resultStuff.push(relevantItems);
+    }
+    
+    return resultStuff;
   } catch (error) {
-    console.error("Error:", error);
+    logger.log("SearXNG Search", `Error searching: ${error.message}`);
+    return createRagError('search-execution', error.message, { query: query });
   }
 }
 
 /**
- * Infers a search parameter from a query using a specified model.
- * @param {string} query - The query to infer the search parameter from.
- * @param {string} userId - The user ID.
- * @returns {Promise<string>} - The inferred search parameter, or "pass" if the query builder opts out.
+ * Modifies the inferSearchParam function to use structured error objects
+ * @param {string} query - The query to infer search parameters from
+ * @param {string} userId - The user ID
+ * @returns {Promise<object|{success:boolean, error?:object}>} - Search parameters or error object
  */
-async function inferSearchParam(query, userId) {
+export async function inferSearchParam(query, userId) {
   try {
-    var instruct = await queryPrompt(query, userId);
+    const instruct = await queryPrompt(query, userId);
 
-    const chatTask = await sendToolCompletionRequest(instruct, await retrieveConfigValue("models.query"))
+    const chatTask = await sendToolCompletionRequest(instruct, await retrieveConfigValue("models.query"));
 
-    const fullChat = JSON.parse(chatTask.response)
+    if (!chatTask || chatTask.error) {
+      return createRagError(
+        'query-generation', 
+        'Failed to generate search query',
+        { originalError: chatTask?.error || 'Unknown error' }
+      );
+    }
+
+    // For tools using JSON response format, chatTask.response is already parsed
+    const fullChat = chatTask.response;
+    
+    // Validate that we have a properly structured response
+    if (!fullChat || typeof fullChat !== 'object') {
+      return createRagError(
+        'query-parsing',
+        'Invalid response structure from query builder',
+        { responseType: typeof fullChat }
+      );
+    }
 
     if (fullChat.valid === false) {
       logger.log("LLM", `Query builder opted out of search for this query. Reason: ${fullChat.reason}`);
-      return false;
+      return { 
+        success: false, 
+        optedOut: true, 
+        reason: fullChat.reason 
+      };
     } else {
       logger.log("LLM", `Returned optimized search param: '${fullChat.searchTerm}'. Time to first token: ${chatTask.timeToFirstToken} seconds. Process speed: ${chatTask.tokensPerSecond}tps`);
-      return fullChat;
+      return {
+        success: true,
+        searchTerm: fullChat.searchTerm,
+        subject: fullChat.subject,
+        freshness: fullChat.freshness,
+        vectorString: fullChat.vectorString
+      };
     }
   } catch (error) {
     logger.log("LLM", `Error inferring search parameter: ${error}`);
-    return "pass"; // Return "pass" to indicate failure or opt-out
+    return createRagError('query-inference', error.message, { stack: error.stack });
   }
 }
 
@@ -1875,7 +1969,7 @@ async function respondWithContext(message, username, userID) {
       relChats: Array.isArray(relChatBody) ? relChatBody : [],
       relContext: contextBody,
       relVoice: Array.isArray(relVoiceBody) ? relVoiceBody : [],
-      user: username,
+      chat_user: username,
     };
 
     // Using the updated contextPromptChat function that creates the new message structure
@@ -1924,7 +2018,7 @@ async function respondWithoutContext(message, userId) {
       relChats: "- No relevant chat context available.",
       relContext: "- No additional context to provide.",
       relVoice: "- No voice conversation history.",
-      user: "User"
+      chat_user: "User"
     };
     
     // Using updated contextPromptChat function with new message structure
@@ -2488,16 +2582,17 @@ async function checkEndpoint(endpoint, key, modelName) {
             `Invalid response from embedding endpoint: ${response.status}`,
           );
         }
-      } else {
-        const openai = new OpenAI({
-          baseURL: endpoint,
-          apiKey: key,
+      } else if (await retrieveConfigValue("models.embedding.apiKeyType") === "enspiraEmb"){
+        const response = await axios.get(
+          `${await retrieveConfigValue("models.embedding.endpoint")}/health`, {
+          headers: {
+            Authorization: `Bearer ${await retrieveConfigValue("models.embedding.apiKey")}`
+          }
         });
-        const response = await openai.models.embedding.list();
-        if (response.data.id) {
-          return true;
+        if (response.status == 200) {
+          return true
         } else {
-          throw new Error(`No response from the provided OpenAI API key.`);
+          return false
         }
       }
     } else {
@@ -2525,8 +2620,6 @@ export {
   checkEndpoint,
   respondWithContext,
   checkMilvusHealth,
-  inferSearchParam,
-  retrieveWebContext,
   rerankString,
   searchBraveAPI,
   respondToDirectVoice,
@@ -2543,7 +2636,6 @@ export {
   findRelevantDocuments,
   weGottaGoBald,
   checkAndCreateCollection,
-  searchSearXNG,
   returnRecentChats,
   ensureCollectionLoaded,
   retryMilvusOperation,
