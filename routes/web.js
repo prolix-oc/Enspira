@@ -114,18 +114,33 @@ function renderTemplate(templateContent, data) {
  */
 async function renderPage(content, data) {
     try {
+        // Ensure data has default values for expected template variables
+        const defaultData = {
+            // Default empty values for template variables
+            extraScripts: '',
+            extraStyles: '',
+            dashboardActive: '',
+            characterActive: '',
+            worldActive: '',
+            twitchActive: '',
+            pageTitle: 'Enspira'
+        };
+
+        // Merge default data with provided data, ensuring defaults don't override provided values
+        const mergedData = { ...defaultData, ...data };
+
         // Read the layout template
         const layoutPath = path.join(process.cwd(), 'pages', 'layout.html');
         let layoutTemplate = await fs.readFile(layoutPath, 'utf8');
 
-        // Render the content first
-        const renderedContent = renderTemplate(content, data);
+        // Render the content first with merged data
+        const renderedContent = renderTemplate(content, mergedData);
 
         // Add the content to the data object
-        data.mainContent = renderedContent;
+        mergedData.mainContent = renderedContent;
 
-        // Render the layout with the content
-        return renderTemplate(layoutTemplate, data);
+        // Render the layout with the content and merged data
+        return renderTemplate(layoutTemplate, mergedData);
     } catch (error) {
         logger.error("Web", `Error rendering page: ${error.message}`);
         throw error;
@@ -183,7 +198,6 @@ async function saveTextContent(userId, fileName, content) {
 }
 
 // Import verifySessionToken function from existing auth code
-// This assumes the function is exported elsewhere
 import { verifySessionToken } from './v1.js'
 
 /**
@@ -200,7 +214,7 @@ async function requireAuth(request, reply) {
 
     if (!sessionToken) {
         logger.log("Auth", "No session token found, redirecting to login");
-        return reply.redirect('/web/auth/login');  // Updated path to match your new route structure
+        return reply.redirect('/web/auth/login');
     }
 
     try {
@@ -234,9 +248,11 @@ async function requireAuth(request, reply) {
     }
 }
 
-
 // Setup the web routes
 async function webRoutes(fastify, options) {
+    // Register the form body parser to ensure form submissions work
+    await fastify.register(import('@fastify/formbody'));
+
     // Ensure the pages directory exists
     await fs.ensureDir(path.join(process.cwd(), 'pages'));
 
@@ -275,6 +291,7 @@ async function webRoutes(fastify, options) {
                 user: {
                     display_name: user.display_name || user.user_name,
                 },
+                dashboardActive: 'active',
                 streamerConnected,
                 botConnected,
                 streamerName,
@@ -295,6 +312,7 @@ async function webRoutes(fastify, options) {
             reply.code(500).send('Error loading dashboard');
         }
     });
+
     // Character editor route
     fastify.get('/character', { preHandler: requireAuth }, async (request, reply) => {
         try {
@@ -320,6 +338,7 @@ async function webRoutes(fastify, options) {
 
             // Render the page
             const renderedPage = await renderPage(characterTemplate, {
+                characterActive: 'active',
                 user,
                 character: user,
                 characterPersonality,
@@ -361,15 +380,17 @@ async function webRoutes(fastify, options) {
                           <p>Template files are being set up.</p>`;
             }
 
-            // Render the page
+            // Render the page with explicitly set extraScripts variable
             const renderedPage = await renderPage(worldTemplate, {
+                worldActive: 'active',
                 user,
                 character: user,
                 worldInfo,
                 playerInfo,
                 scenario,
                 commandsList,
-                auxBots
+                auxBots,
+                extraScripts: '' // Explicitly set this to prevent template errors
             });
 
             reply.type('text/html').send(renderedPage);
@@ -380,162 +401,14 @@ async function webRoutes(fastify, options) {
     });
 
     // Character personality update endpoint
-    fastify.post('/api/v1/character/personality', { preHandler: requireAuth }, async (request, reply) => {
-        try {
-            const user = request.user;
-            const { bot_name, personality } = request.body;
-
-            // Update bot name in user record
-            await updateUserParameter(user.user_id, 'bot_name', bot_name);
-
-            // Save personality to file
-            const success = await saveTextContent(user.user_id, 'character_personality', personality);
-
-            if (success) {
-                reply.send({ success: true, message: 'Personality updated successfully' });
-            } else {
-                reply.code(500).send({ success: false, error: 'Failed to save personality' });
-            }
-        } catch (error) {
-            logger.error("Web", `Error updating personality: ${error.message}`);
-            reply.code(500).send({ success: false, error: 'An error occurred while updating personality' });
-        }
-    });
-
-    // Character description update endpoint
-    fastify.post('/api/v1/character/description', { preHandler: requireAuth }, async (request, reply) => {
-        try {
-            const user = request.user;
-            const { description } = request.body;
     
-            // Save description to file
-            const success = await saveTextContent(user.user_id, 'character_card', description);
-    
-            if (success) {
-                reply.send({ success: true, message: 'Description updated successfully' });
-            } else {
-                reply.code(500).send({ success: false, error: 'Failed to save description' });
-            }
-        } catch (error) {
-            logger.error("Web", `Error updating description: ${error.message}`);
-            reply.code(500).send({ success: false, error: 'An error occurred while updating description' });
-        }
-    });
 
-    // Character examples update endpoint
-    fastify.post('/api/v1/character/examples', { preHandler: requireAuth }, async (request, reply) => {
-        try {
-            const user = request.user;
-            const { examples } = request.body;
-
-            // Save examples to file
-            const success = await saveTextContent(user.user_id, 'examples', examples);
-
-            if (success) {
-                reply.send({ success: true, message: 'Examples updated successfully' });
-            } else {
-                reply.code(500).send({ success: false, error: 'Failed to save examples' });
-            }
-        } catch (error) {
-            logger.error("Web", `Error updating examples: ${error.message}`);
-            reply.code(500).send({ success: false, error: 'An error occurred while updating examples' });
-        }
-    });
-
-    // World info update endpoint
-    fastify.post('/api/v1/world/info', { preHandler: requireAuth }, async (request, reply) => {
-        try {
-            const user = request.user;
-            const { world_info, weather_enabled } = request.body;
-
-            // Update weather flag in user record
-            await updateUserParameter(user.user_id, 'weather', weather_enabled === 'true');
-
-            // Save world info to file
-            const success = await saveTextContent(user.user_id, 'world_lore', world_info);
-
-            if (success) {
-                reply.send({ success: true, message: 'World information updated successfully' });
-            } else {
-                reply.code(500).send({ success: false, error: 'Failed to save world information' });
-            }
-        } catch (error) {
-            logger.error("Web", `Error updating world info: ${error.message}`);
-            reply.code(500).send({ success: false, error: 'An error occurred while updating world information' });
-        }
-    });
-
-    // Player info update endpoint
-    fastify.post('/api/v1/world/player', { preHandler: requireAuth }, async (request, reply) => {
-        try {
-            const user = request.user;
-            const { player_info } = request.body;
-
-            // Save player info to file
-            const success = await saveTextContent(user.user_id, 'player_info', player_info);
-
-            if (success) {
-                reply.send({ success: true, message: 'Player information updated successfully' });
-            } else {
-                reply.code(500).send({ success: false, error: 'Failed to save player information' });
-            }
-        } catch (error) {
-            logger.error("Web", `Error updating player info: ${error.message}`);
-            reply.code(500).send({ success: false, error: 'An error occurred while updating player information' });
-        }
-    });
-
-    // Scenario update endpoint
-    fastify.post('/api/v1/world/scenario', { preHandler: requireAuth }, async (request, reply) => {
-        try {
-            const user = request.user;
-            const { scenario } = request.body;
-
-            // Save scenario to file
-            const success = await saveTextContent(user.user_id, 'scenario', scenario);
-
-            if (success) {
-                reply.send({ success: true, message: 'Scenario updated successfully' });
-            } else {
-                reply.code(500).send({ success: false, error: 'Failed to save scenario' });
-            }
-        } catch (error) {
-            logger.error("Web", `Error updating scenario: ${error.message}`);
-            reply.code(500).send({ success: false, error: 'An error occurred while updating scenario' });
-        }
-    });
-
-    fastify.post('/api/v1/world/bot-config', { preHandler: requireAuth }, async (request, reply) => {
-        try {
-            const user = request.user;
-            const { commands_list, aux_bots } = request.body;
-
-            // Update commands list in user record
-            const commandsArray = commands_list.split('\n')
-                .map(cmd => cmd.trim())
-                .filter(cmd => cmd.length > 0);
-
-            await updateUserParameter(user.user_id, 'commands_list', commandsArray);
-
-            // Update aux bots list in user record
-            const auxBotsArray = aux_bots.split('\n')
-                .map(bot => bot.trim())
-                .filter(bot => bot.length > 0);
-
-            await updateUserParameter(user.user_id, 'aux_bots', auxBotsArray);
-
-            reply.send({ success: true, message: 'Bot configuration updated successfully' });
-        } catch (error) {
-            logger.error("Web", `Error updating bot configuration: ${error.message}`);
-            reply.code(500).send({ success: false, error: 'An error occurred while updating bot configuration' });
-        }
-    });
-
+    // Authentication routes
     fastify.get('/auth/login', async (request, reply) => {
         const loginForm = `<!doctype html>
     <html>
       <head>
-        <title>Enspira Login</title>
+        <title>Enspira - Login</title>
         <style>
           body {
             font-family: Arial, sans-serif;
@@ -587,12 +460,11 @@ async function webRoutes(fastify, options) {
     </html>`;
 
         reply.type('text/html').send(loginForm);
-        return reply;
     });
 
     fastify.get('/auth/logout', async (request, reply) => {
         reply.clearCookie('enspira_session');
-        return reply.redirect('/web/auth/login');  // Updated path
+        return reply.redirect('/web/auth/login');
     });
 
     // Redirect root to dashboard

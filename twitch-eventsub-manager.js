@@ -4,6 +4,7 @@ import { returnAPIKeys, returnAuthObject, updateUserParameter, ensureParameterPa
 import { retrieveConfigValue } from './config-helper.js';
 import { logger } from './create-global-logger.js';
 import { refreshTwitchToken } from './routes/v1.js';
+import cron from "node-cron";
 
 // EventSub subscription definitions with accurate condition requirements
 const SUBSCRIPTION_TYPES = [
@@ -13,35 +14,45 @@ const SUBSCRIPTION_TYPES = [
         version: '1',
         condition: (broadcasterId) => ({ broadcaster_user_id: broadcasterId }),
         requiredScopes: ['channel:read:stream_key'],
-        tokenType: 'app'  // Changed from 'streamer' to 'app'
+        tokenType: 'app'
+    },
+    {
+        type: 'channel.chat.message',
+        version: '1',
+        condition: (broadcasterId) => ({
+            broadcaster_user_id: broadcasterId,
+            user_id: broadcasterId
+        }),
+        requiredScopes: ['channel:moderate'],
+        tokenType: 'app'
     },
     {
         type: 'channel.subscribe',
         version: '1',
         condition: (broadcasterId) => ({ broadcaster_user_id: broadcasterId }),
         requiredScopes: ['channel:read:subscriptions'],
-        tokenType: 'app'  // Changed from 'streamer' to 'app'
+        tokenType: 'app'
     },
     {
         type: 'channel.subscription.gift',
         version: '1',
         condition: (broadcasterId) => ({ broadcaster_user_id: broadcasterId }),
         requiredScopes: ['channel:read:subscriptions'],
-        tokenType: 'app'  // Changed from 'streamer' to 'app'
+        tokenType: 'app'
     },
     {
         type: 'channel.subscription.message',
         version: '1',
         condition: (broadcasterId) => ({ broadcaster_user_id: broadcasterId }),
         requiredScopes: ['channel:read:subscriptions'],
-        tokenType: 'app'  // Changed from 'streamer' to 'app'
+        tokenType: 'app'
     },
     {
         type: 'channel.cheer',
         version: '1',
         condition: (broadcasterId) => ({ broadcaster_user_id: broadcasterId }),
         requiredScopes: ['bits:read'],
-        tokenType: 'app'  // Changed from 'streamer' to 'app'
+        tokenType: 'app'
     },
     {
         type: 'channel.raid',
@@ -55,42 +66,42 @@ const SUBSCRIPTION_TYPES = [
         version: '1',
         condition: (broadcasterId) => ({ broadcaster_user_id: broadcasterId }),
         requiredScopes: ['channel:read:redemptions'],
-        tokenType: 'app'  // Changed from 'streamer' to 'app'
+        tokenType: 'app'
     },
     {
         type: 'channel.charity_campaign.donate',
         version: '1',
         condition: (broadcasterId) => ({ broadcaster_user_id: broadcasterId }),
         requiredScopes: ['channel:read:charity'],
-        tokenType: 'app'  // Changed from 'streamer' to 'app'
+        tokenType: 'app'
     },
     {
         type: 'channel.charity_campaign.progress',
         version: '1',
         condition: (broadcasterId) => ({ broadcaster_user_id: broadcasterId }),
         requiredScopes: ['channel:read:charity'],
-        tokenType: 'app'  // Changed from 'streamer' to 'app'
+        tokenType: 'app'
     },
     {
         type: 'channel.hype_train.begin',
         version: '1',
         condition: (broadcasterId) => ({ broadcaster_user_id: broadcasterId }),
         requiredScopes: ['channel:read:hype_train'],
-        tokenType: 'app'  // Changed from 'streamer' to 'app'
+        tokenType: 'app'
     },
     {
         type: 'channel.hype_train.progress',
         version: '1',
         condition: (broadcasterId) => ({ broadcaster_user_id: broadcasterId }),
         requiredScopes: ['channel:read:hype_train'],
-        tokenType: 'app'  // Changed from 'streamer' to 'app'
+        tokenType: 'app'
     },
     {
         type: 'channel.hype_train.end',
         version: '1',
         condition: (broadcasterId) => ({ broadcaster_user_id: broadcasterId }),
         requiredScopes: ['channel:read:hype_train'],
-        tokenType: 'app'  // Changed from 'streamer' to 'app'
+        tokenType: 'app'
     },
     {
         type: 'stream.online',
@@ -116,7 +127,7 @@ const SUBSCRIPTION_TYPES = [
             moderator_user_id: broadcasterId // Using broadcaster as moderator for simplicity
         }),
         requiredScopes: ['moderator:read:followers'],
-        tokenType: 'app'  // Changed from 'streamer' to 'app'
+        tokenType: 'app'
     },
     {
         type: 'channel.update',
@@ -126,9 +137,9 @@ const SUBSCRIPTION_TYPES = [
             moderator_user_id: broadcasterId
         }),
         requiredScopes: ['channel:read:stream_key'],
-        tokenType: 'app'  // Changed from 'streamer' to 'app'
+        tokenType: 'app'
     },
-    
+
     // Beta endpoints - Only include if broadcaster has appropriate permissions
     {
         type: 'channel.guest_star_session.begin',
@@ -138,7 +149,7 @@ const SUBSCRIPTION_TYPES = [
             moderator_user_id: broadcasterId
         }),
         requiredScopes: ['moderator:read:guest_star', 'moderator:manage:guest_star'],
-        tokenType: 'app',  // Changed from 'streamer' to 'app'
+        tokenType: 'app',
         optional: true
     },
     {
@@ -149,7 +160,7 @@ const SUBSCRIPTION_TYPES = [
             moderator_user_id: broadcasterId
         }),
         requiredScopes: ['moderator:read:guest_star'],
-        tokenType: 'app',  // Changed from 'streamer' to 'app'
+        tokenType: 'app',
         optional: true
     }
 ];
@@ -403,18 +414,18 @@ export async function registerUserSubscriptions(userId) {
                 if (subscriptionConfig.requiredScopes.length > 0) {
                     const accountType = subscriptionConfig.tokenType;
                     const userScopes = accountType === 'bot' ? botScopes : streamerScopes;
-                    
+
                     // Skip if using bot token but no bot account is connected
                     if (accountType === 'bot' && !hasBotAccount) {
                         results.skipped.push(`${subscriptionConfig.type} (v${subscriptionConfig.version}) - requires bot account`);
                         continue;
                     }
-                    
+
                     // Check if user has all required scopes
                     const missingScopes = subscriptionConfig.requiredScopes.filter(
                         scope => !userScopes.includes(scope)
                     );
-                    
+
                     if (missingScopes.length > 0) {
                         logger.log("Twitch", `Skipping ${subscriptionConfig.type} - missing scopes: ${missingScopes.join(', ')}`);
                         results.skipped.push(`${subscriptionConfig.type} (v${subscriptionConfig.version}) - missing scopes`);
@@ -472,6 +483,327 @@ export async function registerUserSubscriptions(userId) {
 }
 
 /**
+ * Process channel update events to extract game information
+ * @param {object} event - The event data
+ * @param {string} userId - The user ID
+ * @returns {Promise<void>}
+ */
+async function handleChannelUpdate(event, userId) {
+    try {
+        // Extract game name, title, and category_id
+        const { title, category_name, category_id } = event;
+
+        // Update user's current game info with improved structure
+        await updateUserParameter(userId, "current_game", {
+            title: title || "No Title",
+            game: category_name || "none",  // Use "none" as fallback
+            game_id: category_id || "0",
+            updated_at: new Date().toISOString()
+        });
+
+        logger.log("Twitch", `Updated game info for ${userId}: ${category_name || "none"}`);
+
+        // After updating game info, fetch current viewer count
+        await fetchViewerCount(userId);
+    } catch (error) {
+        logger.error("Twitch", `Error handling channel update: ${error.message}`);
+    }
+}
+
+/**
+ * Process stream state change events (online/offline)
+ * @param {string} eventType - The event type (stream.online or stream.offline)
+ * @param {object} event - The event data
+ * @param {string} userId - The user ID
+ * @returns {Promise<void>}
+ */
+async function handleStreamStateChange(eventType, event, userId) {
+    try {
+        const isOnline = eventType === 'stream.online';
+
+        // Update user's stream status
+        await updateUserParameter(userId, "stream_status", {
+            online: isOnline,
+            started_at: isOnline ? event.started_at : null,
+            type: isOnline ? event.type : null,
+            updated_at: new Date().toISOString()
+        });
+
+        logger.log("Twitch", `Stream ${isOnline ? 'started' : 'ended'} for ${userId}`);
+
+        // Reset viewer count to 0 when stream goes offline
+        if (!isOnline) {
+            await updateUserParameter(userId, "current_viewers", 0);
+        } else {
+            // If stream just went online, fetch current viewer count after a short delay
+            // This gives Twitch API time to update with the new stream data
+            setTimeout(() => fetchViewerCount(userId), 30000); // 30 seconds delay
+        }
+    } catch (error) {
+        logger.error("Twitch", `Error handling stream state change: ${error.message}`);
+    }
+}
+
+
+/**
+ * Fetch current viewer count for a user's channel
+ * @param {string} userId - The user ID
+ * @returns {Promise<number>} - The viewer count, or 0 if unavailable
+ */
+async function fetchViewerCount(userId) {
+    try {
+        const user = await returnAuthObject(userId);
+
+        // Check if streamer token exists and channel ID is available
+        if (!user.twitch_tokens?.streamer?.twitch_user_id) {
+            logger.log("Twitch", `No Twitch user ID for ${userId}, can't fetch viewer count`);
+            await updateUserParameter(userId, "current_viewers", 0);
+            return 0;
+        }
+
+        // Get app access token for API call
+        const appToken = await getAppAccessToken();
+        const channelId = user.twitch_tokens.streamer.twitch_user_id;
+
+        // Import axios
+        const axios = (await import('axios')).default;
+
+        // Get stream information
+        const response = await axios.get(
+            `https://api.twitch.tv/helix/streams?user_id=${channelId}`,
+            {
+                headers: {
+                    'Client-ID': await retrieveConfigValue("twitch.clientId"),
+                    'Authorization': `Bearer ${appToken}`
+                }
+            }
+        );
+
+        // Check if stream is live
+        if (response.data.data && response.data.data.length > 0) {
+            const viewerCount = response.data.data[0].viewer_count || 0;
+
+            // Update user parameter with viewer count
+            await updateUserParameter(userId, "current_viewers", viewerCount);
+            logger.log("Twitch", `Updated viewer count for ${userId}: ${viewerCount}`);
+
+            return viewerCount;
+        } else {
+            // Stream is not live, set viewer count to 0
+            await updateUserParameter(userId, "current_viewers", 0);
+            return 0;
+        }
+    } catch (error) {
+        logger.error("Twitch", `Error fetching viewer count: ${error.message}`);
+        await updateUserParameter(userId, "current_viewers", 0);
+        return 0;
+    }
+}
+
+/**
+ * Handle chat message events from EventSub
+ * @param {object} event - The chat message event data
+ * @param {string} userId - The user ID
+ * @returns {Promise<void>}
+ */
+async function handleChatMessage(event, userId) {
+    try {
+        logger.log("Twitch", `Received chat message from ${event.chatter.user_name} in ${userId}'s channel`);
+
+        // Process the chat message - you might want to add more logic here
+        // to determine how to handle different message types or commands
+
+        // Example structure of a chat message event that we can handle:
+        const chatEvent = {
+            eventType: 'chat',
+            user: event.chatter.user_name,
+            message: event.message.text,
+            firstMessage: event.message.is_first, // If this is the user's first message
+            badges: event.chatter.badges?.map(badge => badge.set_id) || [],
+            emotes: event.message.fragments?.filter(frag => frag.type === 'emote').map(emote => emote.id) || []
+        };
+
+        // Process this chat event as needed
+        // For example, you might want to trigger an AI response for certain messages
+        // We can add a call to your existing chat handling system here
+
+        // Example of how you might handle this, adapt to your actual implementation:
+        if (chatEvent.message.startsWith('!')) {
+            // This is a command, handle it accordingly
+        } else {
+            // This is a regular chat message
+            // You could add logic to determine if the AI should respond
+        }
+    } catch (error) {
+        logger.error("Twitch", `Error handling chat message: ${error.message}`);
+    }
+}
+
+/**
+ * Processes real-time chat messages from Twitch EventSub
+ * @param {object} chatEvent - The chat event data from EventSub
+ * @param {string} userId - The user ID
+ * @returns {Promise<object>} - The processing result
+ */
+export async function processChatMessage(chatEvent, userId) {
+    try {
+        // Import necessary functions
+        const { addChatMessageAsVector } = await import('./ai-logic.js');
+        const { containsCharacterName, containsAuxBotName } = await import('./prompt-helper.js');
+        const { isCommandMatch } = await import('./twitch-helper.js');
+
+        // Get user data
+        const user = await returnAuthObject(userId);
+
+        if (!user) {
+            logger.error("Twitch", `User ${userId} not found when processing chat message`);
+            return { success: false, error: "User not found" };
+        }
+
+        // Destructure the chat event
+        const { user: chatUser, message, is_first } = chatEvent;
+
+        // Skip messages from ignored bots
+        const fromBot = await containsAuxBotName(chatUser, userId);
+        if (fromBot) {
+            logger.log("Twitch", `Ignoring message from bot: ${chatUser}`);
+            return { success: true, ignored: true, reason: "bot_user" };
+        }
+
+        // Check if message is a command
+        const isCommand = await isCommandMatch(message, userId);
+        if (isCommand) {
+            logger.log("Twitch", `Ignoring command message: ${message}`);
+            return { success: true, ignored: true, reason: "command" };
+        }
+
+        // Check if message mentions the character
+        const mentionsChar = await containsCharacterName(message, userId);
+
+        // Format date for context
+        const formattedDate = new Date().toLocaleString();
+
+        // If it's a first message or mentions the character, process it
+        if (is_first || mentionsChar) {
+            logger.log("Twitch", `Processing chat message from ${chatUser}: ${message}`);
+
+            // Add the message to vector storage
+            const summaryString = `On ${formattedDate} ${chatUser} said in ${user.twitch_name || user.user_name}'s Twitch chat: "${message}"`;
+
+            // Store message vector asynchronously
+            addChatMessageAsVector(
+                summaryString,
+                message,
+                chatUser,
+                formattedDate,
+                "", // No response yet
+                userId
+            ).catch(err => {
+                logger.error("Twitch", `Error storing chat vector: ${err.message}`);
+            });
+
+            return {
+                success: true,
+                processed: true,
+                mentioned: mentionsChar,
+                firstMessage: is_first,
+                context: summaryString
+            };
+        } else {
+            // For regular messages, we might just store them for context
+            const summaryString = `On ${formattedDate} ${chatUser} said in ${user.twitch_name || user.user_name}'s Twitch chat: "${message}"`;
+
+            // Optionally store message for context
+            if (user.store_all_chat) {
+                addChatMessageAsVector(
+                    summaryString,
+                    message,
+                    chatUser,
+                    formattedDate,
+                    "", // No response
+                    userId
+                ).catch(err => {
+                    logger.error("Twitch", `Error storing regular chat: ${err.message}`);
+                });
+            }
+
+            return {
+                success: true,
+                processed: false,
+                mentioned: false,
+                context: summaryString
+            };
+        }
+    } catch (error) {
+        logger.error("Twitch", `Error processing chat message: ${error.message}`);
+        return { success: false, error: error.message };
+    }
+}
+
+/**
+ * Sends a chat message to a Twitch channel using the bot account
+ * @param {string} message - The message to send
+ * @param {string} userId - The user ID
+ * @returns {Promise<object>} - Result of the operation
+ */
+export async function sendChatMessage(message, userId) {
+    try {
+        const user = await returnAuthObject(userId);
+
+        // Check if bot account is connected
+        if (!user.twitch_tokens?.bot?.access_token) {
+            logger.error("Twitch", `No bot token for user ${userId}, can't send chat message`);
+            return { success: false, error: "No bot token available" };
+        }
+
+        // Make sure we have a valid token
+        const botToken = await refreshTwitchToken(userId, 'bot');
+        if (!botToken) {
+            logger.error("Twitch", `Failed to refresh bot token for ${userId}`);
+            return { success: false, error: "Failed to refresh bot token" };
+        }
+
+        // Check if we have the channel ID
+        if (!user.twitch_tokens?.streamer?.twitch_user_id) {
+            logger.error("Twitch", `No streamer ID for ${userId}, can't determine chat channel`);
+            return { success: false, error: "No streamer ID available" };
+        }
+
+        const channelId = user.twitch_tokens.streamer.twitch_user_id;
+
+        // Import axios
+        const axios = (await import('axios')).default;
+
+        // Send chat message via Twitch API
+        const response = await axios.post(
+            `https://api.twitch.tv/helix/chat/messages`,
+            {
+                broadcaster_id: channelId,
+                sender_id: user.twitch_tokens.bot.twitch_user_id,
+                message: message
+            },
+            {
+                headers: {
+                    'Client-ID': await retrieveConfigValue("twitch.clientId"),
+                    'Authorization': `Bearer ${botToken}`
+                }
+            }
+        );
+
+        if (response.status === 200) {
+            logger.log("Twitch", `Sent chat message to ${user.twitch_name || user.user_name}'s channel`);
+            return { success: true, message_id: response.data.message_id };
+        } else {
+            logger.error("Twitch", `Failed to send chat message: ${response.status} ${response.statusText}`);
+            return { success: false, error: `API returned ${response.status}` };
+        }
+    } catch (error) {
+        logger.error("Twitch", `Error sending chat message: ${error.message}`);
+        return { success: false, error: error.message };
+    }
+}
+
+/**
  * Get the scopes associated with a user's token
  * @param {string} userId - The user ID
  * @param {string} tokenType - The token type (bot or streamer)
@@ -480,55 +812,55 @@ export async function registerUserSubscriptions(userId) {
 async function getUserScopes(userId, tokenType) {
     try {
         const user = await returnAuthObject(userId);
-        
+
         // Check if token exists
         if (!user.twitch_tokens?.[tokenType]?.access_token) {
             logger.log("Twitch", `No ${tokenType} access token found for user ${userId}`);
             return [];
         }
-        
+
         // If we already have cached scopes, return them
         if (user.twitch_tokens[tokenType].scopes && Array.isArray(user.twitch_tokens[tokenType].scopes)) {
             return user.twitch_tokens[tokenType].scopes;
         }
-        
+
         // Otherwise validate the token to get scopes
         const axios = (await import('axios')).default;
-        
+
         try {
             const response = await axios.get('https://id.twitch.tv/oauth2/validate', {
                 headers: {
                     'Authorization': `OAuth ${user.twitch_tokens[tokenType].access_token}`
                 }
             });
-            
+
             if (response.data && response.data.scopes) {
                 // Cache the scopes
                 await updateUserParameter(userId, `twitch_tokens.${tokenType}.scopes`, response.data.scopes);
                 return response.data.scopes;
             }
-            
+
             return [];
         } catch (validationError) {
             // If we get a 401 error, the token is likely expired
             if (validationError.response && validationError.response.status === 401) {
                 logger.log("Twitch", `Token for ${userId} (${tokenType}) is invalid or expired. Attempting refresh...`);
-                
+
                 // Try to refresh the token
                 if (user.twitch_tokens[tokenType].refresh_token) {
                     try {
                         const newToken = await refreshTwitchToken(userId, tokenType);
-                        
+
                         if (newToken) {
                             // Try validation again with the new token
                             const freshUser = await returnAuthObject(userId);
-                            
+
                             const retryResponse = await axios.get('https://id.twitch.tv/oauth2/validate', {
                                 headers: {
                                     'Authorization': `OAuth ${freshUser.twitch_tokens[tokenType].access_token}`
                                 }
                             });
-                            
+
                             if (retryResponse.data && retryResponse.data.scopes) {
                                 // Cache the scopes
                                 await updateUserParameter(userId, `twitch_tokens.${tokenType}.scopes`, retryResponse.data.scopes);
@@ -540,14 +872,14 @@ async function getUserScopes(userId, tokenType) {
                     }
                 }
             }
-            
+
             // Log detailed error information
             if (validationError.response) {
                 logger.error("Twitch", `Token validation error: Status ${validationError.response.status}, Data: ${JSON.stringify(validationError.response.data)}`);
             } else {
                 logger.error("Twitch", `Token validation error: ${validationError.message}`);
             }
-            
+
             return [];
         }
     } catch (error) {
@@ -747,7 +1079,7 @@ async function refreshToken(userId, tokenType) {
         await updateUserParameter(userId, `twitch_tokens.${tokenType}.access_token`, access_token);
         await updateUserParameter(userId, `twitch_tokens.${tokenType}.refresh_token`, refresh_token);
         await updateUserParameter(userId, `twitch_tokens.${tokenType}.expires_at`, Date.now() + (expires_in * 1000));
-        
+
         // Clear cached scopes as they might change with the new token
         await updateUserParameter(userId, `twitch_tokens.${tokenType}.scopes`, null);
 
@@ -997,7 +1329,23 @@ function mapEventSubToInternalFormat(eventType, eventData, version = '1') {
                 title: eventData.title || ''
             };
             break;
-
+        case 'channel.chat.message':
+            mappedEvent.eventType = 'chat';
+            mappedEvent.eventData = {
+                user: eventData.chatter.user_name,
+                user_id: eventData.chatter.user_id,
+                message: eventData.message.text,
+                is_first: eventData.message.is_first || false,
+                chatter_is_broadcaster: eventData.chatter.user_id === eventData.broadcaster_user_id,
+                chatter_is_moderator: eventData.chatter.badges?.some(badge => badge.set_id === 'moderator') || false,
+                chatter_is_subscriber: eventData.chatter.badges?.some(badge => badge.set_id === 'subscriber') || false,
+                fragments: eventData.message.fragments || [],
+                emotes: eventData.message.fragments?.filter(frag => frag.type === 'emote').map(emote => ({
+                    id: emote.id,
+                    name: emote.text
+                })) || []
+            };
+            break;
         case 'channel.follow':
             mappedEvent.eventType = 'follow';
 
@@ -1148,6 +1496,65 @@ function getTopContributor(eventData, type) {
     return eventData.top_contributions.find(
         contributor => contributor.type === type
     );
+}
+
+/**
+ * Periodically updates viewer counts for all streaming users
+ * This function should be called from a cron job or similar scheduler
+ * @returns {Promise<{updated: number, errors: number}>}
+ */
+export async function updateAllStreamViewerCounts() {
+    try {
+        // Get all users
+        const users = await returnAPIKeys();
+        let updatedCount = 0;
+        let errorCount = 0;
+
+        // Process each user
+        for (const user of users) {
+            try {
+                // Skip users without Twitch integration
+                if (!user.twitch_tokens?.streamer?.twitch_user_id) {
+                    continue;
+                }
+
+                // Check if user is currently streaming (based on stored status)
+                const isOnline = user.stream_status?.online === true;
+
+                if (isOnline) {
+                    // Update viewer count
+                    await fetchViewerCount(user.user_id);
+                    updatedCount++;
+                }
+            } catch (userError) {
+                errorCount++;
+                logger.error("Twitch", `Error updating viewer count for ${user.user_id}: ${userError.message}`);
+            }
+
+            // Add a small delay between API calls to avoid rate limits
+            await new Promise(resolve => setTimeout(resolve, 500));
+        }
+
+        logger.log("Twitch", `Updated viewer counts for ${updatedCount} streaming users, with ${errorCount} errors`);
+        return { updated: updatedCount, errors: errorCount };
+    } catch (error) {
+        logger.error("Twitch", `Error in updateAllStreamViewerCounts: ${error.message}`);
+        return { updated: 0, errors: 1 };
+    }
+}
+
+export function setupTwitchCronJobs() {
+    // Update viewer count every 5 minutes
+    cron.schedule('*/1 * * * *', async () => {
+        try {
+            const { updateAllStreamViewerCounts } = await import('./twitch-eventsub-manager.js');
+            await updateAllStreamViewerCounts();
+        } catch (error) {
+            logger.error("Cron", `Error in viewer count update job: ${error.message}`);
+        }
+    });
+
+    logger.log("System", "Twitch cron jobs initialized");
 }
 
 /**

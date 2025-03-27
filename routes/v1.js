@@ -61,35 +61,35 @@ async function requireAuth(request, reply) {
     logger.error("Auth", "Cookie parser not available - make sure fastify-cookie is registered");
     return reply.redirect('/web/auth/login');
   }
-  
+
   const sessionToken = request.cookies.enspira_session;
-  
+
   if (!sessionToken) {
     return reply.redirect('/web/auth/login');
   }
-  
+
   try {
     // Verify and decode the session token
     const decoded = verifySessionToken(sessionToken);
-    
+
     if (!decoded || !decoded.userId) {
       // Invalid token
       reply.clearCookie('enspira_session');
       return reply.redirect('/web/auth/login');
     }
-    
+
     // Get user from database
     const user = await returnAuthObject(decoded.userId);
-    
+
     if (!user) {
       // User doesn't exist
       reply.clearCookie('enspira_session');
       return reply.redirect('/web/auth/login');
     }
-    
+
     // Add user to request for use in route handlers
     request.user = user;
-    
+
     // Continue to route handler
     return;
   } catch (error) {
@@ -105,12 +105,12 @@ export function createSessionToken(userId, expiresIn = '7d') {
     userId,
     exp: Math.floor(Date.now() / 1000) + (60 * 60 * 24 * 7) // 7 days
   };
-  
+
   // Sign the token
   const token = crypto.createHmac('sha256', process.env.COOKIE_SECRET || 'enspira-secret-key')
     .update(JSON.stringify(payload))
     .digest('hex');
-  
+
   // Return token and payload together
   return `${token}.${Buffer.from(JSON.stringify(payload)).toString('base64')}`;
 }
@@ -119,24 +119,24 @@ export function createSessionToken(userId, expiresIn = '7d') {
 export function verifySessionToken(token) {
   try {
     const [signature, payloadBase64] = token.split('.');
-    
+
     // Decode the payload
     const payload = JSON.parse(Buffer.from(payloadBase64, 'base64').toString());
-    
+
     // Check if token is expired
     if (payload.exp < Math.floor(Date.now() / 1000)) {
       return null;
     }
-    
+
     // Verify the signature
     const expectedSignature = crypto.createHmac('sha256', process.env.COOKIE_SECRET || 'enspira-secret-key')
       .update(JSON.stringify(payload))
       .digest('hex');
-    
+
     if (signature !== expectedSignature) {
       return null;
     }
-    
+
     return payload;
   } catch (error) {
     logger.error("Auth", `Token verification error: ${error.message}`);
@@ -404,42 +404,42 @@ async function routes(fastify, options) {
       return reply;
     }
   });
-  
+
   // Login POST handler
   fastify.post('/auth/login', async (request, reply) => {
     try {
       const { user_id, password } = request.body;
-      
+
       if (!user_id || !password) {
         return reply.redirect('/v1/auth/login?error=Missing+required+fields');
       }
-      
+
       // Get user
       const user = await returnAuthObject(user_id);
-      
+
       if (!user) {
         return reply.redirect('/v1/auth/login?error=Invalid+credentials');
       }
-      
+
       // Check password
       if (!user.webPasswordHash || !user.webPasswordSalt) {
         return reply.redirect('/v1/auth/login?error=No+password+set');
       }
-      
+
       const passwordCorrect = await isPasswordCorrect(
         user.webPasswordHash,
         user.webPasswordSalt,
         user.webPasswordIterations || 20480,
         password
       );
-      
+
       if (!passwordCorrect) {
         return reply.redirect('/v1/auth/login?error=Invalid+credentials');
       }
-      
+
       // Create session
       const sessionToken = createSessionToken(user_id);
-      
+
       // Set cookie
       reply.setCookie('enspira_session', sessionToken, {
         path: '/',
@@ -448,7 +448,7 @@ async function routes(fastify, options) {
         sameSite: 'lax', // Protects against CSRF
         maxAge: 60 * 60 * 24 * 7 // 7 days
       });
-      
+
       // Redirect to dashboard or Twitch management
       return reply.redirect('/web/dashboard');
     } catch (error) {
@@ -456,34 +456,34 @@ async function routes(fastify, options) {
       return reply.redirect('/v1/auth/login?error=An+error+occurred');
     }
   });
-  
+
   // Logout route
   fastify.get('/auth/logout', async (request, reply) => {
     reply.clearCookie('enspira_session');
     return reply.redirect('/v1/auth/login');
   });
-  
+
   // Twitch management dashboard
   fastify.get('/auth/twitch/manage', { preHandler: requireAuth }, async (request, reply) => {
     try {
       const user = request.user;
-      
+
       // Format date for display
       const formatDate = (timestamp) => {
         if (!timestamp) return 'Never';
         return new Date(timestamp).toLocaleString();
       };
-      
+
       // Check bot connection
       const botConnected = user.twitch_tokens?.bot?.access_token ? true : false;
-      
+
       // Check streamer connection
       const streamerConnected = user.twitch_tokens?.streamer?.access_token ? true : false;
-      
+
       // Get scopes from config
       const streamerScopes = await retrieveConfigValue("twitch.scopes.streamer");
       const botScopes = await retrieveConfigValue("twitch.scopes.bot");
-      
+
       // Build the HTML
       const html = `<!doctype html>
       <html>
@@ -577,21 +577,21 @@ async function routes(fastify, options) {
           <div class="container">
             <h2>Streamer Account</h2>
             <div class="account-status">
-              ${streamerConnected ? 
-                `<svg class="status-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#2ecc71">
+              ${streamerConnected ?
+          `<svg class="status-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#2ecc71">
                   <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/>
                 </svg>
                 <div>
                   <p class="connected">Connected as: ${user.twitch_tokens.streamer.twitch_display_name}</p>
                   <p>Last authenticated: ${formatDate(user.twitch_tokens.streamer.expires_at)}</p>
-                </div>` : 
-                `<svg class="status-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#e74c3c">
+                </div>` :
+          `<svg class="status-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#e74c3c">
                   <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41z"/>
                 </svg>
                 <div>
                   <p class="not-connected">No streamer account connected</p>
                 </div>`
-              }
+        }
             </div>
             
             <p>The streamer account allows Enspira to access your channel information, manage raids, read subscriptions, and more.</p>
@@ -599,12 +599,12 @@ async function routes(fastify, options) {
             <div class="scopes">
               <p>Permissions required:</p>
               <div class="scope-list">
-                ${Array.isArray(streamerScopes) ? 
-                  streamerScopes.map(scope => `<span class="scope">${scope}</span>`).join('') : 
-                  (typeof streamerScopes === 'string' ? 
-                    streamerScopes.split(' ').map(scope => `<span class="scope">${scope}</span>`).join('') : 
-                    '')
-                }
+                ${Array.isArray(streamerScopes) ?
+          streamerScopes.map(scope => `<span class="scope">${scope}</span>`).join('') :
+          (typeof streamerScopes === 'string' ?
+            streamerScopes.split(' ').map(scope => `<span class="scope">${scope}</span>`).join('') :
+            '')
+        }
               </div>
             </div>
             
@@ -616,21 +616,21 @@ async function routes(fastify, options) {
           <div class="container">
             <h2>Bot Account</h2>
             <div class="account-status">
-              ${botConnected ? 
-                `<svg class="status-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#2ecc71">
+              ${botConnected ?
+          `<svg class="status-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#2ecc71">
                   <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/>
                 </svg>
                 <div>
                   <p class="connected">Connected as: ${user.twitch_tokens.bot.twitch_display_name}</p>
                   <p>Last authenticated: ${formatDate(user.twitch_tokens.bot.expires_at)}</p>
-                </div>` : 
-                `<svg class="status-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#e74c3c">
+                </div>` :
+          `<svg class="status-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#e74c3c">
                   <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41z"/>
                 </svg>
                 <div>
                   <p class="not-connected">No bot account connected</p>
                 </div>`
-              }
+        }
             </div>
             
             <p>The bot account allows Enspira to send chat messages, read chat, create clips, and more. This should be the Twitch account that will act as your AI assistant in chat.</p>
@@ -638,12 +638,12 @@ async function routes(fastify, options) {
             <div class="scopes">
               <p>Permissions required:</p>
               <div class="scope-list">
-                ${Array.isArray(botScopes) ? 
-                  botScopes.map(scope => `<span class="scope">${scope}</span>`).join('') : 
-                  (typeof botScopes === 'string' ? 
-                    botScopes.split(' ').map(scope => `<span class="scope">${scope}</span>`).join('') : 
-                    '')
-                }
+                ${Array.isArray(botScopes) ?
+          botScopes.map(scope => `<span class="scope">${scope}</span>`).join('') :
+          (typeof botScopes === 'string' ?
+            botScopes.split(' ').map(scope => `<span class="scope">${scope}</span>`).join('') :
+            '')
+        }
               </div>
             </div>
             
@@ -664,7 +664,7 @@ async function routes(fastify, options) {
           </div>
         </body>
       </html>`;
-      
+
       reply.type('text/html').send(html);
       return reply;
     } catch (error) {
@@ -693,29 +693,29 @@ async function routes(fastify, options) {
     try {
       const { type } = request.query;
       const user = request.user;
-      
+
       if (!type || (type !== 'bot' && type !== 'streamer')) {
         return reply.code(400).send({ error: 'Invalid account type' });
       }
-      
+
       // Generate auth token and store it temporarily
       const authToken = crypto.randomBytes(32).toString('hex');
-  
+
       global.pendingTwitchAuths = global.pendingTwitchAuths || new Map();
       global.pendingTwitchAuths.set(authToken, {
         userId: user.user_id,
         createdAt: Date.now(),
         authType: type
       });
-  
+
       // Get the scopes based on auth type
       const scopeType = type;
       let scopeValue;
-      
+
       try {
         // Get the scopes from config
         const configScopes = await retrieveConfigValue(`twitch.scopes.${scopeType}`);
-  
+
         // Handle different possible formats
         if (Array.isArray(configScopes)) {
           scopeValue = configScopes.join(' ');
@@ -740,7 +740,7 @@ async function routes(fastify, options) {
           scopeValue = 'channel:read:broadcast channel:read:subscriptions channel:read:hype_train channel:read:follows';
         }
       }
-  
+
       // Create the Twitch OAuth URL
       const authUrl = new URL('https://id.twitch.tv/oauth2/authorize');
       authUrl.searchParams.set('client_id', await retrieveConfigValue("twitch.clientId"));
@@ -748,12 +748,12 @@ async function routes(fastify, options) {
       authUrl.searchParams.set('response_type', 'code');
       authUrl.searchParams.set('scope', scopeValue);
       authUrl.searchParams.set('state', authToken);
-      
+
       // Force login prompt if connecting a bot account
       if (type === 'bot') {
         authUrl.searchParams.set('force_verify', 'true');
       }
-  
+
       return reply.redirect(authUrl.toString());
     } catch (error) {
       logger.error("Auth", `Error in Twitch connect: ${error.message}`);
@@ -880,21 +880,21 @@ async function routes(fastify, options) {
   // 3. Callback from Twitch OAuth
   fastify.get('/auth/twitch/callback', async (request, reply) => {
     const { code, state } = request.query;
-  
+
     // Verify state token exists in our pending auths
     if (!global.pendingTwitchAuths || !global.pendingTwitchAuths.has(state)) {
       return reply.code(400).send('Invalid or expired authorization request');
     }
-  
+
     // Get user ID from the stored mapping
     const { userId, createdAt, authType } = global.pendingTwitchAuths.get(state);
-  
+
     // Check if the token has expired (e.g., after 10 minutes)
     if (Date.now() - createdAt > 10 * 60 * 1000) {
       global.pendingTwitchAuths.delete(state);
       return reply.code(400).send('Authorization request expired');
     }
-  
+
     try {
       const axios = (await import('axios')).default;
       // Exchange code for access token
@@ -905,9 +905,9 @@ async function routes(fastify, options) {
         grant_type: 'authorization_code',
         redirect_uri: await retrieveConfigValue("twitch.redirectUri")
       });
-  
+
       const { access_token, refresh_token, expires_in } = tokenResponse.data;
-  
+
       // Get user info from Twitch
       const userResponse = await axios.get('https://api.twitch.tv/helix/users', {
         headers: {
@@ -915,12 +915,12 @@ async function routes(fastify, options) {
           'Authorization': `Bearer ${access_token}`
         }
       });
-      
+
       const twitchUserInfo = userResponse.data.data[0];
-      
+
       // Store tokens in user record - use the appropriate field based on auth type
       const tokenPath = authType === 'bot' ? "twitch_tokens.bot" : "twitch_tokens.streamer";
-      
+
       await updateUserParameter(userId, tokenPath, {
         access_token,
         refresh_token,
@@ -929,10 +929,10 @@ async function routes(fastify, options) {
         twitch_login: twitchUserInfo.login,
         twitch_display_name: twitchUserInfo.display_name
       });
-  
+
       // Clean up the pending auth
       global.pendingTwitchAuths.delete(state);
-      
+
       // Redirect back to the management page
       return reply.redirect('/web/dashboard');
     } catch (error) {
@@ -941,105 +941,155 @@ async function routes(fastify, options) {
     }
   });
 
-  fastify.get('/auth/twitch/status', async (request, reply) => {
-    const { userId } = request.query;
-
-    if (!userId) {
-      return reply.code(400).send('Missing user ID');
-    }
-
+  fastify.post('/character/personality', { preHandler: requireAuth }, async (request, reply) => {
     try {
-      const user = await returnAuthObject(userId);
+      const user = request.user;
+      const { bot_name, personality } = request.body;
 
-      if (!user) {
-        return reply.code(404).send('User not found');
+      // Update bot name in user record
+      await updateUserParameter(user.user_id, 'bot_name', bot_name);
+
+      // Save personality to file
+      const success = await saveTextContent(user.user_id, 'character_personality', personality);
+
+      if (success) {
+        reply.send({ success: true, message: 'Personality updated successfully' });
+      } else {
+        reply.code(500).send({ success: false, error: 'Failed to save personality' });
       }
-
-      // Get templates
-      const statusTemplate = await fs.readFile('./pages/twitch-status.html', 'utf-8');
-
-      // Format date for display
-      const formatDate = (timestamp) => {
-        if (!timestamp) return 'Never';
-        return new Date(timestamp).toLocaleString();
-      };
-
-      // Check bot connection
-      const botConnected = user.twitch_tokens?.bot?.access_token ? true : false;
-
-      // Check streamer connection
-      const streamerConnected = user.twitch_tokens?.streamer?.access_token ? true : false;
-
-      // Get scopes from config
-      const streamerScopes = await retrieveConfigValue("twitch.scopes.streamer");
-      const botScopes = await retrieveConfigValue("twitch.scopes.bot");
-
-      // Build template data
-      const templateData = {
-        username: user.user_name,
-
-        botConnected,
-        botName: user.twitch_tokens?.bot?.twitch_display_name || '',
-        botDate: formatDate(user.twitch_tokens?.bot?.expires_at),
-        botScopes: Array.isArray(botScopes) ? botScopes : (typeof botScopes === 'string' ? botScopes.split(' ') : []),
-
-        streamerConnected,
-        streamerName: user.twitch_tokens?.streamer?.twitch_display_name || '',
-        streamerDate: formatDate(user.twitch_tokens?.streamer?.expires_at),
-        streamerScopes: Array.isArray(streamerScopes) ? streamerScopes : (typeof streamerScopes === 'string' ? streamerScopes.split(' ') : []),
-      };
-
-      // Simple template rendering (in a real app, use a proper template engine)
-      let renderedTemplate = statusTemplate;
-
-      // Replace conditionals
-      renderedTemplate = renderedTemplate
-        .replace(/\{\{#if botConnected\}\}([\s\S]*?)\{\{else\}\}([\s\S]*?)\{\{\/if\}\}/g,
-          botConnected ? '$1' : '$2')
-        .replace(/\{\{#if streamerConnected\}\}([\s\S]*?)\{\{else\}\}([\s\S]*?)\{\{\/if\}\}/g,
-          streamerConnected ? '$1' : '$2');
-
-      // Replace variables
-      for (const [key, value] of Object.entries(templateData)) {
-        if (typeof value === 'string' || typeof value === 'number') {
-          renderedTemplate = renderedTemplate.replace(new RegExp(`\\{\\{${key}\\}\\}`, 'g'), value);
-        }
-      }
-
-      // Handle scope arrays
-      renderedTemplate = renderedTemplate
-        .replace(/\{\{#each botScopes\}\}([\s\S]*?)\{\{\/each\}\}/g,
-          templateData.botScopes.map(scope => {
-            return `<span class="scope">${scope}</span>`;
-          }).join('\n'))
-        .replace(/\{\{#each streamerScopes\}\}([\s\S]*?)\{\{\/each\}\}/g,
-          templateData.streamerScopes.map(scope => {
-            return `<span class="scope">${scope}</span>`;
-          }).join('\n'));
-
-      // Fix return to dashboard button to point to the right location
-      renderedTemplate = renderedTemplate.replace(
-        '<a href="/" class="button">Return to Dashboard</a>',
-        '<a href="/api/v1/auth/twitch/login" class="button">Return to Login</a>'
-      );
-
-      // Fix links in the status page to use /api/v1 for HTML pages
-      renderedTemplate = renderedTemplate.replace(
-        'href="/v1/auth/twitch/login?type=bot"',
-        'href="/api/v1/auth/twitch/login?type=bot"'
-      );
-
-      renderedTemplate = renderedTemplate.replace(
-        'href="/v1/auth/twitch/login?type=streamer"',
-        'href="/api/v1/auth/twitch/login?type=streamer"'
-      );
-
-      reply.type('text/html').send(renderedTemplate);
-      return reply;
-
     } catch (error) {
-      logger.error("Auth", `Error showing Twitch status: ${error.message}`);
-      return reply.code(500).send('Error loading Twitch status');
+      logger.error("Web", `Error updating personality: ${error.message}`);
+      reply.code(500).send({ success: false, error: 'An error occurred while updating personality' });
+    }
+  });
+
+  // Character description update endpoint
+  fastify.post('/character/description', { preHandler: requireAuth }, async (request, reply) => {
+    try {
+      const user = request.user;
+      const { description } = request.body;
+
+      // Save description to file
+      const success = await saveTextContent(user.user_id, 'character_card', description);
+
+      if (success) {
+        reply.send({ success: true, message: 'Description updated successfully' });
+      } else {
+        reply.code(500).send({ success: false, error: 'Failed to save description' });
+      }
+    } catch (error) {
+      logger.error("Web", `Error updating description: ${error.message}`);
+      reply.code(500).send({ success: false, error: 'An error occurred while updating description' });
+    }
+  });
+
+  // Character examples update endpoint
+  fastify.post('/character/examples', { preHandler: requireAuth }, async (request, reply) => {
+    try {
+      const user = request.user;
+      const { examples } = request.body;
+
+      // Save examples to file
+      const success = await saveTextContent(user.user_id, 'examples', examples);
+
+      if (success) {
+        reply.send({ success: true, message: 'Examples updated successfully' });
+      } else {
+        reply.code(500).send({ success: false, error: 'Failed to save examples' });
+      }
+    } catch (error) {
+      logger.error("Web", `Error updating examples: ${error.message}`);
+      reply.code(500).send({ success: false, error: 'An error occurred while updating examples' });
+    }
+  });
+
+  // World info update endpoint
+  fastify.post('/world/info', { preHandler: requireAuth }, async (request, reply) => {
+    try {
+      const user = request.user;
+      const { world_info, weather_enabled } = request.body;
+
+      // Update weather flag in user record
+      await updateUserParameter(user.user_id, 'weather', weather_enabled === 'true');
+
+      // Save world info to file
+      const success = await saveTextContent(user.user_id, 'world_lore', world_info);
+
+      if (success) {
+        reply.send({ success: true, message: 'World information updated successfully' });
+      } else {
+        reply.code(500).send({ success: false, error: 'Failed to save world information' });
+      }
+    } catch (error) {
+      logger.error("Web", `Error updating world info: ${error.message}`);
+      reply.code(500).send({ success: false, error: 'An error occurred while updating world information' });
+    }
+  });
+
+  // Player info update endpoint
+  fastify.post('/world/player', { preHandler: requireAuth }, async (request, reply) => {
+    try {
+      const user = request.user;
+      const { player_info } = request.body;
+
+      // Save player info to file
+      const success = await saveTextContent(user.user_id, 'player_info', player_info);
+
+      if (success) {
+        reply.send({ success: true, message: 'Player information updated successfully' });
+      } else {
+        reply.code(500).send({ success: false, error: 'Failed to save player information' });
+      }
+    } catch (error) {
+      logger.error("Web", `Error updating player info: ${error.message}`);
+      reply.code(500).send({ success: false, error: 'An error occurred while updating player information' });
+    }
+  });
+
+  // Scenario update endpoint
+  fastify.post('/world/scenario', { preHandler: requireAuth }, async (request, reply) => {
+    try {
+      const user = request.user;
+      const { scenario } = request.body;
+
+      // Save scenario to file
+      const success = await saveTextContent(user.user_id, 'scenario', scenario);
+
+      if (success) {
+        reply.send({ success: true, message: 'Scenario updated successfully' });
+      } else {
+        reply.code(500).send({ success: false, error: 'Failed to save scenario' });
+      }
+    } catch (error) {
+      logger.error("Web", `Error updating scenario: ${error.message}`);
+      reply.code(500).send({ success: false, error: 'An error occurred while updating scenario' });
+    }
+  });
+
+  // Bot configuration update endpoint
+  fastify.post('/world/bot-config', { preHandler: requireAuth }, async (request, reply) => {
+    try {
+      const user = request.user;
+      const { commands_list, aux_bots } = request.body;
+
+      // Update commands list in user record
+      const commandsArray = commands_list.split('\n')
+        .map(cmd => cmd.trim())
+        .filter(cmd => cmd.length > 0);
+
+      await updateUserParameter(user.user_id, 'commands_list', commandsArray);
+
+      // Update aux bots list in user record
+      const auxBotsArray = aux_bots.split('\n')
+        .map(bot => bot.trim())
+        .filter(bot => bot.length > 0);
+
+      await updateUserParameter(user.user_id, 'aux_bots', auxBotsArray);
+
+      reply.send({ success: true, message: 'Bot configuration updated successfully' });
+    } catch (error) {
+      logger.error("Web", `Error updating bot configuration: ${error.message}`);
+      reply.code(500).send({ success: false, error: 'An error occurred while updating bot configuration' });
     }
   });
 }
@@ -1215,7 +1265,7 @@ async function handleChatMessage(data, authObject, message, user, formattedDate,
               ? await aiHelper.respondWithVoice(finalResp.response, authObject.user_id)
               : null;
             response.send({ response: finalResp.response, audio_url, thoughts: finalResp.thoughtProcess });
-            return response; 
+            return response;
           } catch (ttsError) {
             logger.log("API", `TTS error: ${ttsError.message}`);
             response.send({ response: finalResp.response, thoughts: finalResp.thoughtProcess, tts_error: "TTS failed but text response is available" });
@@ -1492,30 +1542,30 @@ async function handleNonChatMessage(
             "API",
             `Processing ${data.user}'s message '${message}' into vector memory.`,
           );
-          
+
           if (authObject.tts_enabled) {
             try {
               const audioUrl = await aiHelper.respondWithVoice(
                 aiResp.response,
                 authObject.user_id,
               );
-              response.send({ 
+              response.send({
                 response: aiResp.response,
                 audio_url: audioUrl,
-                thoughtProcess: aiResp.thoughtProcess 
+                thoughtProcess: aiResp.thoughtProcess
               });
             } catch (ttsError) {
               logger.log("API", `TTS error: ${ttsError.message}`);
-              response.send({ 
+              response.send({
                 response: aiResp.response,
                 thoughtProcess: aiResp.thoughtProcess,
-                tts_error: "TTS failed but text response is available" 
+                tts_error: "TTS failed but text response is available"
               });
             }
           } else {
-            response.send({ 
+            response.send({
               response: aiResp.response,
-              thoughtProcess: aiResp.thoughtProcess 
+              thoughtProcess: aiResp.thoughtProcess
             });
           }
           return response;
@@ -1551,9 +1601,9 @@ async function handleNonChatMessage(
     }
   } catch (error) {
     logger.log("API", `Error in handleNonChatMessage: ${error.message}`);
-    response.code(500).send({ 
-      error: "Internal server error", 
-      message: error.message 
+    response.code(500).send({
+      error: "Internal server error",
+      message: error.message
     });
     return response;
   }

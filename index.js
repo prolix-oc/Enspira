@@ -76,28 +76,6 @@ const createServer = async () => {
     }
   };
 
-  const endPointDocBase = {
-    "chat": {
-      endpoint: "/api/v1/chats",
-      method: "POST"
-    },
-    "voice": {
-      endpoint: "/api/v1/voice",
-      method: "POST"
-    },
-    "event": {
-      endpoint: "/api/v1/events",
-      method: "POST"
-    },
-    "tts": {
-      endpoint: "/api/v1/speak",
-      method: "POST"
-    },
-    "healthcheck": {
-      endpoint: "/api/v1/healthcheck",
-      method: "GET"
-    }
-  };
   await fastify.register(fastifyCookie, {
     secret: await retrieveConfigValue("server.cookieSecret") || crypto.randomBytes(32).toString('hex'), // Use a stored secret or generate one
     parseOptions: {}
@@ -301,6 +279,23 @@ export async function initializeApp() {
     const status = await preflightChecks();
     await initAllAPIs();
 
+    try {
+      logger.log("System", "Importing Twitch EventSub manager...");
+      const { registerAllUsersEventSub, setupTwitchCronJobs } = await import('./twitch-eventsub-manager.js');
+
+      logger.log("System", "Registering Twitch EventSub subscriptions...");
+      const eventSubResults = await registerAllUsersEventSub();
+      logger.log("System", `EventSub registration complete: ${eventSubResults.success} successful, ${eventSubResults.failures} failed`);
+      
+      // Set up periodic Twitch data update jobs
+      logger.log("System", "Setting up Twitch cron jobs...");
+      setupTwitchCronJobs();
+    } catch (eventSubError) {
+      logger.error("System", `Error with Twitch integration: ${eventSubError.message}`);
+      // Continue execution even if EventSub registration fails
+    }
+
+    logger.log("System", "Enspira is fully initialized and ready!");
     return { server, status };
   } catch (error) {
     logger.error("System", `Failed to initialize application: ${error.message}`);

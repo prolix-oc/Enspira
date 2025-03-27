@@ -648,6 +648,63 @@ async function processEvent(notification, userId) {
         // Process the event with version information
         await processEventSubNotification(eventType, event, userId, eventVersion);
 
+        // Handle specific event types that need additional processing
+        switch (eventType) {
+            case 'channel.update':
+                // Handle game/title updates
+                await handleChannelUpdate(event, userId);
+                break;
+
+            case 'channel.follow':
+                // Handle new follower
+                await handleChannelFollow(event, userId);
+                break;
+
+            case 'channel.subscribe':
+            case 'channel.subscription.gift':
+            case 'channel.subscription.message':
+                // Handle subscription events
+                await handleSubscriptionEvent(eventType, event, userId);
+                break;
+
+            case 'channel.hype_train.begin':
+            case 'channel.hype_train.progress':
+            case 'channel.hype_train.end':
+                // Handle hype train events
+                await handleHypeTrainEvent(eventType, event, userId);
+                break;
+
+            case 'channel.cheer':
+                // Handle bits donation
+                await handleCheerEvent(event, userId);
+                break;
+
+            case 'stream.online':
+            case 'stream.offline':
+                // Handle stream state changes
+                await handleStreamStateChange(eventType, event, userId);
+                
+                // For stream.online, also fetch viewer count
+                if (eventType === 'stream.online') {
+                    // Import the fetchViewerCount function
+                    const { fetchViewerCount } = await import('../twitch-eventsub-manager.js');
+                    // Wait a bit for Twitch to update viewer count, then fetch it
+                    setTimeout(async () => {
+                        await fetchViewerCount(userId);
+                    }, 30000); // 30 seconds delay
+                }
+                break;
+
+            case 'channel.chat.message':
+                // Handle chat messages
+                const { processChatMessage } = await import('../twitch-eventsub-manager.js');
+                await processChatMessage(event, userId);
+                break;
+
+            default:
+                logger.log("Twitch", `Unhandled event type: ${eventType}`);
+        }
+
         // Store event data for debugging/analytics
         await storeEventData(eventType, event, userId, eventVersion);
     } catch (error) {
