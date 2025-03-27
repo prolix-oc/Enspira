@@ -45,6 +45,40 @@ export async function setupTemplating(fastify) {
     const moment = (await import('moment')).default;
     return moment(date).format(format);
   });
+  njkEnv.addFilter('startsWithMarkdown', (text) => {
+    if (!text) return false;
+    const trimmedText = text.trim();
+    // Check for common markdown patterns
+    return /^(#|\*|\-|\d+\.|>|\[|\`|\!\[)/.test(trimmedText);
+  });
+  
+  // Basic markdown renderer for simple cases
+  njkEnv.addFilter('renderMarkdown', (text) => {
+    if (!text) return '';
+    
+    let html = text;
+    
+    // Headers
+    html = html.replace(/^# (.*$)/gm, '<h1>$1</h1>');
+    html = html.replace(/^## (.*$)/gm, '<h2>$1</h2>');
+    html = html.replace(/^### (.*$)/gm, '<h3>$1</h3>');
+    
+    // Lists
+    html = html.replace(/^\- (.*$)/gm, '<li>$1</li>');
+    html = html.replace(/^(\d+)\. (.*$)/gm, '<li>$2</li>');
+    
+    // Wrap list items in ul/ol
+    html = html.replace(/(<li>.*<\/li>)\s+(?!<li>)/gs, '<ul>$1</ul>');
+    
+    // Bold and italics
+    html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    html = html.replace(/\*(.*?)\*/g, '<em>$1</em>');
+    
+    // Paragraphs (non-list, non-header text)
+    html = html.replace(/^(?!<h|<ul|<li|<ol)(.*$)/gm, '<p>$1</p>');
+    
+    return html;
+  });
   
   // Add direct view rendering to Fastify
   fastify.decorate('renderView', (template, data = {}) => {

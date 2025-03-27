@@ -9,7 +9,7 @@
   </div>
   <div class="character-meta">
     <h1>{{ character.name }}</h1>
-    <p class="author">By: {{ character.author }}</p>
+    <p class="author">by: {{ character.author }}</p>
     <p class="summary">{{ character.summary }}</p>
     <form action="/api/v1/gallery/{{ character.id }}/use" method="POST" data-async>
       <button type="submit" class="btn btn-primary btn-use-char">Use This Character</button>

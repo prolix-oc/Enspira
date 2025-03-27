@@ -410,37 +410,37 @@ async function routes(fastify, options) {
   fastify.post('/auth/login', async (request, reply) => {
     try {
       const { user_id, password } = request.body;
-  
+
       if (!user_id || !password) {
         return reply.redirect('/api/v1/auth/login?error=Missing+required+fields');
       }
-  
+
       // Get user
       const user = await returnAuthObject(user_id);
-  
+
       if (!user) {
         return reply.redirect('/api/v1/auth/login?error=Invalid+credentials');
       }
-  
+
       // Check password
       if (!user.webPasswordHash || !user.webPasswordSalt) {
         return reply.redirect('/api/v1/auth/login?error=No+password+set');
       }
-  
+
       const passwordCorrect = await isPasswordCorrect(
         user.webPasswordHash,
         user.webPasswordSalt,
         user.webPasswordIterations || 20480,
         password
       );
-  
+
       if (!passwordCorrect) {
         return reply.redirect('/api/v1/auth/login?error=Invalid+credentials');
       }
-  
+
       // Create session
       const sessionToken = createSessionToken(user_id);
-  
+
       // Set cookie
       reply.setCookie('enspira_session', sessionToken, {
         path: '/',
@@ -449,7 +449,7 @@ async function routes(fastify, options) {
         sameSite: 'lax',
         maxAge: 60 * 60 * 24 * 7 // 7 days
       });
-  
+
       // Redirect to dashboard
       return reply.redirect('/web/dashboard');
     } catch (error) {
@@ -461,7 +461,7 @@ async function routes(fastify, options) {
   // Logout route
   fastify.get('/auth/logout', async (request, reply) => {
     reply.clearCookie('enspira_session');
-    return reply.redirect('/v1/auth/login');
+    return reply.redirect('/web/auth/login');
   });
 
   // Twitch management dashboard
@@ -1159,7 +1159,7 @@ async function routes(fastify, options) {
       reply.code(500).send({ success: false, error: 'An error occurred while updating bot configuration' });
     }
   });
-  
+
   fastify.post('/gallery/:characterId/use', { preHandler: requireAuth }, async (request, reply) => {
     const { user } = request;
     const { characterId } = request.params;

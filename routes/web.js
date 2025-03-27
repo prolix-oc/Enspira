@@ -51,42 +51,42 @@ import { verifySessionToken } from './v1.js'
 async function requireAuth(request, reply) {
     // Check if cookies object exists and if the enspira_session cookie is set
     const sessionToken = request.cookies?.enspira_session;
-
+  
     if (!sessionToken) {
-        logger.log("Auth", "No session token found, redirecting to login");
-        return reply.redirect('/web/auth/login');
+      logger.log("Auth", "No session token found, redirecting to login");
+      return reply.redirect('/web/auth/login');  // Updated path
     }
-
+  
     try {
-        // Verify and decode the session token
-        const decoded = verifySessionToken(sessionToken);
-
-        if (!decoded || !decoded.userId) {
-            // Invalid token
-            reply.clearCookie('enspira_session');
-            return reply.redirect('/web/auth/login');
-        }
-
-        // Get user from database
-        const user = await returnAuthObject(decoded.userId);
-
-        if (!user) {
-            // User doesn't exist
-            reply.clearCookie('enspira_session');
-            return reply.redirect('/web/auth/login');
-        }
-
-        // Add user to request for use in route handlers
-        request.user = user;
-
-        // Continue to route handler
-        return;
-    } catch (error) {
-        logger.error("Auth", `Session validation error: ${error.message}`);
+      // Verify and decode the session token
+      const decoded = verifySessionToken(sessionToken);
+  
+      if (!decoded || !decoded.userId) {
+        // Invalid token
         reply.clearCookie('enspira_session');
-        return reply.redirect('/web/auth/login');
+        return reply.redirect('/web/auth/login');  // Updated path
+      }
+  
+      // Get user from database
+      const user = await returnAuthObject(decoded.userId);
+  
+      if (!user) {
+        // User doesn't exist
+        reply.clearCookie('enspira_session');
+        return reply.redirect('/web/auth/login');  // Updated path
+      }
+  
+      // Add user to request for use in route handlers
+      request.user = user;
+  
+      // Continue to route handler
+      return;
+    } catch (error) {
+      logger.error("Auth", `Session validation error: ${error.message}`);
+      reply.clearCookie('enspira_session');
+      return reply.redirect('/web/auth/login');  // Updated path
     }
-}
+  }
 
 // Helper function to extract form field values
 function getFieldValue(field) {

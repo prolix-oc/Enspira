@@ -317,7 +317,23 @@
         border-top-color: var(--accent);
         animation: spin 1s ease-in-out infinite;
       }
+      .four-column {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 20px;
+}
 
+@media (max-width: 1200px) {
+  .four-column {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 600px) {
+  .four-column {
+    grid-template-columns: 1fr;
+  }
+}
       @keyframes spin {
         to {
           transform: rotate(360deg);
@@ -389,7 +405,7 @@
               <a href="/web/gallery" class="{% if galleryActive %}active{% endif %}">Gallery</a>
             </li>
             <li>
-              <a href="/api/v1/auth/logout" class="btn btn-secondary">Logout</a>
+              <a href="/web/auth/logout" class="btn btn-secondary">Logout</a>
             </li>
           </ul>
         </nav>
