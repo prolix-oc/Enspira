@@ -148,3 +148,4 @@ go.sum
 bin/*
 logs/*
 *.sh
+repomix-output.md

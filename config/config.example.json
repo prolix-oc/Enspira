@@ -1,11 +1,18 @@
 {
   "server": {
+    "cookieSecret": "",
     "authFilePath": "./auth/auth_keys.json",
     "port": 3002,
     "authRequired": true,
     "endpoints": {
-      "external": "https://example.com",
+      "external": "http://localhost:3002",
       "internal": "::"
+    },
+    "externalScraper": {
+      "enabled": false,
+      "endpoint": "",
+      "deviceType": "",
+      "caching": ""
     }
   },
   "brave": {
@@ -24,11 +31,12 @@
   "twitch": {
     "maxChatsToSave": 40,
     "maxCharLimit": 500,
-    "clientId": "qy6zyxqkh4uu243paz4l29nxtr9jg5",
-    "clientSecret": "vbfjx1y7xkpvzwaoysqx5uiuwwtcz7",
-    "redirectUri": "https://enspira.tools/api/v1/auth/twitch/callback",
+    "clientId": "",
+    "clientSecret": "",
+    "redirectUri": "",
     "scopes": {
       "streamer": [
+        "bits:read",
         "analytics:read:games",
         "analytics:read:extensions",
         "channel:edit:commercial",
@@ -42,7 +50,13 @@
         "channel:manage:broadcast",
         "channel:manage:raids",
         "channel:manage:ads",
-        "channel:manage:raids"
+        "channel:manage:raids",
+        "channel:moderate",
+        "channel:read:stream_key",
+        "chat:read",
+        "moderator:read:followers",
+        "moderator:read:chatters",
+        "user:write:chat"
       ],
       "bot": [
         "bits:read",
@@ -68,63 +82,60 @@
     "summary": {
       "enabled": true,
       "endpoint": "",
-      "apiKeyType": "oai",
       "apiKey": "",
       "model": "",
       "modelType": "",
-      "maxTokens": 0,
-      "reasoningCapable": false,
-      "reasoningToken": ""
+      "maxTokens": 131072
     },
     "query": {
       "endpoint": "",
-      "apiKeyType": "",
       "apiKey": "",
       "model": "",
       "modelType": "",
-      "maxTokens": 0,
-      "reasoningCapable": false,
-      "reasoningToken": ""
+      "maxTokens": 4096
     },
     "chat": {
+      "author": "",
+      "organization": "",
       "endpoint": "",
-      "apiKeyType": "",
       "apiKey": "",
       "model": "",
       "modelType": "",
-      "maxTokens": 0,
-      "reasoningCapable": false,
-      "reasoningToken": ""
+      "maxTokens": 12288
     },
     "embedding": {
-      "endpoint": "",
+      "endpoint": "1",
       "apiKey": "",
       "apiKeyType": "",
       "model": "",
-      "rerankingModel": "",
-      "classifyModel": "",
-      "reasoningCapable": false,
-      "reasoningToken": ""
-    },
-    "conversion": {
-      "endpoint": "",
-      "apiKey": "",
-      "apiKeyType": "",
-      "model": "",
-      "modelType": "",
-      "maxTokens": 0,
-      "reasoningCapable": false,
-      "reasoningToken": ""
+      "dimensions": 1024,
+      "embeddingType": ""
     },
     "rerank": {
       "endpoint": "",
       "apiKey": "",
       "apiKeyType": "",
+      "model": ""
+    },
+    "classifier": {
+      "endpoint": "",
+      "apiKey": "",
+      "apiKeyType": "",
+      "model": ""
+    },
+    "conversion": {
+      "endpoint": "",
+      "apiKey": "",
       "model": "",
       "modelType": "",
-      "maxTokens": 0,
-      "reasoningCapable": false,
-      "reasoningToken": ""
+      "maxTokens": 131072
+    },
+    "rerankTransform": {
+      "endpoint": "",
+      "apiKey": "",
+      "model": "",
+      "modelType": "",
+      "maxTokens": 4096
     },
     "moderator": {
       "endpoint": "",
@@ -132,32 +143,55 @@
       "apiKeyType": "",
       "model": "",
       "modelType": "",
-      "maxTokens": 0,
-      "reasoningCapable": false,
-      "reasoningToken": ""
+      "maxTokens": 4096
     }
   },
   "samplers": {
-    "topK": 0,
-    "maxTokens": 0,
-    "generateWindow": 0,
-    "tokenHealing": true,
-    "speculativeNgram": true,
-    "topP": 1.0,
-    "topA": 0.0,
-    "typicalP": 1.0,
-    "minP": 0.0,
-    "temperature": 0.0,
-    "minTokens": 0,
-    "mirostat": false,
-    "mirostatMode": 0,
-    "repetitionPenalty": 1.0,
-    "bannedStrings": [],
-    "xtcThreshold": 0.0,
-    "xtcProbability": 0.0
+    "chat": {
+      "topK": -1,
+      "maxTokens": 1024,
+      "generateWindow": 1024,
+      "topP": 0.95,
+      "typicalP": 1,
+      "minP": 0.05,
+      "temperature": 0.1,
+      "minTokens": 90,
+      "repetitionPenalty": 1,
+      "presencePenalty": 1,
+      "xtcThreshold": 0.1,
+      "xtcProbability": 0.2,
+      "dynTemp": true,
+      "dynTempMin": 0.07,
+      "dynTempMax": 0.13
+    },
+    "tool": {
+      "topK": -1,
+      "topP": 0.9,
+      "minP": 0.05,
+      "temperature": 0.4,
+      "maxTokens": 1024,
+      "generateWindow": 1024
+    }
   },
+  "funFacts": {
+    "key": ""
+  },
+  "ttsPreference": "",
   "alltalk": {
-    "ttsEnabled": true,
+    "ttsGenEndpoint": {
+      "internal": "",
+      "external": ""
+    },
+    "ttsServeEndpoint": {
+      "internal": "",
+      "external": ""
+    },
+    "healthcheck": {
+      "internal": "",
+      "external": ""
+    }
+  },
+  "fishTTS": {
     "ttsGenEndpoint": {
       "internal": "",
       "external": ""

@@ -34,10 +34,29 @@
     "weather": true,
     "max_chats": 40,
     "ttsEqPref": "",
+    "ttsUpsamplePref": false,
     "twitch_tokens": {
-      "access_token": "",
-      "refresh_token": "",
-      "expires_at": 0
+      "bot": {
+        "access_token": "",
+        "refresh_token": "",
+        "expires_at": 0
+      },
+      "streamer": {
+        "access_token": "",
+        "refresh_token": "",
+        "expires_at": 0
+      }
+    },
+    "current_game": {
+      "online": false,
+      "updated_at": ""
+    },
+    "fishTTSVoice": "",
+    "current_followers": 0,
+    "current_viewers": 0,
+    "stream_status": {
+      "online": false,
+      "updated_at": ""
     },
     "webPasswordHash": "",
     "webPasswordSalt": ""
