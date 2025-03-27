@@ -11,13 +11,13 @@
 {{#if presets}}
 <div class="gallery-grid">
   {{#each presets}}
-  <a href="/web/gallery/{{this.id}}" class="card preset-card">
+  <a href="/web/gallery/{{id}}" class="card preset-card">
     <div class="preset-image">
-      <img src="{{this.image}}" alt="{{this.name}} Avatar" loading="lazy">
+      <img src="{{image}}" alt="{{name}} Avatar" loading="lazy" class="fade-in-image">
     </div>
     <div class="preset-info">
-      <h3 class="preset-name">{{this.name}}</h3>
-      <p class="preset-author">By: {{this.author}}</p>
+      <h3 class="preset-name">{{name}}</h3>
+      <p class="preset-author">By: {{author}}</p>
     </div>
   </a>
   {{/each}}
@@ -59,14 +59,22 @@
     aspect-ratio: 1 / 1; /* Square aspect ratio for images */
     background-color: var(--background); /* Fallback color */
     overflow: hidden;
+    position: relative;
   }
 
   .preset-image img {
     width: 100%;
     height: 100%;
     object-fit: cover;
+    object-position: top center; /* Align to top */
     display: block;
     border-bottom: 1px solid var(--border);
+    opacity: 0; /* Start with invisible image */
+    transition: opacity 0.4s ease-in-out;
+  }
+
+  .preset-image img.loaded {
+    opacity: 1; /* Fade in when loaded class is added */
   }
 
   .preset-info {
@@ -85,3 +93,29 @@
     margin: 0;
   }
 </style>
+
+<script>
+  // Add onload event handlers to all fade-in images
+  document.addEventListener('DOMContentLoaded', () => {
+    const images = document.querySelectorAll('.fade-in-image');
+    
+    images.forEach(img => {
+      // For images that are already loaded from cache
+      if (img.complete) {
+        img.classList.add('loaded');
+      } else {
+        // For images that need to be loaded
+        img.addEventListener('load', () => {
+          img.classList.add('loaded');
+        });
+        
+        // Fallback in case image fails to load
+        img.addEventListener('error', () => {
+          img.classList.add('loaded');
+          // Optionally set a placeholder or error image
+          // img.src = '/api/placeholder/200/200';
+        });
+      }
+    });
+  });
+</script>

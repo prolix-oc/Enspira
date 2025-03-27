@@ -1159,6 +1159,7 @@ async function routes(fastify, options) {
       reply.code(500).send({ success: false, error: 'An error occurred while updating bot configuration' });
     }
   });
+  
   fastify.post('/gallery/:characterId/use', { preHandler: requireAuth }, async (request, reply) => {
     const { user } = request;
     const { characterId } = request.params;
@@ -1169,22 +1170,46 @@ async function routes(fastify, options) {
         return reply.code(404).send({ success: false, error: 'Character preset not found' });
       }
 
+      logger.log("Web", `Applying character preset: ${preset.name} (${characterId}) for user ${user.user_id}`);
+
+      // Extract the internal format for saving to user files
+      const personalityContent = preset.personality.internalFmt || preset.personality || '';
+      const descriptionContent = preset.char_description.internalFmt || preset.char_description || '';
+
       // Apply the preset data to the user
       const nameUpdate = await updateUserParameter(user.user_id, 'bot_name', preset.name);
-      const personalitySave = await saveTextContent(user.user_id, 'character_personality', preset.personality || '');
-      const descriptionSave = await saveTextContent(user.user_id, 'character_card', preset.char_description || '');
+
+      // Save personality and description to files
+      const personalitySave = await saveTextContent(user.user_id, 'character_personality', personalityContent);
+      const descriptionSave = await saveTextContent(user.user_id, 'character_card', descriptionContent);
+
+      // Make sure bot_twitch is set if present in the preset
+      if (preset.bot_twitch) {
+        await updateUserParameter(user.user_id, 'bot_twitch', preset.bot_twitch);
+      }
 
       if (nameUpdate && personalitySave && descriptionSave) {
-        logger.log("API", `User ${user.user_id} applied preset '${characterId}'`);
+        logger.log("Web", `Successfully applied preset '${characterId}' for user ${user.user_id}`);
+
         // Respond with success and a redirect URL for the frontend handler
-        reply.send({ success: true, message: `${preset.name} preset applied successfully!`, redirect: '/web/character' });
+        return reply.send({
+          success: true,
+          message: `Character preset "${preset.name}" applied successfully!`,
+          redirect: '/web/character'
+        });
       } else {
-        logger.error("API", `Failed to fully apply preset '${characterId}' for user ${user.user_id}`);
-        reply.code(500).send({ success: false, error: 'Failed to save all character data' });
+        logger.error("Web", `Failed to fully apply preset '${characterId}' for user ${user.user_id}`);
+        return reply.code(500).send({
+          success: false,
+          error: 'Failed to save all character data'
+        });
       }
     } catch (error) {
-      logger.error("API", `Error applying preset '${characterId}' for user ${user.user_id}: ${error.message}`);
-      reply.code(500).send({ success: false, error: 'An error occurred while applying the preset' });
+      logger.error("Web", `Error applying preset '${characterId}' for user ${user.user_id}: ${error.message}`);
+      return reply.code(500).send({
+        success: false,
+        error: 'An error occurred while applying the preset'
+      });
     }
   });
 }
@@ -1733,55 +1758,180 @@ async function handleNonChatMessage(
  */
 export async function loadAllPresets() {
   try {
-      const presetsDir = path.join(process.cwd(), 'presets');
-      const files = await fs.readdir(presetsDir);
+    const presetsDir = path.join(process.cwd(), 'presets');
 
-      // Only process JSON files
-      const jsonFiles = files.filter(file => file.endsWith('.json'));
+    // Make sure the directory exists
+    await fs.ensureDir(presetsDir);
 
-      // Load each preset file
-      const presets = await Promise.all(
-          jsonFiles.map(async file => {
-              const filePath = path.join(presetsDir, file);
-              const data = await fs.readFile(filePath, 'utf8');
-              const preset = JSON.parse(data);
+    const files = await fs.readdir(presetsDir);
 
-              // Add the filename (without extension) as an ID
-              preset.id = path.basename(file, '.json');
+    // Only process JSON files
+    const jsonFiles = files.filter(file => file.endsWith('.json'));
 
-              return preset;
-          })
-      );
+    // If no presets found, return empty array
+    if (jsonFiles.length === 0) {
+      logger.log("Web", "No character presets found in presets directory");
+      return [];
+    }
 
-      return presets;
+    // Load each preset file
+    const presets = await Promise.all(
+      jsonFiles.map(async file => {
+        try {
+          const filePath = path.join(presetsDir, file);
+          const data = await fs.readFile(filePath, 'utf8');
+          const preset = JSON.parse(data);
+
+          // Add the filename (without extension) as an ID
+          preset.id = path.basename(file, '.json');
+
+          // Handle basic preset fields
+          preset.name = preset.name || 'Unnamed Character';
+          preset.author = preset.author || 'Unknown Author';
+          preset.summary = preset.summary || 'No description provided.';
+
+          // Handle nested personality structure
+          if (typeof preset.personality === 'object' && preset.personality !== null) {
+            // Already using new format
+            preset.personality.internalFmt = preset.personality.internalFmt || '';
+            preset.personality.publicFmt = preset.personality.publicFmt || '';
+          } else if (typeof preset.personality === 'string') {
+            // Convert old format to new
+            const personalityText = preset.personality;
+            preset.personality = {
+              internalFmt: personalityText,
+              publicFmt: personalityText
+            };
+          } else {
+            // Initialize with empty values
+            preset.personality = {
+              internalFmt: '',
+              publicFmt: ''
+            };
+          }
+
+          // Handle nested character description structure
+          if (typeof preset.char_description === 'object' && preset.char_description !== null) {
+            // Already using new format
+            preset.char_description.internalFmt = preset.char_description.internalFmt || '';
+            preset.char_description.publicFmt = preset.char_description.publicFmt || '';
+          } else if (typeof preset.char_description === 'string') {
+            // Convert old format to new
+            const descriptionText = preset.char_description;
+            preset.char_description = {
+              internalFmt: descriptionText,
+              publicFmt: descriptionText
+            };
+          } else {
+            // Initialize with empty values
+            preset.char_description = {
+              internalFmt: '',
+              publicFmt: ''
+            };
+          }
+
+          // Default image if not present
+          if (!preset.image) {
+            preset.image = '/api/placeholder/200/200';
+          }
+
+          return preset;
+        } catch (err) {
+          logger.error("Web", `Error loading preset ${file}: ${err.message}`);
+          return null;
+        }
+      })
+    );
+
+    // Filter out any null results from failed loads
+    return presets.filter(preset => preset !== null);
   } catch (error) {
-      console.error('Error loading presets:', error);
-      throw error;
+    logger.error("Web", `Error loading presets: ${error.message}`);
+    // Return empty array instead of throwing, to show empty gallery
+    return [];
   }
 }
 
 /**
 * Load a specific character preset by name
-* @param {string} characterName - Name of the character (filename without .json)
+* @param {string} characterId - ID of the character (filename without .json)
 * @returns {Promise<Object|null>} Character preset object or null if not found
 */
-export async function loadPreset(characterName) {
+export async function loadPreset(characterId) {
   try {
-      const filePath = path.join(process.cwd(), 'presets', `${characterName}.json`);
-      const data = await fs.readFile(filePath, 'utf8');
-      const preset = JSON.parse(data);
+    const filePath = path.join(process.cwd(), 'presets', `${characterId}.json`);
 
-      // Add the characterName as an ID
-      preset.id = characterName;
+    // Check if file exists
+    const exists = await fs.pathExists(filePath);
+    if (!exists) {
+      logger.warn("Web", `Character preset file not found: ${characterId}.json`);
+      return null;
+    }
 
-      return preset;
+    const data = await fs.readFile(filePath, 'utf8');
+    const preset = JSON.parse(data);
+
+    // Add the characterId as an ID
+    preset.id = characterId;
+
+    // Handle basic preset fields
+    preset.name = preset.name || 'Unnamed Character';
+    preset.author = preset.author || 'Unknown Author';
+    preset.summary = preset.summary || 'No description provided.';
+
+    // Handle nested personality structure
+    if (typeof preset.personality === 'object' && preset.personality !== null) {
+      // Already using new format
+      preset.personality.internalFmt = preset.personality.internalFmt || '';
+      preset.personality.publicFmt = preset.personality.publicFmt || '';
+    } else if (typeof preset.personality === 'string') {
+      // Convert old format to new
+      const personalityText = preset.personality;
+      preset.personality = {
+        internalFmt: personalityText,
+        publicFmt: personalityText
+      };
+    } else {
+      // Initialize with empty values
+      preset.personality = {
+        internalFmt: '',
+        publicFmt: ''
+      };
+    }
+
+    // Handle nested character description structure
+    if (typeof preset.char_description === 'object' && preset.char_description !== null) {
+      // Already using new format
+      preset.char_description.internalFmt = preset.char_description.internalFmt || '';
+      preset.char_description.publicFmt = preset.char_description.publicFmt || '';
+    } else if (typeof preset.char_description === 'string') {
+      // Convert old format to new
+      const descriptionText = preset.char_description;
+      preset.char_description = {
+        internalFmt: descriptionText,
+        publicFmt: descriptionText
+      };
+    } else {
+      // Initialize with empty values
+      preset.char_description = {
+        internalFmt: '',
+        publicFmt: ''
+      };
+    }
+
+    // Default image if not present
+    if (!preset.image) {
+      preset.image = '/api/placeholder/200/200';
+    }
+
+    return preset;
   } catch (error) {
-      if (error.code === 'ENOENT') {
-          // File not found
-          return null;
-      }
-      console.error(`Error loading preset ${characterName}:`, error);
-      throw error;
+    if (error.code === 'ENOENT') {
+      // File not found
+      return null;
+    }
+    logger.error("Web", `Error loading preset ${characterId}: ${error.message}`);
+    return null;
   }
 }
 

@@ -3,26 +3,38 @@
 
 <div class="card character-header">
   <div class="character-avatar-large">
-    <img src="{{character.image}}" alt="{{character.name}} Avatar">
+    <img src="{{character.image}}" alt="{{character.name}} Avatar" class="fade-in-image">
   </div>
   <div class="character-meta">
     <h1>{{character.name}}</h1>
     <p class="author">By: {{character.author}}</p>
     <p class="summary">{{character.summary}}</p>
     <form action="/api/v1/gallery/{{character.id}}/use" method="POST" data-async>
-      <button type="submit" class="btn btn-primary btn-use-char">Use {{character.name}}</button>
+      <button type="submit" class="btn btn-primary btn-use-char">Use This Character</button>
     </form>
   </div>
 </div>
 
 <div class="card">
   <h2>Personality</h2>
-  <pre class="character-content">{{character.personality}}</pre>
+  <div class="character-content-public">
+    {{#if character.personality.publicFmt}}
+      {{character.personality.publicFmt}}
+    {{else}}
+      <pre class="character-content">{{character.personality}}</pre>
+    {{/if}}
+  </div>
 </div>
 
 <div class="card">
   <h2>Description</h2>
-  <pre class="character-content">{{character.char_description}}</pre>
+  <div class="character-content-public">
+    {{#if character.char_description.publicFmt}}
+      {{character.char_description.publicFmt}}
+    {{else}}
+      <pre class="character-content">{{character.char_description}}</pre>
+    {{/if}}
+  </div>
 </div>
 
 {{extraStyles}}
@@ -40,13 +52,21 @@
     border-radius: 8px;
     overflow: hidden;
     border: 1px solid var(--border);
+    background-color: var(--background);
   }
 
   .character-avatar-large img {
     width: 100%;
     height: 100%;
     object-fit: cover;
+    object-position: top center; /* Align to top */
     display: block;
+    opacity: 0; /* Start invisible */
+    transition: opacity 0.5s ease-in-out;
+  }
+  
+  .character-avatar-large img.loaded {
+    opacity: 1; /* Fade in when loaded */
   }
 
   .character-meta {
@@ -64,11 +84,11 @@
     margin-bottom: 15px;
   }
 
-   .character-meta .summary {
+  .character-meta .summary {
     color: var(--primary-text);
     margin-bottom: 20px;
     font-size: 1.05em;
-   }
+  }
 
   .character-content {
     background-color: var(--input-bg);
@@ -78,6 +98,14 @@
     word-wrap: break-word; /* Ensures long words break */
     font-family: monospace;
     border: 1px solid var(--border);
+  }
+  
+  .character-content-public {
+    background-color: var(--input-bg);
+    padding: 15px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    line-height: 1.5;
   }
 
   .btn-use-char {
@@ -98,3 +126,27 @@
     }
   }
 </style>
+
+<script>
+  // Add fade-in functionality for images
+  document.addEventListener('DOMContentLoaded', () => {
+    const images = document.querySelectorAll('.fade-in-image');
+    
+    images.forEach(img => {
+      // For images that are already loaded from cache
+      if (img.complete) {
+        img.classList.add('loaded');
+      } else {
+        // For images that need to be loaded
+        img.addEventListener('load', () => {
+          img.classList.add('loaded');
+        });
+        
+        // Fallback in case image fails to load
+        img.addEventListener('error', () => {
+          img.classList.add('loaded');
+        });
+      }
+    });
+  });
+</script>

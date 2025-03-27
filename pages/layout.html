@@ -323,6 +323,22 @@
           transform: rotate(360deg);
         }
       }
+
+      /* Fix for nested cards in dashboard */
+      .card .card {
+        margin-bottom: 0;
+      }
+      
+      /* Fix for two-column inside cards */
+      .card > .two-column > .card {
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+      }
+      
+      .card > .two-column > .card p {
+        flex-grow: 1;
+      }
     </style>
     {{extraStyles}}
   </head>
@@ -381,7 +397,9 @@
     </header>
 
     <main>
-      <div class="container">{{mainContent}}</div>
+      <div class="container">
+        {{mainContent}}
+      </div>
     </main>
 
     <footer>
@@ -406,15 +424,15 @@
 
           tabs.forEach((tab) => {
             tab.addEventListener("click", () => {
-              // Remove active class from all tabs
-              tabs.forEach((t) => t.classList.remove("active"));
+              // Remove active class from all tabs in this group
+              tabGroup.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
 
               // Add active class to clicked tab
               tab.classList.add("active");
 
               // Show corresponding tab content
               const target = tab.getAttribute("data-target");
-              tabContents.forEach((content) => {
+              document.querySelectorAll(".tab-content").forEach((content) => {
                 if (content.id === target) {
                   content.classList.add("active");
                 } else {
@@ -433,60 +451,101 @@
 
             const formData = new FormData(form);
             const submitBtn = form.querySelector('button[type="submit"]');
+            
+            // If no submit button found, just proceed
+            if (!submitBtn) {
+              processForm();
+              return;
+            }
+            
             const originalBtnText = submitBtn.textContent;
 
             // Show loading state
             submitBtn.disabled = true;
             submitBtn.innerHTML = '<span class="loading"></span> Processing...';
 
-            try {
-              const response = await fetch(form.action, {
-                method: form.method || "POST",
-                body: formData,
-                headers: {
-                  Accept: "application/json",
-                },
-              });
+            // Process the form
+            processForm();
 
-              const result = await response.json();
+            // Function to process the form submission
+            async function processForm() {
+              try {
+                const response = await fetch(form.action, {
+                  method: form.method || "POST",
+                  body: formData,
+                  headers: {
+                    Accept: "application/json",
+                  },
+                });
 
-              if (response.ok) {
-                // Show success message
-                const alertEl = document.createElement("div");
-                alertEl.className = "alert alert-success";
-                alertEl.textContent =
-                  result.message || "Changes saved successfully!";
-                form.prepend(alertEl);
+                const result = await response.json();
 
-                // Remove alert after 3 seconds
-                setTimeout(() => alertEl.remove(), 3000);
+                if (response.ok) {
+                  // Show success message
+                  const existingAlert = form.querySelector('.alert');
+                  if (existingAlert) {
+                    existingAlert.remove();
+                  }
+                  
+                  const alertEl = document.createElement("div");
+                  alertEl.className = "alert alert-success";
+                  alertEl.textContent = result.message || "Changes saved successfully!";
+                  form.prepend(alertEl);
 
-                // If there's a redirect URL, navigate there
-                if (result.redirect) {
-                  window.location.href = result.redirect;
+                  // Remove alert after 3 seconds
+                  setTimeout(() => alertEl.remove(), 3000);
+
+                  // If there's a redirect URL, navigate there
+                  if (result.redirect) {
+                    window.location.href = result.redirect;
+                  }
+                } else {
+                  // Show error message
+                  const existingAlert = form.querySelector('.alert');
+                  if (existingAlert) {
+                    existingAlert.remove();
+                  }
+                  
+                  const alertEl = document.createElement("div");
+                  alertEl.className = "alert alert-error";
+                  alertEl.textContent = result.error || "An error occurred. Please try again.";
+                  form.prepend(alertEl);
                 }
-              } else {
-                // Show error message
+              } catch (error) {
+                console.error("Error:", error);
+                
+                const existingAlert = form.querySelector('.alert');
+                if (existingAlert) {
+                  existingAlert.remove();
+                }
+                
                 const alertEl = document.createElement("div");
                 alertEl.className = "alert alert-error";
-                alertEl.textContent =
-                  result.error || "An error occurred. Please try again.";
+                alertEl.textContent = "An unexpected error occurred. Please try again.";
                 form.prepend(alertEl);
+              } finally {
+                // Restore button state if it exists
+                if (submitBtn) {
+                  submitBtn.disabled = false;
+                  submitBtn.textContent = originalBtnText;
+                }
               }
-            } catch (error) {
-              console.error("Error:", error);
-              const alertEl = document.createElement("div");
-              alertEl.className = "alert alert-error";
-              alertEl.textContent =
-                "An unexpected error occurred. Please try again.";
-              form.prepend(alertEl);
-            } finally {
-              // Restore button state
-              submitBtn.disabled = false;
-              submitBtn.textContent = originalBtnText;
             }
           });
         });
+
+        // Image loading for fade-in images
+        const fadeImages = document.querySelectorAll('.fade-in-image');
+        if (fadeImages.length > 0) {
+          fadeImages.forEach(img => {
+            if (img.complete) {
+              img.classList.add('loaded');
+            } else {
+              img.addEventListener('load', () => img.classList.add('loaded'));
+              img.addEventListener('error', () => img.classList.add('loaded'));
+            }
+          });
+        }
       });
     </script>
 

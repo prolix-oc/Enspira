@@ -21,38 +21,87 @@ function renderTemplate(templateContent, data) {
     // Simple template rendering with handlebars-like syntax
     let rendered = templateContent;
 
-    // Handle basic variable substitution
-    const variableRegex = /\{\{([^}]+)\}\}/g;
-    rendered = rendered.replace(variableRegex, (match, variable) => {
-        // Check if this is a simple assignment (like {{pageTitle = "Dashboard"}})
-        if (variable.includes('=')) {
-            const [varName, varValue] = variable.split('=').map(s => s.trim());
-            data[varName] = varValue.replace(/"/g, ''); // Remove quotes if present
-            return ''; // Remove the assignment from output
-        }
+    // Handle each templating feature in the correct order to prevent interference
 
-        // Skip if this is part of a conditional - we'll handle those separately
-        if (variable.startsWith('#if') || variable.startsWith('/if') ||
-            variable.startsWith('#else') || variable.startsWith('else')) {
-            return match;
-        }
-
-        // Handle nested properties using a path string (e.g., "user.name")
-        const path = variable.trim().split('.');
-        let value = data;
-
-        for (const key of path) {
-            if (value === undefined || value === null) return '';
-            value = value[key];
-        }
-
-        // Return empty string for undefined/null values
-        return value !== undefined && value !== null ? value : '';
+    // 1. Handle simple assignments first (like {{pageTitle = "Dashboard"}})
+    const assignmentRegex = /\{\{([^}]+?)\s*=\s*(['"]?)([^'"]+)\2\}\}/g;
+    rendered = rendered.replace(assignmentRegex, (match, varName, quote, varValue) => {
+        data[varName.trim()] = varValue.trim();
+        return ''; // Remove the assignment from output
     });
 
-    // Handle conditional blocks - be sure this captures the right patterns
-    const conditionalRegex = /\{\{#if ([^}]+)\}\}([\s\S]*?)\{\{else\}\}([\s\S]*?)\{\{\/if\}\}/g;
-    rendered = rendered.replace(conditionalRegex, (match, condition, ifTrue, ifFalse) => {
+    // 2. Handle #each loops
+    const eachRegex = /\{\{#each ([^}]+)\}\}([\s\S]*?)\{\{\/each\}\}/g;
+    rendered = rendered.replace(eachRegex, (match, arrayPath, template) => {
+        // Get the array to iterate over
+        const path = arrayPath.trim().split('.');
+        let array = data;
+        
+        for (const key of path) {
+            if (array === undefined || array === null) return '';
+            array = array[key];
+        }
+        
+        if (!Array.isArray(array)) return '';
+        
+        // Build result by applying the template to each item
+        return array.map(item => {
+            // Create a temporary data object with 'this' pointing to the current item
+            const itemData = { 
+                ...data,
+                this: item,
+                // Also add the item properties directly to the root for easier access
+                // This supports {{name}} instead of requiring {{this.name}}
+                ...item 
+            };
+            
+            // Apply the template to the current item
+            let itemTemplate = template;
+            
+            // Replace item properties
+            const itemRegex = /\{\{([^}]+)\}\}/g;
+            itemTemplate = itemTemplate.replace(itemRegex, (m, variable) => {
+                // Skip if this is a conditional or other special case
+                if (variable.startsWith('#') || variable.startsWith('/')) {
+                    return m;
+                }
+                
+                // Support both {{this.propName}} and {{propName}}
+                const varPath = variable.trim().split('.');
+                let value;
+                
+                if (varPath[0] === 'this') {
+                    // Handle {{this.property}}
+                    value = item;
+                    for (let i = 1; i < varPath.length; i++) {
+                        if (value === undefined || value === null) return '';
+                        value = value[varPath[i]];
+                    }
+                } else {
+                    // Handle {{property}} directly
+                    // First try to get it from the item
+                    value = item[varPath[0]];
+                    
+                    // If not found in item, try the parent data object
+                    if (value === undefined || value === null) {
+                        value = data;
+                        for (const part of varPath) {
+                            if (value === undefined || value === null) return '';
+                            value = value[part];
+                        }
+                    }
+                }
+                
+                return value !== undefined && value !== null ? value : '';
+            });
+            
+            return itemTemplate;
+        }).join('');
+    });
+
+    // 3. Handle if/else conditionals
+    const conditionalRegex = /\{\{#if ([^}]+)\}\}([\s\S]*?)(?:\{\{else\}\}([\s\S]*?))?\{\{\/if\}\}/g;
+    rendered = rendered.replace(conditionalRegex, (match, condition, ifTrue, ifFalse = '') => {
         // Evaluate the condition from data object
         const path = condition.trim().split('.');
         let value = data;
@@ -68,9 +117,9 @@ function renderTemplate(templateContent, data) {
         return value ? ifTrue : ifFalse;
     });
 
-    // Handle simple conditionals without else
-    const simpleConditionalRegex = /\{\{#if ([^}]+)\}\}([\s\S]*?)\{\{\/if\}\}/g;
-    rendered = rendered.replace(simpleConditionalRegex, (match, condition, ifTrue) => {
+    // 4. Handle unless conditionals (inverse of if)
+    const unlessRegex = /\{\{#unless ([^}]+)\}\}([\s\S]*?)\{\{\/unless\}\}/g;
+    rendered = rendered.replace(unlessRegex, (match, condition, content) => {
         // Evaluate the condition from data object
         const path = condition.trim().split('.');
         let value = data;
@@ -83,25 +132,23 @@ function renderTemplate(templateContent, data) {
             value = value[key];
         }
 
-        return value ? ifTrue : '';
+        return value ? '' : content;
     });
 
-    // Handle unless conditionals (inverse of if)
-    const unlessConditionalRegex = /\{\{#unless ([^}]+)\}\}([\s\S]*?)\{\{\/unless\}\}/g;
-    rendered = rendered.replace(unlessConditionalRegex, (match, condition, ifFalse) => {
-        // Evaluate the condition from data object
-        const path = condition.trim().split('.');
+    // 5. Finally, handle basic variable substitution
+    const variableRegex = /\{\{([^}#\/]+?)\}\}/g;
+    rendered = rendered.replace(variableRegex, (match, variable) => {
+        // Handle nested properties using a path string (e.g., "user.name")
+        const path = variable.trim().split('.');
         let value = data;
 
         for (const key of path) {
-            if (value === undefined || value === null) {
-                value = false;
-                break;
-            }
+            if (value === undefined || value === null) return '';
             value = value[key];
         }
 
-        return value ? '' : ifFalse;
+        // Return empty string for undefined/null values
+        return value !== undefined && value !== null ? value : '';
     });
 
     return rendered;
@@ -239,15 +286,15 @@ async function webRoutes(fastify, options) {
     fastify.get('/dashboard', { preHandler: requireAuth }, async (request, reply) => {
         try {
             const user = request.user;
-
+    
             // Get Twitch connection status - be more defensive with optional chaining
             const streamerConnected = !!user?.twitch_tokens?.streamer?.access_token;
             const botConnected = !!user?.twitch_tokens?.bot?.access_token;
-
+    
             // Get streamer and bot names - only if connected
-            const streamerName = streamerConnected ? user.twitch_tokens.streamer.twitch_display_name : '';
-            const botName = botConnected ? user.twitch_tokens.bot.twitch_display_name : '';
-
+            const streamerName = streamerConnected ? (user.twitch_tokens.streamer.twitch_display_name || 'Unknown') : '';
+            const botName = botConnected ? (user.twitch_tokens.bot.twitch_display_name || 'Unknown') : '';
+    
             // Simple stats - just set to 0 for now
             let chatCount = 0;
             try {
@@ -256,27 +303,27 @@ async function webRoutes(fastify, options) {
             } catch (error) {
                 logger.error("Web", `Error fetching chat stats: ${error.message}`);
             }
-
+    
             // Create the stats object with actual data
             const stats = {
                 chatMessages: chatCount,
             };
-
-            // Get stream status data
+    
+            // Get stream status data - make sure we set a default structure
             let streamStatus = {
                 online: false
             };
-
+    
             let followerCount = user.current_followers || 0;
             let lastGame = null;
-
+    
             if (user.twitch_tokens?.streamer?.twitch_user_id) {
                 try {
                     // Import and use the fetchStreamInfo function
                     const { fetchStreamInfo } = await import('../twitch-eventsub-manager.js');
                     const streamInfo = await fetchStreamInfo(user.user_id);
-
-                    if (streamInfo.success && streamInfo.isLive) {
+    
+                    if (streamInfo && streamInfo.success && streamInfo.isLive) {
                         // Stream is online, format the data for display
                         streamStatus = {
                             online: true,
@@ -287,25 +334,29 @@ async function webRoutes(fastify, options) {
                             thumbnail: streamInfo.data.thumbnailUrl || null
                         };
                     } else {
-                        // Stream is offline, but still get data for display
+                        // Stream is offline, ensure the status object is properly set
                         streamStatus = {
                             online: false
                         };
-
+    
                         // Get last game played if available
                         if (user.current_game && user.current_game.game) {
                             lastGame = user.current_game.game;
                         }
                     }
-
+    
                     // Get follower count
                     followerCount = user.current_followers || 0;
                 } catch (error) {
                     logger.error("Web", `Error fetching stream info: ${error.message}`);
-                    // Continue with default values
+                    // Ensure we have a valid streamStatus object even if there's an error
+                    streamStatus = { online: false };
                 }
             }
-
+    
+            // Log the streamStatus for debugging
+            logger.log("Web", `Stream status for dashboard: ${JSON.stringify(streamStatus)}`);
+    
             // Simplified data object with only what we need
             const templateData = {
                 user: {
@@ -321,13 +372,13 @@ async function webRoutes(fastify, options) {
                 followerCount,
                 lastGame
             };
-
+    
             // Read dashboard template
             const dashboardTemplate = await fs.readFile(path.join(process.cwd(), 'pages', 'dashboard.html'), 'utf8');
-
+    
             // Render the page with only the necessary data
             const renderedPage = await renderPage(dashboardTemplate, templateData);
-
+    
             reply.type('text/html').send(renderedPage);
         } catch (error) {
             logger.error("Web", `Error serving dashboard: ${error.message}`);
@@ -376,29 +427,37 @@ async function webRoutes(fastify, options) {
     });
 
     fastify.get('/gallery/:characterId', { preHandler: requireAuth }, async (request, reply) => {
-        const { user } = request;
-        const { characterId } = request.params;
         try {
+            const user = request.user;
+            const { characterId } = request.params;
+
+            // Load the character preset data
             const characterData = await loadPreset(characterId);
 
             if (!characterData) {
-                logger.warn("Web", `Character preset '${characterId}' not found.`);
+                logger.warn("Web", `Character preset '${characterId}' not found`);
                 return reply.redirect('/web/gallery');
             }
 
+            // Add placeholder image if missing
+            if (!characterData.image) {
+                characterData.image = '/api/placeholder/200/200';
+            }
+
+            // Read the character details template
             const detailsTemplatePath = path.join(process.cwd(), 'pages', 'character-details.html');
             const detailsTemplate = await fs.readFile(detailsTemplatePath, 'utf8');
 
+            // Render the page with character data
             const renderedPage = await renderPage(detailsTemplate, {
-                pageTitle: `${characterData.name} Details`,
-                galleryActive: "active",
+                galleryActive: 'active',
                 character: characterData,
-                user: user
+                user
             });
 
             reply.type('text/html').send(renderedPage);
         } catch (error) {
-            logger.error("Web", `Error serving character details page: ${error.message}`);
+            logger.error("Web", `Error serving character details: ${error.message}`);
             reply.code(500).send('Error loading character details');
         }
     });
@@ -545,15 +604,33 @@ async function webRoutes(fastify, options) {
     });
     fastify.get('/gallery', { preHandler: requireAuth }, async (request, reply) => {
         try {
+            const user = request.user;
+
+            // Load all character presets
             const presets = await loadAllPresets();
-            const renderedPage = await renderPage('gallery', {
-                title: 'Character Gallery',
-                presets
+
+            // Add placeholder images for presets that don't have one
+            presets.forEach(preset => {
+                if (!preset.image) {
+                    preset.image = '/api/placeholder/200/200';
+                }
             });
+
+            // Read gallery template file
+            const galleryPath = path.join(process.cwd(), 'pages', 'gallery.html');
+            const galleryTemplate = await fs.readFile(galleryPath, 'utf8');
+
+            // Render the page with presets data
+            const renderedPage = await renderPage(galleryTemplate, {
+                galleryActive: 'active',
+                presets,
+                user
+            });
+
             reply.type('text/html').send(renderedPage);
         } catch (error) {
-            console.error('Error loading gallery presets:', error);
-            reply.status(500).send('Error loading character gallery');
+            logger.error("Web", `Error serving gallery: ${error.message}`);
+            reply.code(500).send('Error loading character gallery');
         }
     });
 

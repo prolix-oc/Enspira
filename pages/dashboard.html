@@ -1,4 +1,5 @@
-{{pageTitle = "Dashboard"}} {{dashboardActive = "active"}}
+{{pageTitle = "Dashboard"}} 
+{{dashboardActive = "active"}}
 
 <!-- Welcome Card -->
 <div class="card">
@@ -6,13 +7,12 @@
     <h1>Welcome to Enspira, {{user.display_name}}</h1>
   </div>
   <p>Manage your Enspira AI assistant for your Twitch channel.</p>
+  
   <!-- AI Assistant Settings -->
   <div class="two-column">
     <div class="card">
       <h2>Character Settings</h2>
-      <p>
-        Customize your AI assistant's personality, appearance, and behavior.
-      </p>
+      <p>Customize your AI assistant's personality, appearance, and behavior.</p>
       <a href="/web/character" class="btn btn-primary">Edit Character</a>
     </div>
     <div class="card">
@@ -23,11 +23,10 @@
   </div>
 </div>
 
+<!-- Help Card -->
 <div class="card">
   <h2>Still Confused?</h2>
-  <p>
-    Learn how to create your character and world in our help section.
-  </p>
+  <p>Learn how to create your character and world in our help section.</p>
   <a href="/web/help" class="btn btn-primary">Get Help</a>
 </div>
 
@@ -35,115 +34,71 @@
 <div class="card">
   <h2>Stream Status</h2>
   {{#if streamStatus.online}}
-  <div class="stream-info">
-    <div class="stream-header">
-      <div class="stream-status online">
-        <span class="status-indicator"></span>
-        <span>Live</span>
-      </div>
-      <div class="stream-time">
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          width="16"
-          height="16"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <circle cx="12" cy="12" r="10"></circle>
-          <polyline points="12 6 12 12 16 14"></polyline>
-        </svg>
-        <span>{{streamStatus.duration}}</span>
-      </div>
-    </div>
-
-    <div class="stream-content">
-      {{#if streamStatus.thumbnail}}
-      <div class="stream-thumbnail">
-        <img src="{{streamStatus.thumbnail}}" alt="Stream Thumbnail" />
-      </div>
-      {{/if}}
-
-      <div class="stream-details">
-        <h3 class="stream-title">{{streamStatus.title}}</h3>
-        <div class="stream-game">
-          <span>Playing:</span> {{streamStatus.game}}
+    <div class="stream-info">
+      <div class="stream-header">
+        <div class="stream-status online">
+          <span class="status-indicator"></span>
+          <span>Live</span>
         </div>
-        <div class="stream-metrics">
-          <div class="metric">
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
-              <circle cx="9" cy="7" r="4"></circle>
-              <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
-              <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
-            </svg>
-            <span>{{streamStatus.viewers}} viewers</span>
+        <div class="stream-time">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"></circle>
+            <polyline points="12 6 12 12 16 14"></polyline>
+          </svg>
+          <span>{{streamStatus.duration}}</span>
+        </div>
+      </div>
+
+      <div class="stream-content">
+        {{#if streamStatus.thumbnail}}
+          <div class="stream-thumbnail">
+            <img src="{{streamStatus.thumbnail}}" alt="Stream Thumbnail" class="fade-in-image">
           </div>
-          <div class="metric">
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <path
-                d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"
-              ></path>
-            </svg>
-            <span>{{followerCount}} followers</span>
+        {{/if}}
+
+        <div class="stream-details">
+          <h3 class="stream-title">{{streamStatus.title}}</h3>
+          <div class="stream-game">
+            <span>Playing:</span> {{streamStatus.game}}
+          </div>
+          <div class="stream-metrics">
+            <div class="metric">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                <circle cx="9" cy="7" r="4"></circle>
+                <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+              </svg>
+              <span>{{streamStatus.viewers}} viewers</span>
+            </div>
+            <div class="metric">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path>
+              </svg>
+              <span>{{followerCount}} followers</span>
+            </div>
           </div>
         </div>
       </div>
     </div>
-  </div>
   {{else}}
-  <div class="stream-info offline">
-    <div class="stream-status offline">
-      <span class="status-indicator"></span>
-      <span>Offline</span>
-    </div>
-    <div class="offline-details">
-      <div class="metric">
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          width="16"
-          height="16"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <path
-            d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"
-          ></path>
-        </svg>
-        <span>{{followerCount}} followers</span>
+    <div class="stream-info offline">
+      <div class="stream-status offline">
+        <span class="status-indicator"></span>
+        <span>Offline</span>
       </div>
-      {{#if lastGame}}
-      <div class="last-game"><span>Last played:</span> {{lastGame}}</div>
-      {{/if}}
+      <div class="offline-details">
+        <div class="metric">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path>
+          </svg>
+          <span>{{followerCount}} followers</span>
+        </div>
+        {{#if lastGame}}
+          <div class="last-game"><span>Last played:</span> {{lastGame}}</div>
+        {{/if}}
+      </div>
     </div>
-  </div>
   {{/if}}
 </div>
 
@@ -156,31 +111,26 @@
     <div>
       <h3>Streamer Account</h3>
       {{#if streamerConnected}}
-      <p class="alert alert-success">Connected as: {{streamerName}}</p>
+        <p class="alert alert-success">Connected as: {{streamerName}}</p>
       {{else}}
-      <p class="alert alert-error">Not connected</p>
+        <p class="alert alert-error">Not connected</p>
       {{/if}}
       <!-- Direct link to connect streamer account -->
-      <a
-        href="/api/v1/auth/twitch/connect?type=streamer"
-        class="btn btn-secondary"
-      >
-        {{#if streamerConnected}}Reconnect Streamer Account{{else}}Connect
-        Streamer Account{{/if}}
+      <a href="/api/v1/auth/twitch/connect?type=streamer" class="btn btn-secondary">
+        {{#if streamerConnected}}Reconnect Streamer Account{{else}}Connect Streamer Account{{/if}}
       </a>
     </div>
 
     <div>
       <h3>Bot Account</h3>
       {{#if botConnected}}
-      <p class="alert alert-success">Connected as: {{botName}}</p>
+        <p class="alert alert-success">Connected as: {{botName}}</p>
       {{else}}
-      <p class="alert alert-error">Not connected</p>
+        <p class="alert alert-error">Not connected</p>
       {{/if}}
       <!-- Direct link to connect bot account -->
       <a href="/api/v1/auth/twitch/connect?type=bot" class="btn btn-secondary">
-        {{#if botConnected}}Reconnect Bot Account{{else}}Connect Bot
-        Account{{/if}}
+        {{#if botConnected}}Reconnect Bot Account{{else}}Connect Bot Account{{/if}}
       </a>
     </div>
   </div>
@@ -198,15 +148,17 @@
       <h3>Status</h3>
       <p>
         {{#if streamStatus.online}}
-        <span class="alert alert-success" style="padding: 4px 8px">Online</span>
+          <span class="alert alert-success" style="padding: 4px 8px">Online</span>
         {{else}}
-        <span class="alert alert-error" style="padding: 4px 8px">Offline</span>
+          <span class="alert alert-error" style="padding: 4px 8px">Offline</span>
         {{/if}}
       </p>
     </div>
   </div>
 </div>
 
+<!-- Dashboard Specific Styles -->
+{{extraStyles}}
 <style>
   .stream-info {
     border-radius: 6px;
@@ -282,6 +234,13 @@
     width: 100%;
     height: 100%;
     object-fit: cover;
+    display: block;
+    opacity: 0;
+    transition: opacity 0.4s ease-in;
+  }
+  
+  .stream-thumbnail img.loaded {
+    opacity: 1;
   }
 
   .stream-details {
@@ -349,3 +308,27 @@
     }
   }
 </style>
+
+<!-- Image loading script -->
+<script>
+  document.addEventListener('DOMContentLoaded', () => {
+    const images = document.querySelectorAll('.fade-in-image');
+    
+    images.forEach(img => {
+      // For images that are already loaded from cache
+      if (img.complete) {
+        img.classList.add('loaded');
+      } else {
+        // For images that need to be loaded
+        img.addEventListener('load', () => {
+          img.classList.add('loaded');
+        });
+        
+        // Fallback in case image fails to load
+        img.addEventListener('error', () => {
+          img.classList.add('loaded');
+        });
+      }
+    });
+  });
+</script>
