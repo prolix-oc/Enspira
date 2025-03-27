@@ -3,6 +3,7 @@ import axios from 'axios';
 import { returnAPIKeys, returnAuthObject, updateUserParameter, ensureParameterPath } from './api-helper.js';
 import { retrieveConfigValue } from './config-helper.js';
 import { logger } from './create-global-logger.js';
+import { refreshTwitchToken } from './routes/v1.js';
 
 // EventSub subscription definitions with accurate condition requirements
 const SUBSCRIPTION_TYPES = [
@@ -12,35 +13,35 @@ const SUBSCRIPTION_TYPES = [
         version: '1',
         condition: (broadcasterId) => ({ broadcaster_user_id: broadcasterId }),
         requiredScopes: ['channel:read:stream_key'],
-        tokenType: 'streamer'
+        tokenType: 'app'  // Changed from 'streamer' to 'app'
     },
     {
         type: 'channel.subscribe',
         version: '1',
         condition: (broadcasterId) => ({ broadcaster_user_id: broadcasterId }),
         requiredScopes: ['channel:read:subscriptions'],
-        tokenType: 'streamer'
+        tokenType: 'app'  // Changed from 'streamer' to 'app'
     },
     {
         type: 'channel.subscription.gift',
         version: '1',
         condition: (broadcasterId) => ({ broadcaster_user_id: broadcasterId }),
         requiredScopes: ['channel:read:subscriptions'],
-        tokenType: 'streamer'
+        tokenType: 'app'  // Changed from 'streamer' to 'app'
     },
     {
         type: 'channel.subscription.message',
         version: '1',
         condition: (broadcasterId) => ({ broadcaster_user_id: broadcasterId }),
         requiredScopes: ['channel:read:subscriptions'],
-        tokenType: 'streamer'
+        tokenType: 'app'  // Changed from 'streamer' to 'app'
     },
     {
         type: 'channel.cheer',
         version: '1',
         condition: (broadcasterId) => ({ broadcaster_user_id: broadcasterId }),
         requiredScopes: ['bits:read'],
-        tokenType: 'streamer'
+        tokenType: 'app'  // Changed from 'streamer' to 'app'
     },
     {
         type: 'channel.raid',
@@ -54,42 +55,42 @@ const SUBSCRIPTION_TYPES = [
         version: '1',
         condition: (broadcasterId) => ({ broadcaster_user_id: broadcasterId }),
         requiredScopes: ['channel:read:redemptions'],
-        tokenType: 'streamer'
+        tokenType: 'app'  // Changed from 'streamer' to 'app'
     },
     {
         type: 'channel.charity_campaign.donate',
         version: '1',
         condition: (broadcasterId) => ({ broadcaster_user_id: broadcasterId }),
         requiredScopes: ['channel:read:charity'],
-        tokenType: 'streamer'
+        tokenType: 'app'  // Changed from 'streamer' to 'app'
     },
     {
         type: 'channel.charity_campaign.progress',
         version: '1',
         condition: (broadcasterId) => ({ broadcaster_user_id: broadcasterId }),
         requiredScopes: ['channel:read:charity'],
-        tokenType: 'streamer'
+        tokenType: 'app'  // Changed from 'streamer' to 'app'
     },
     {
         type: 'channel.hype_train.begin',
         version: '1',
         condition: (broadcasterId) => ({ broadcaster_user_id: broadcasterId }),
         requiredScopes: ['channel:read:hype_train'],
-        tokenType: 'streamer'
+        tokenType: 'app'  // Changed from 'streamer' to 'app'
     },
     {
         type: 'channel.hype_train.progress',
         version: '1',
         condition: (broadcasterId) => ({ broadcaster_user_id: broadcasterId }),
         requiredScopes: ['channel:read:hype_train'],
-        tokenType: 'streamer'
+        tokenType: 'app'  // Changed from 'streamer' to 'app'
     },
     {
         type: 'channel.hype_train.end',
         version: '1',
         condition: (broadcasterId) => ({ broadcaster_user_id: broadcasterId }),
         requiredScopes: ['channel:read:hype_train'],
-        tokenType: 'streamer'
+        tokenType: 'app'  // Changed from 'streamer' to 'app'
     },
     {
         type: 'stream.online',
@@ -115,7 +116,7 @@ const SUBSCRIPTION_TYPES = [
             moderator_user_id: broadcasterId // Using broadcaster as moderator for simplicity
         }),
         requiredScopes: ['moderator:read:followers'],
-        tokenType: 'streamer'
+        tokenType: 'app'  // Changed from 'streamer' to 'app'
     },
     {
         type: 'channel.update',
@@ -125,7 +126,7 @@ const SUBSCRIPTION_TYPES = [
             moderator_user_id: broadcasterId
         }),
         requiredScopes: ['channel:read:stream_key'],
-        tokenType: 'streamer'
+        tokenType: 'app'  // Changed from 'streamer' to 'app'
     },
     
     // Beta endpoints - Only include if broadcaster has appropriate permissions
@@ -137,7 +138,7 @@ const SUBSCRIPTION_TYPES = [
             moderator_user_id: broadcasterId
         }),
         requiredScopes: ['moderator:read:guest_star', 'moderator:manage:guest_star'],
-        tokenType: 'streamer',
+        tokenType: 'app',  // Changed from 'streamer' to 'app'
         optional: true
     },
     {
@@ -148,7 +149,7 @@ const SUBSCRIPTION_TYPES = [
             moderator_user_id: broadcasterId
         }),
         requiredScopes: ['moderator:read:guest_star'],
-        tokenType: 'streamer',
+        tokenType: 'app',  // Changed from 'streamer' to 'app'
         optional: true
     }
 ];
@@ -482,29 +483,73 @@ async function getUserScopes(userId, tokenType) {
         
         // Check if token exists
         if (!user.twitch_tokens?.[tokenType]?.access_token) {
+            logger.log("Twitch", `No ${tokenType} access token found for user ${userId}`);
             return [];
         }
         
         // If we already have cached scopes, return them
-        if (user.twitch_tokens[tokenType].scopes) {
+        if (user.twitch_tokens[tokenType].scopes && Array.isArray(user.twitch_tokens[tokenType].scopes)) {
             return user.twitch_tokens[tokenType].scopes;
         }
         
         // Otherwise validate the token to get scopes
         const axios = (await import('axios')).default;
-        const response = await axios.get('https://id.twitch.tv/oauth2/validate', {
-            headers: {
-                'Authorization': `OAuth ${user.twitch_tokens[tokenType].access_token}`
+        
+        try {
+            const response = await axios.get('https://id.twitch.tv/oauth2/validate', {
+                headers: {
+                    'Authorization': `OAuth ${user.twitch_tokens[tokenType].access_token}`
+                }
+            });
+            
+            if (response.data && response.data.scopes) {
+                // Cache the scopes
+                await updateUserParameter(userId, `twitch_tokens.${tokenType}.scopes`, response.data.scopes);
+                return response.data.scopes;
             }
-        });
-        
-        if (response.data && response.data.scopes) {
-            // Cache the scopes
-            await updateUserParameter(userId, `twitch_tokens.${tokenType}.scopes`, response.data.scopes);
-            return response.data.scopes;
+            
+            return [];
+        } catch (validationError) {
+            // If we get a 401 error, the token is likely expired
+            if (validationError.response && validationError.response.status === 401) {
+                logger.log("Twitch", `Token for ${userId} (${tokenType}) is invalid or expired. Attempting refresh...`);
+                
+                // Try to refresh the token
+                if (user.twitch_tokens[tokenType].refresh_token) {
+                    try {
+                        const newToken = await refreshTwitchToken(userId, tokenType);
+                        
+                        if (newToken) {
+                            // Try validation again with the new token
+                            const freshUser = await returnAuthObject(userId);
+                            
+                            const retryResponse = await axios.get('https://id.twitch.tv/oauth2/validate', {
+                                headers: {
+                                    'Authorization': `OAuth ${freshUser.twitch_tokens[tokenType].access_token}`
+                                }
+                            });
+                            
+                            if (retryResponse.data && retryResponse.data.scopes) {
+                                // Cache the scopes
+                                await updateUserParameter(userId, `twitch_tokens.${tokenType}.scopes`, retryResponse.data.scopes);
+                                return retryResponse.data.scopes;
+                            }
+                        }
+                    } catch (refreshError) {
+                        logger.error("Twitch", `Failed to refresh token: ${refreshError.message}`);
+                    }
+                }
+            }
+            
+            // Log detailed error information
+            if (validationError.response) {
+                logger.error("Twitch", `Token validation error: Status ${validationError.response.status}, Data: ${JSON.stringify(validationError.response.data)}`);
+            } else {
+                logger.error("Twitch", `Token validation error: ${validationError.message}`);
+            }
+            
+            return [];
         }
-        
-        return [];
     } catch (error) {
         logger.error("Twitch", `Error getting user scopes: ${error.message}`);
         return [];
@@ -544,25 +589,13 @@ async function createSubscription(userId, subscriptionConfig, broadcasterId) {
             return { success: false, error: "Missing broadcaster_user_id" };
         }
 
-        // Choose the appropriate token based on subscription config
-        const tokenType = subscriptionConfig.tokenType || 'app';
-        let accessToken;
-        
-        if (tokenType === 'app') {
-            // Use app access token
-            accessToken = await getAppAccessToken();
-        } else if (tokenType === 'bot' && user.twitch_tokens.bot?.access_token) {
-            // Use bot token if available and required
-            accessToken = user.twitch_tokens.bot.access_token;
-        } else {
-            // Default to streamer token
-            accessToken = user.twitch_tokens.streamer.access_token;
-        }
+        // Always use app access token for EventSub subscriptions
+        let accessToken = await getAppAccessToken();
 
         // Generate the condition based on subscription type and version
         const condition = subscriptionConfig.condition(broadcasterId);
 
-        logger.log("Twitch", `Creating ${subscriptionConfig.type} (v${subscriptionConfig.version}) subscription with condition: ${JSON.stringify(condition)} using ${tokenType} token`);
+        logger.log("Twitch", `Creating ${subscriptionConfig.type} (v${subscriptionConfig.version}) subscription with condition: ${JSON.stringify(condition)} using app access token`);
 
         const callbackUrl = `${await retrieveConfigValue("server.endpoints.external")}/api/v1/twitch/eventsub/${userId}`;
 

@@ -320,7 +320,7 @@ const layoutTemplate = `<!DOCTYPE html>
 <body>
   <header>
     <div class="container header-content">
-      <a href="/dashboard" class="logo">
+      <a href="/web/dashboard" class="logo">
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
           <path d="M12 2L2 7L12 12L22 7L12 2Z" fill="#58a6ff"/>
           <path d="M2 17L12 22L22 17" stroke="#58a6ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -330,9 +330,9 @@ const layoutTemplate = `<!DOCTYPE html>
       </a>
       <nav>
         <ul>
-          <li><a href="/dashboard" class="{{dashboardActive}}">Dashboard</a></li>
-          <li><a href="/character" class="{{characterActive}}">Character</a></li>
-          <li><a href="/world" class="{{worldActive}}">World</a></li>
+          <li><a href="/web/dashboard" class="{{dashboardActive}}">Dashboard</a></li>
+          <li><a href="/web/character" class="{{characterActive}}">Character</a></li>
+          <li><a href="/web/world" class="{{worldActive}}">World</a></li>
           <li><a href="/api/v1/auth/twitch/manage" class="{{twitchActive}}">Twitch</a></li>
           <li><a href="/api/v1/auth/logout" class="btn btn-secondary">Logout</a></li>
         </ul>
@@ -350,7 +350,7 @@ const layoutTemplate = `<!DOCTYPE html>
     <div class="container footer-content">
       <div>Enspira &copy; 2025</div>
       <div>
-        <a href="https://github.com/Prolix-LLC/enspira" target="_blank">GitHub</a>
+        <a href="https://github.com/prolix-oc/Enspira" target="_blank">GitHub</a>
       </div>
     </div>
   </footer>

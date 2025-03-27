@@ -3,10 +3,8 @@ import fs from "fs-extra";
 import { join } from "path";
 import { audioRoutes } from './routes/audio.js';
 import twitchEventSubRoutes from './routes/twitch.js';
-import { processAudio } from './audio-processor.js';
 import * as aiHelper from "./ai-logic.js";
 import webRoutes from './routes/web.js';
-import path from "path";
 import {
   initAllAPIs,
   returnAPIKeys
@@ -16,6 +14,20 @@ import { retrieveConfigValue, loadConfig } from "./config-helper.js";
 import routes from './routes/v1.js';
 import './create-global-logger.js'; // This ensures the logger is properly set up
 import { logger } from './create-global-logger.js';
+import fastifyCookie from "@fastify/cookie";
+import * as crypto from 'crypto'
+
+process.on('uncaughtException', (err) => {
+  console.error('UNCAUGHT EXCEPTION:', err);
+  // Keep process alive for debugging
+  console.error('Stack trace:', err.stack);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('UNHANDLED REJECTION:', reason);
+  // Keep process alive for debugging
+  console.error('Stack trace:', reason.stack);
+});
 
 // Create the fastify instance
 const createServer = async () => {
@@ -86,70 +98,9 @@ const createServer = async () => {
       method: "GET"
     }
   };
-
-  // Configure routes
-  fastify.all("/api", async (request, response) => {
-    logger.log("API", `Received base route request from ${request.ip}`);
-    response.code(200).send({ error: "Please select a valid endpoint before sending a request", ...endPointDoc });
-  });
-
-  fastify.all("/", async (request, response) => {
-    logger.log("API", `Received base route request from ${request.ip}`);
-    response.code(200).send({ error: "Please select a valid endpoint before sending a request", ...endPointDocBase });
-  });
-
-  fastify.post('/v1/audio/outputs', async (request, reply) => {
-    const { fileURL } = request.body;
-
-    if (!fileURL) {
-      return reply.code(400).send({ error: 'Missing fileURL parameter' });
-    }
-
-    try {
-      // Download and process the audio
-      const axios = (await import('axios')).default;
-      const fs = await import('fs/promises');
-      
-      // Create temp directory
-      const tempDir = path.join(process.cwd(), 'temp');
-      await fs.mkdir(tempDir, { recursive: true }).catch(() => { });
-      const tempFilePath = path.join(tempDir, `tts_${Date.now()}.wav`);
-
-      // Download the file from the URL
-      const response = await axios({
-        method: 'GET',
-        url: fileURL,
-        responseType: 'arraybuffer'
-      });
-
-      // Save the file to the temp directory
-      await fs.writeFile(tempFilePath, Buffer.from(response.data));
-
-      // Process the audio file
-      const processedFilePath = await processAudio(tempFilePath, {
-        preset: request.body.preset || 'clarity',
-        outputDir: 'final'
-      });
-
-      // Clean up temp file
-      await fs.unlink(tempFilePath).catch(() => { });
-
-      // Get just the filename from the path
-      const filename = path.basename(processedFilePath);
-
-      // Return the URL to access the processed file
-      return {
-        success: true,
-        audioUrl: `/audio/${filename}`,
-        filename: filename
-      };
-    } catch (error) {
-      logger.error("API", `Failed to process audio: ${error.message}`);
-      return reply.code(500).send({
-        error: 'Failed to process audio',
-        message: error.message
-      });
-    }
+  await fastify.register(fastifyCookie, {
+    secret: await retrieveConfigValue("server.cookieSecret") || crypto.randomBytes(32).toString('hex'), // Use a stored secret or generate one
+    parseOptions: {}
   });
 
   fastify.setErrorHandler((error, request, reply) => {
@@ -166,7 +117,7 @@ const createServer = async () => {
 
   // Register routes
   await fastify.register(routes, {
-    prefix: "/v1",
+    prefix: "/api/v1",
   });
 
   await fastify.register(audioRoutes, {
@@ -176,10 +127,12 @@ const createServer = async () => {
   });
 
   await fastify.register(twitchEventSubRoutes, {
-    prefix: "/v1/twitch"
+    prefix: "/api/v1/twitch"
   });
-  
-  await fastify.register(webRoutes);
+
+  await fastify.register(webRoutes, {
+    prefix: "/web"
+  });
 
   return fastify;
 };
@@ -204,11 +157,11 @@ export async function preflightChecks() {
           ttsRes = await axios.get(
             await retrieveConfigValue("alltalk.healthcheck.internal")
           );
-          break;          
+          break;
         default:
           ttsRes = { status: 200 };
           break;
-      }    
+      }
     } catch (ttsError) {
       logger.log("API", `TTS healthcheck error: ${ttsError.message}`);
     }

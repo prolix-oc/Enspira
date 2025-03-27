@@ -55,11 +55,17 @@ const endPoints = {
   healthcheck: "/healthcheck",
 };
 
-const requireAuth = async (request, reply) => {
+async function requireAuth(request, reply) {
+  // First check if cookies object exists
+  if (!request.cookies) {
+    logger.error("Auth", "Cookie parser not available - make sure fastify-cookie is registered");
+    return reply.redirect('/web/auth/login');
+  }
+  
   const sessionToken = request.cookies.enspira_session;
   
   if (!sessionToken) {
-    return reply.redirect('/v1/auth/login');
+    return reply.redirect('/web/auth/login');
   }
   
   try {
@@ -69,7 +75,7 @@ const requireAuth = async (request, reply) => {
     if (!decoded || !decoded.userId) {
       // Invalid token
       reply.clearCookie('enspira_session');
-      return reply.redirect('/v1/auth/login');
+      return reply.redirect('/web/auth/login');
     }
     
     // Get user from database
@@ -78,7 +84,7 @@ const requireAuth = async (request, reply) => {
     if (!user) {
       // User doesn't exist
       reply.clearCookie('enspira_session');
-      return reply.redirect('/v1/auth/login');
+      return reply.redirect('/web/auth/login');
     }
     
     // Add user to request for use in route handlers
@@ -89,9 +95,9 @@ const requireAuth = async (request, reply) => {
   } catch (error) {
     logger.error("Auth", `Session validation error: ${error.message}`);
     reply.clearCookie('enspira_session');
-    return reply.redirect('/v1/auth/login');
+    return reply.redirect('/web/auth/login');
   }
-};
+}
 
 export function createSessionToken(userId, expiresIn = '7d') {
   // Create a token payload
@@ -156,10 +162,7 @@ async function routes(fastify, options) {
     max: 100,
     timeWindow: "20 seconds",
   });
-  await fastify.register(fastifyCookie, {
-    secret: await retrieveConfigValue("server.cookieSecret") || crypto.randomBytes(32).toString('hex'), // Use a stored secret or generate one
-    parseOptions: {}
-  });
+
   await fastify.register(cors, {
     origin: true,
   });
@@ -401,65 +404,6 @@ async function routes(fastify, options) {
       return reply;
     }
   });
-
-  fastify.get('/auth/login', async (request, reply) => {
-    const loginForm = `<!doctype html>
-    <html>
-      <head>
-        <title>Enspira Login</title>
-        <style>
-          body {
-            font-family: Arial, sans-serif;
-            max-width: 500px;
-            margin: 0 auto;
-            padding: 20px;
-          }
-          .form-group {
-            margin-bottom: 15px;
-          }
-          label {
-            display: block;
-            margin-bottom: 5px;
-          }
-          input[type="text"],
-          input[type="password"] {
-            width: 100%;
-            padding: 8px;
-          }
-          button {
-            background: #6441a4;
-            color: white;
-            border: none;
-            padding: 10px 15px;
-            cursor: pointer;
-          }
-          .error {
-            color: #e74c3c;
-            margin-bottom: 15px;
-          }
-        </style>
-      </head>
-      <body>
-        <h2>Enspira Login</h2>
-        ${request.query.error ? `<div class="error">${request.query.error}</div>` : ''}
-        
-        <form action="/api/v1/auth/login" method="POST">
-          <div class="form-group">
-            <label for="user_id">User ID:</label>
-            <input type="text" id="user_id" name="user_id" required />
-          </div>
-          <div class="form-group">
-            <label for="password">Password:</label>
-            <input type="password" id="password" name="password" required />
-          </div>
-          <button type="submit">Login</button>
-        </form>
-      </body>
-    </html>`;
-    
-    reply.type('text/html').send(loginForm);
-    return reply;
-  });
   
   // Login POST handler
   fastify.post('/auth/login', async (request, reply) => {
@@ -506,7 +450,7 @@ async function routes(fastify, options) {
       });
       
       // Redirect to dashboard or Twitch management
-      return reply.redirect('/v1/auth/twitch/manage');
+      return reply.redirect('/web/dashboard');
     } catch (error) {
       logger.error("Auth", `Login error: ${error.message}`);
       return reply.redirect('/v1/auth/login?error=An+error+occurred');
@@ -990,7 +934,7 @@ async function routes(fastify, options) {
       global.pendingTwitchAuths.delete(state);
       
       // Redirect back to the management page
-      return reply.redirect('/v1/auth/twitch/manage');
+      return reply.redirect('/web/dashboard');
     } catch (error) {
       logger.log("Auth", `Error during Twitch token exchange: ${error.message}`);
       return reply.code(500).send('Failed to complete Twitch authorization');

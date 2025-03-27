@@ -12,13 +12,13 @@
     <div class="card">
       <h2>Character Settings</h2>
       <p>Customize your AI assistant's personality, appearance, and behavior.</p>
-      <a href="/character" class="btn btn-primary">Edit Character</a>
+      <a href="/web/character" class="btn btn-primary">Edit Character</a>
     </div>
     
     <div class="card">
       <h2>World Settings</h2>
       <p>Set up the environment and context for your AI assistant.</p>
-      <a href="/world" class="btn btn-primary">Edit World</a>
+      <a href="/web/world" class="btn btn-primary">Edit World</a>
     </div>
   </div>
   
@@ -34,7 +34,10 @@
         {{else}}
           <p class="alert alert-error">Not connected</p>
         {{/if}}
-        <a href="/api/v1/auth/twitch/manage" class="btn btn-secondary">Manage Connection</a>
+        <!-- Direct link to connect streamer account -->
+        <a href="/api/v1/auth/twitch/connect?type=streamer" class="btn btn-secondary">
+          {{#if streamerConnected}}Reconnect Streamer Account{{else}}Connect Streamer Account{{/if}}
+        </a>
       </div>
       
       <div>
@@ -44,7 +47,10 @@
         {{else}}
           <p class="alert alert-error">Not connected</p>
         {{/if}}
-        <a href="/api/v1/auth/twitch/manage" class="btn btn-secondary">Manage Connection</a>
+        <!-- Direct link to connect bot account -->
+        <a href="/api/v1/auth/twitch/connect?type=bot" class="btn btn-secondary">
+          {{#if botConnected}}Reconnect Bot Account{{else}}Connect Bot Account{{/if}}
+        </a>
       </div>
     </div>
   </div>

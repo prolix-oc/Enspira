@@ -795,17 +795,28 @@ async function findRelevantChats(message, user, userId, topK = 10) {
   }
 }
 
-async function returnRecentChats(userId, fromConsole = false) {
+async function returnRecentChats(userId, fromConsole = false, allChats = false) {
   const userObj = await returnAuthObject(userId);
   const collection = `${await retrieveConfigValue("milvus.collections.chat")}_${userId}`;
   try {
     const startTime = performance.now();
-    const queryResult = await client.query({
-      collection_name: collection,
-      output_fields: ["raw_msg", "username", "time_stamp"],
-      limit: userObj.max_chats,
-      consistency_level: "Strong",
-    });
+    let queryResult;
+    if (allChats) {
+      queryResult = await client.query({
+        collection_name: collection,
+        output_fields: ["raw_msg", "username", "time_stamp"],
+        limit: 1001,
+        consistency_level: "Strong",
+      });
+    } else {
+      queryResult = await client.query({
+        collection_name: collection,
+        output_fields: ["raw_msg", "username", "time_stamp"],
+        limit: userObj.max_chats,
+        consistency_level: "Strong",
+      });
+    }
+
     logger.log("Milvus", `Got these results: ${JSON.stringify(queryResult)}`);
     const sortedResults = queryResult.data.sort(
       (a, b) => a.time_stamp - b.time_stamp,
