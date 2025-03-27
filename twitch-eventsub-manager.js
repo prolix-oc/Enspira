@@ -544,6 +544,160 @@ async function handleStreamStateChange(eventType, event, userId) {
     }
 }
 
+/**
+ * Fetches current stream information and updates user parameters
+ * @param {string} userId - The user ID
+ * @returns {Promise<object>} - Stream info object with status and data
+ */
+export async function fetchStreamInfo(userId) {
+    try {
+        const user = await returnAuthObject(userId);
+
+        // Check if streamer token exists and channel ID is available
+        if (!user?.twitch_tokens?.streamer?.twitch_user_id) {
+            logger.log("Twitch", `No Twitch user ID for ${userId}, can't fetch stream info`);
+            return { success: false, isLive: false, error: "Missing Twitch user ID" };
+        }
+
+        // Get app access token for API call
+        const appToken = await getAppAccessToken();
+        const channelId = user.twitch_tokens.streamer.twitch_user_id;
+
+        // Import axios
+        const axios = (await import('axios')).default;
+
+        // Get stream information
+        const streamResponse = await axios.get(
+            `https://api.twitch.tv/helix/streams?user_id=${channelId}`,
+            {
+                headers: {
+                    'Client-ID': await retrieveConfigValue("twitch.clientId"),
+                    'Authorization': `Bearer ${appToken}`
+                }
+            }
+        );
+
+        // Prepare result object
+        const result = {
+            success: true,
+            isLive: false,
+            data: {}
+        };
+
+        // Check if stream is live
+        if (streamResponse.data.data && streamResponse.data.data.length > 0) {
+            const streamData = streamResponse.data.data[0];
+            result.isLive = true;
+
+            // Extract stream details
+            result.data = {
+                viewerCount: streamData.viewer_count || 0,
+                startedAt: streamData.started_at || null,
+                title: streamData.title || '',
+                gameId: streamData.game_id || '',
+                gameName: streamData.game_name || 'Unknown Game',
+                thumbnailUrl: streamData.thumbnail_url?.replace('{width}', '320').replace('{height}', '180') || null
+            };
+
+            // Calculate stream duration
+            if (streamData.started_at) {
+                const startTime = new Date(streamData.started_at);
+                const currentTime = new Date();
+                const durationMs = currentTime - startTime;
+
+                // Format duration
+                const hours = Math.floor(durationMs / (1000 * 60 * 60));
+                const minutes = Math.floor((durationMs % (1000 * 60 * 60)) / (1000 * 60));
+                result.data.duration = `${hours}h ${minutes}m`;
+                result.data.durationMs = durationMs;
+            }
+
+            // Update user parameters with stream data
+            await updateUserParameter(userId, "current_game", {
+                title: streamData.title || "No Title",
+                game: streamData.game_name || "none",
+                game_id: streamData.game_id || "0",
+                thumbnail_url: streamData.thumbnail_url || null,
+                updated_at: new Date().toISOString()
+            });
+
+            await updateUserParameter(userId, "current_viewers", streamData.viewer_count || 0);
+
+            // Update stream status
+            await updateUserParameter(userId, "stream_status", {
+                online: true,
+                started_at: streamData.started_at || null,
+                type: streamData.type || 'live',
+                title: streamData.title || '',
+                viewer_count: streamData.viewer_count || 0,
+                updated_at: new Date().toISOString()
+            });
+
+            logger.log("Twitch", `Updated stream info for ${userId}: ${streamData.viewer_count} viewers, playing ${streamData.game_name}`);
+        } else {
+            // Stream is offline
+            await updateUserParameter(userId, "stream_status", {
+                online: false,
+                updated_at: new Date().toISOString()
+            });
+
+            // Keep the current game info but mark as offline
+            const currentGameInfo = user.current_game || {};
+            await updateUserParameter(userId, "current_game", {
+                ...currentGameInfo,
+                online: false,
+                updated_at: new Date().toISOString()
+            });
+
+            await updateUserParameter(userId, "current_viewers", 0);
+        }
+
+        // Always fetch follower count regardless of stream status
+        await fetchFollowerCount(userId, channelId, appToken);
+
+        return result;
+    } catch (error) {
+        logger.error("Twitch", `Error fetching stream info: ${error.message}`);
+        return { success: false, isLive: false, error: error.message };
+    }
+}
+
+/**
+ * Fetches follower count for a channel
+ * @param {string} userId - The user ID
+ * @param {string} channelId - The Twitch channel ID
+ * @param {string} appToken - The app access token
+ * @returns {Promise<number>} - The follower count
+ */
+async function fetchFollowerCount(userId, channelId, appToken) {
+    try {
+        // Import axios
+        const axios = (await import('axios')).default;
+
+        // Get follower information
+        const followerResponse = await axios.get(
+            `https://api.twitch.tv/helix/channels/followers?broadcaster_id=${channelId}`,
+            {
+                headers: {
+                    'Client-ID': await retrieveConfigValue("twitch.clientId"),
+                    'Authorization': `Bearer ${appToken}`
+                }
+            }
+        );
+
+        const followerCount = followerResponse.data.total || 0;
+
+        // Update user parameter with follower count
+        await updateUserParameter(userId, "current_followers", followerCount);
+        logger.log("Twitch", `Updated follower count for ${userId}: ${followerCount}`);
+
+        return followerCount;
+    } catch (error) {
+        logger.error("Twitch", `Error fetching follower count: ${error.message}`);
+        return 0;
+    }
+}
+
 
 /**
  * Fetch current viewer count for a user's channel
@@ -1499,11 +1653,10 @@ function getTopContributor(eventData, type) {
 }
 
 /**
- * Periodically updates viewer counts for all streaming users
- * This function should be called from a cron job or similar scheduler
+ * Updates stream information for all users
  * @returns {Promise<{updated: number, errors: number}>}
  */
-export async function updateAllStreamViewerCounts() {
+export async function updateAllStreamInfo() {
     try {
         // Get all users
         const users = await returnAPIKeys();
@@ -1518,39 +1671,64 @@ export async function updateAllStreamViewerCounts() {
                     continue;
                 }
 
-                // Check if user is currently streaming (based on stored status)
-                const isOnline = user.stream_status?.online === true;
-
-                if (isOnline) {
-                    // Update viewer count
-                    await fetchViewerCount(user.user_id);
-                    updatedCount++;
-                }
+                // Update stream info
+                await fetchStreamInfo(user.user_id);
+                updatedCount++;
             } catch (userError) {
                 errorCount++;
-                logger.error("Twitch", `Error updating viewer count for ${user.user_id}: ${userError.message}`);
+                logger.error("Twitch", `Error updating stream info for ${user.user_id}: ${userError.message}`);
             }
 
             // Add a small delay between API calls to avoid rate limits
             await new Promise(resolve => setTimeout(resolve, 500));
         }
 
-        logger.log("Twitch", `Updated viewer counts for ${updatedCount} streaming users, with ${errorCount} errors`);
+        logger.log("Twitch", `Updated stream info for ${updatedCount} users, with ${errorCount} errors`);
         return { updated: updatedCount, errors: errorCount };
     } catch (error) {
-        logger.error("Twitch", `Error in updateAllStreamViewerCounts: ${error.message}`);
+        logger.error("Twitch", `Error in updateAllStreamInfo: ${error.message}`);
         return { updated: 0, errors: 1 };
     }
 }
 
 export function setupTwitchCronJobs() {
-    // Update viewer count every 5 minutes
+    // Update stream info (includes viewer count) every minute
     cron.schedule('*/1 * * * *', async () => {
         try {
-            const { updateAllStreamViewerCounts } = await import('./twitch-eventsub-manager.js');
-            await updateAllStreamViewerCounts();
+            await updateAllStreamInfo();
         } catch (error) {
-            logger.error("Cron", `Error in viewer count update job: ${error.message}`);
+            logger.error("Cron", `Error in stream info update job: ${error.message}`);
+        }
+    });
+
+    // Update follower count every 5 minutes even for offline streams
+    cron.schedule('*/5 * * * *', async () => {
+        try {
+            const users = await returnAPIKeys();
+
+            for (const user of users) {
+                try {
+                    // Skip users without Twitch integration
+                    if (!user.twitch_tokens?.streamer?.twitch_user_id) {
+                        continue;
+                    }
+
+                    const channelId = user.twitch_tokens.streamer.twitch_user_id;
+                    const appToken = await getAppAccessToken();
+
+                    // Just update follower count
+                    await fetchFollowerCount(user.user_id, channelId, appToken);
+                } catch (userError) {
+                    logger.error("Twitch", `Error updating follower count for ${user.user_id}: ${userError.message}`);
+                }
+
+                // Add a small delay between API calls to avoid rate limits
+                await new Promise(resolve => setTimeout(resolve, 500));
+            }
+
+            logger.log("Twitch", "Completed follower count update for all users");
+        } catch (error) {
+            logger.error("Cron", `Error in follower count update job: ${error.message}`);
         }
     });
 

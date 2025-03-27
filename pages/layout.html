@@ -290,11 +290,19 @@
         gap: 20px;
       }
 
+      .three-column {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(280px, 1fr));
+        grid-gap: 20px;
+      }
+
       @media (max-width: 768px) {
         .two-column {
           grid-template-columns: 1fr;
         }
-
+        .three-column {
+          grid-template-columns: 1fr;
+        }
         nav ul {
           gap: 10px;
         }

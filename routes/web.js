@@ -236,59 +236,102 @@ async function webRoutes(fastify, options) {
     // Dashboard route
     fastify.get('/dashboard', { preHandler: requireAuth }, async (request, reply) => {
         try {
-            const user = request.user;
-
-            // Get Twitch connection status - be more defensive with optional chaining
-            const streamerConnected = !!user?.twitch_tokens?.streamer?.access_token;
-            const botConnected = !!user?.twitch_tokens?.bot?.access_token;
-
-            // Get streamer and bot names - only if connected
-            const streamerName = streamerConnected ? user.twitch_tokens.streamer.twitch_display_name : '';
-            const botName = botConnected ? user.twitch_tokens.bot.twitch_display_name : '';
-
-            // Simple stats - just set to 0 for now
-            let chatCount = 0;
+          const user = request.user;
+      
+          // Get Twitch connection status - be more defensive with optional chaining
+          const streamerConnected = !!user?.twitch_tokens?.streamer?.access_token;
+          const botConnected = !!user?.twitch_tokens?.bot?.access_token;
+      
+          // Get streamer and bot names - only if connected
+          const streamerName = streamerConnected ? user.twitch_tokens.streamer.twitch_display_name : '';
+          const botName = botConnected ? user.twitch_tokens.bot.twitch_display_name : '';
+      
+          // Simple stats - just set to 0 for now
+          let chatCount = 0;
+          try {
+            const recentChats = await returnRecentChats(user.user_id, false, true);
+            chatCount = recentChats?.length || 0;
+          } catch (error) {
+            logger.error("Web", `Error fetching chat stats: ${error.message}`);
+          }
+      
+          // Create the stats object with actual data
+          const stats = {
+            chatMessages: chatCount,
+          };
+      
+          // Get stream status data
+          let streamStatus = {
+            online: false
+          };
+          
+          let followerCount = user.current_followers || 0;
+          let lastGame = null;
+      
+          if (user.twitch_tokens?.streamer?.twitch_user_id) {
             try {
-                const recentChats = await returnRecentChats(user.user_id, false, true);
-                chatCount = recentChats?.length || 0;
+              // Import and use the fetchStreamInfo function
+              const { fetchStreamInfo } = await import('../twitch-eventsub-manager.js');
+              const streamInfo = await fetchStreamInfo(user.user_id);
+              
+              if (streamInfo.success && streamInfo.isLive) {
+                // Stream is online, format the data for display
+                streamStatus = {
+                  online: true,
+                  title: streamInfo.data.title || user.stream_status?.title || 'Untitled Stream',
+                  game: streamInfo.data.gameName || user.current_game?.game || 'Unknown Game',
+                  viewers: streamInfo.data.viewerCount || user.current_viewers || 0,
+                  duration: streamInfo.data.duration || 'Just started',
+                  thumbnail: streamInfo.data.thumbnailUrl || null
+                };
+              } else {
+                // Stream is offline, but still get data for display
+                streamStatus = {
+                  online: false
+                };
+                
+                // Get last game played if available
+                if (user.current_game && user.current_game.game) {
+                  lastGame = user.current_game.game;
+                }
+              }
+              
+              // Get follower count
+              followerCount = user.current_followers || 0;
             } catch (error) {
-                logger.error("Web", `Error fetching chat stats: ${error.message}`);
+              logger.error("Web", `Error fetching stream info: ${error.message}`);
+              // Continue with default values
             }
-
-            // Then create the stats object with actual data
-            const stats = {
-                chatMessages: chatCount,
-            };
-
-            // Check if online (mocked for now - could implement real status check later)
-            const isOnline = false;
-
-            // Simplified data object with only what we need
-            const templateData = {
-                user: {
-                    display_name: user.display_name || user.user_name,
-                },
-                dashboardActive: 'active',
-                streamerConnected,
-                botConnected,
-                streamerName,
-                botName,
-                stats,
-                isOnline
-            };
-
-            // Read dashboard template
-            const dashboardTemplate = await fs.readFile(path.join(process.cwd(), 'pages', 'dashboard.html'), 'utf8');
-
-            // Render the page with only the necessary data
-            const renderedPage = await renderPage(dashboardTemplate, templateData);
-
-            reply.type('text/html').send(renderedPage);
+          }
+      
+          // Simplified data object with only what we need
+          const templateData = {
+            user: {
+              display_name: user.display_name || user.user_name,
+            },
+            dashboardActive: 'active',
+            streamerConnected,
+            botConnected,
+            streamerName,
+            botName,
+            stats,
+            streamStatus,
+            followerCount,
+            lastGame
+          };
+      
+          // Read dashboard template
+          const dashboardTemplate = await fs.readFile(path.join(process.cwd(), 'pages', 'dashboard.html'), 'utf8');
+      
+          // Render the page with only the necessary data
+          const renderedPage = await renderPage(dashboardTemplate, templateData);
+      
+          reply.type('text/html').send(renderedPage);
         } catch (error) {
-            logger.error("Web", `Error serving dashboard: ${error.message}`);
-            reply.code(500).send('Error loading dashboard');
+          logger.error("Web", `Error serving dashboard: ${error.message}`);
+          reply.code(500).send('Error loading dashboard');
         }
-    });
+      });
 
     // Character editor route
     fastify.get('/character', { preHandler: requireAuth }, async (request, reply) => {

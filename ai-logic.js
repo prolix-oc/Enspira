@@ -817,7 +817,6 @@ async function returnRecentChats(userId, fromConsole = false, allChats = false) 
       });
     }
 
-    logger.log("Milvus", `Got these results: ${JSON.stringify(queryResult)}`);
     const sortedResults = queryResult.data.sort(
       (a, b) => a.time_stamp - b.time_stamp,
     );
