@@ -93,7 +93,7 @@ const requireAuth = async (request, reply) => {
   }
 };
 
-function createSessionToken(userId, expiresIn = '7d') {
+export function createSessionToken(userId, expiresIn = '7d') {
   // Create a token payload
   const payload = {
     userId,
@@ -110,7 +110,7 @@ function createSessionToken(userId, expiresIn = '7d') {
 }
 
 // Function to verify a session token
-function verifySessionToken(token) {
+export function verifySessionToken(token) {
   try {
     const [signature, payloadBase64] = token.split('.');
     

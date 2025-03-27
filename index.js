@@ -5,6 +5,7 @@ import { audioRoutes } from './routes/audio.js';
 import twitchEventSubRoutes from './routes/twitch.js';
 import { processAudio } from './audio-processor.js';
 import * as aiHelper from "./ai-logic.js";
+import webRoutes from './routes/web.js';
 import path from "path";
 import {
   initAllAPIs,
@@ -15,7 +16,6 @@ import { retrieveConfigValue, loadConfig } from "./config-helper.js";
 import routes from './routes/v1.js';
 import './create-global-logger.js'; // This ensures the logger is properly set up
 import { logger } from './create-global-logger.js';
-const controller = new AbortController();
 
 // Create the fastify instance
 const createServer = async () => {
@@ -178,6 +178,8 @@ const createServer = async () => {
   await fastify.register(twitchEventSubRoutes, {
     prefix: "/v1/twitch"
   });
+  
+  await fastify.register(webRoutes);
 
   return fastify;
 };
@@ -340,7 +342,6 @@ export async function initializeApp() {
     );
 
     await preloadAllTokenizers();
-
     const server = await createServer();
     await launchRest(server);
 
