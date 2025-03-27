@@ -1,0 +1,38 @@
+{% extends "layout.njk" %}
+
+{% block title %}Login{% endblock %}
+
+{% block content %}
+<div class="card login-card">
+  <div class="card-header">
+    <h1>Welcome to Enspira</h1>
+  </div>
+  
+  {% if error %}
+  <div class="alert alert-error">{{ error }}</div>
+  {% endif %}
+  
+  <form action="/api/v1/auth/login" method="POST">
+    <div class="form-group">
+      <label for="user_id">User ID</label>
+      <input type="text" id="user_id" name="user_id" required>
+    </div>
+    
+    <div class="form-group">
+      <label for="password">Password</label>
+      <input type="password" id="password" name="password" required>
+    </div>
+    
+    <button type="submit" class="btn btn-primary">Login</button>
+  </form>
+</div>
+{% endblock %}
+
+{% block extraStyles %}
+<style>
+  .login-card {
+    max-width: 500px;
+    margin: 40px auto;
+  }
+</style>
+{% endblock %}

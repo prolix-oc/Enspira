@@ -1,0 +1,127 @@
+{% extends "layout.njk" %}
+
+{% block title %}Character Gallery{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div class="card-header">
+    <h1>Character Gallery</h1>
+  </div>
+  <p>Choose a pre-defined character preset for your AI assistant. Click on a character to see more details and apply the preset.</p>
+</div>
+
+{% if presets %}
+<div class="gallery-grid">
+  {% for preset in presets %}
+  <a href="/web/gallery/{{ preset.id }}" class="card preset-card">
+    <div class="preset-image">
+      <img src="{{ preset.image }}" alt="{{ preset.name }} Avatar" loading="lazy" class="fade-in-image">
+    </div>
+    <div class="preset-info">
+      <h3 class="preset-name">{{ preset.name }}</h3>
+      <p class="preset-author">By: {{ preset.author }}</p>
+    </div>
+  </a>
+  {% endfor %}
+</div>
+{% else %}
+<div class="card">
+  <p>No character presets found. Please check the 'presets' directory.</p>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extraStyles %}
+<style>
+  .gallery-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 20px;
+    margin-top: 20px;
+  }
+
+  .preset-card {
+    text-decoration: none;
+    color: var(--primary-text);
+    transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden; /* Ensure image corners are rounded */
+    padding: 0; /* Remove default card padding */
+  }
+
+  .preset-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 8px 16px rgba(0, 0, 0, 0.2);
+    text-decoration: none;
+    color: var(--accent-hover);
+  }
+
+  .preset-image {
+    width: 100%;
+    aspect-ratio: 1 / 1; /* Square aspect ratio for images */
+    background-color: var(--background); /* Fallback color */
+    overflow: hidden;
+    position: relative;
+  }
+
+  .preset-image img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: top center; /* Align to top */
+    display: block;
+    border-bottom: 1px solid var(--border);
+    opacity: 0; /* Start with invisible image */
+    transition: opacity 0.4s ease-in-out;
+  }
+
+  .preset-image img.loaded {
+    opacity: 1; /* Fade in when loaded class is added */
+  }
+
+  .preset-info {
+    padding: 15px;
+    text-align: center;
+  }
+
+  .preset-name {
+    margin: 0 0 5px 0;
+    font-size: 1.1em;
+  }
+
+  .preset-author {
+    font-size: 0.9em;
+    color: var(--secondary-text);
+    margin: 0;
+  }
+</style>
+{% endblock %}
+
+{% block extraScripts %}
+<script>
+  // Add onload event handlers to all fade-in images
+  document.addEventListener('DOMContentLoaded', () => {
+    const images = document.querySelectorAll('.fade-in-image');
+    
+    images.forEach(img => {
+      // For images that are already loaded from cache
+      if (img.complete) {
+        img.classList.add('loaded');
+      } else {
+        // For images that need to be loaded
+        img.addEventListener('load', () => {
+          img.classList.add('loaded');
+        });
+        
+        // Fallback in case image fails to load
+        img.addEventListener('error', () => {
+          img.classList.add('loaded');
+          // Optionally set a placeholder or error image
+          // img.src = '/api/placeholder/200/200';
+        });
+      }
+    });
+  });
+</script>
+{% endblock %}

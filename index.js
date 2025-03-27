@@ -16,6 +16,7 @@ import './create-global-logger.js'; // This ensures the logger is properly set u
 import { logger } from './create-global-logger.js';
 import fastifyCookie from "@fastify/cookie";
 import * as crypto from 'crypto'
+import { setupTemplating } from './template-engine.js';
 
 process.on('uncaughtException', (err) => {
   console.error('UNCAUGHT EXCEPTION:', err);
@@ -104,7 +105,7 @@ const createServer = async () => {
       reply.send(error);
     }
   });
-
+  await setupTemplating(fastify);
   // Register routes
   await fastify.register(routes, {
     prefix: "/api/v1",

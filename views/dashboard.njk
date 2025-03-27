@@ -1,0 +1,26 @@
+{# dashboard.njk #}
+{% extends "layout.njk" %}
+
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div class="card-header">
+    <h1>Welcome to Enspira, {{ user.display_name }}</h1>
+  </div>
+  <p>Manage your Enspira AI assistant for your Twitch channel.</p>
+  
+  <div class="two-column">
+    <div class="card">
+      <h2>Character Settings</h2>
+      <p>Customize your AI assistant's personality, appearance, and behavior.</p>
+      <a href="/web/character" class="btn btn-primary">Edit Character</a>
+    </div>
+    <div class="card">
+      <h2>World Settings</h2>
+      <p>Set up the environment and context for your AI assistant.</p>
+      <a href="/web/world" class="btn btn-primary">Edit World</a>
+    </div>
+  </div>
+</div>
+{% endblock %}

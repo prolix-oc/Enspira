@@ -6,195 +6,11 @@ import { logger } from '../create-global-logger.js';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { returnRecentChats } from '../ai-logic.js';
-import { loadPreset, loadAllPresets } from './v1.js';
+import { loadPreset, loadAllPresets, saveTextContent } from './v1.js';
+
 // Get the directory name properly in ESM
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-
-/**
- * Renders a template with provided data
- * @param {string} templateContent - The template content
- * @param {object} data - Data to inject into the template
- * @returns {string} - The rendered HTML
- */
-function renderTemplate(templateContent, data) {
-    // Simple template rendering with handlebars-like syntax
-    let rendered = templateContent;
-
-    // Handle each templating feature in the correct order to prevent interference
-
-    // 1. Handle simple assignments first (like {{pageTitle = "Dashboard"}})
-    const assignmentRegex = /\{\{([^}]+?)\s*=\s*(['"]?)([^'"]+)\2\}\}/g;
-    rendered = rendered.replace(assignmentRegex, (match, varName, quote, varValue) => {
-        data[varName.trim()] = varValue.trim();
-        return ''; // Remove the assignment from output
-    });
-
-    // 2. Handle #each loops
-    const eachRegex = /\{\{#each ([^}]+)\}\}([\s\S]*?)\{\{\/each\}\}/g;
-    rendered = rendered.replace(eachRegex, (match, arrayPath, template) => {
-        // Get the array to iterate over
-        const path = arrayPath.trim().split('.');
-        let array = data;
-        
-        for (const key of path) {
-            if (array === undefined || array === null) return '';
-            array = array[key];
-        }
-        
-        if (!Array.isArray(array)) return '';
-        
-        // Build result by applying the template to each item
-        return array.map(item => {
-            // Create a temporary data object with 'this' pointing to the current item
-            const itemData = { 
-                ...data,
-                this: item,
-                // Also add the item properties directly to the root for easier access
-                // This supports {{name}} instead of requiring {{this.name}}
-                ...item 
-            };
-            
-            // Apply the template to the current item
-            let itemTemplate = template;
-            
-            // Replace item properties
-            const itemRegex = /\{\{([^}]+)\}\}/g;
-            itemTemplate = itemTemplate.replace(itemRegex, (m, variable) => {
-                // Skip if this is a conditional or other special case
-                if (variable.startsWith('#') || variable.startsWith('/')) {
-                    return m;
-                }
-                
-                // Support both {{this.propName}} and {{propName}}
-                const varPath = variable.trim().split('.');
-                let value;
-                
-                if (varPath[0] === 'this') {
-                    // Handle {{this.property}}
-                    value = item;
-                    for (let i = 1; i < varPath.length; i++) {
-                        if (value === undefined || value === null) return '';
-                        value = value[varPath[i]];
-                    }
-                } else {
-                    // Handle {{property}} directly
-                    // First try to get it from the item
-                    value = item[varPath[0]];
-                    
-                    // If not found in item, try the parent data object
-                    if (value === undefined || value === null) {
-                        value = data;
-                        for (const part of varPath) {
-                            if (value === undefined || value === null) return '';
-                            value = value[part];
-                        }
-                    }
-                }
-                
-                return value !== undefined && value !== null ? value : '';
-            });
-            
-            return itemTemplate;
-        }).join('');
-    });
-
-    // 3. Handle if/else conditionals
-    const conditionalRegex = /\{\{#if ([^}]+)\}\}([\s\S]*?)(?:\{\{else\}\}([\s\S]*?))?\{\{\/if\}\}/g;
-    rendered = rendered.replace(conditionalRegex, (match, condition, ifTrue, ifFalse = '') => {
-        // Evaluate the condition from data object
-        const path = condition.trim().split('.');
-        let value = data;
-
-        for (const key of path) {
-            if (value === undefined || value === null) {
-                value = false;
-                break;
-            }
-            value = value[key];
-        }
-
-        return value ? ifTrue : ifFalse;
-    });
-
-    // 4. Handle unless conditionals (inverse of if)
-    const unlessRegex = /\{\{#unless ([^}]+)\}\}([\s\S]*?)\{\{\/unless\}\}/g;
-    rendered = rendered.replace(unlessRegex, (match, condition, content) => {
-        // Evaluate the condition from data object
-        const path = condition.trim().split('.');
-        let value = data;
-
-        for (const key of path) {
-            if (value === undefined || value === null) {
-                value = false;
-                break;
-            }
-            value = value[key];
-        }
-
-        return value ? '' : content;
-    });
-
-    // 5. Finally, handle basic variable substitution
-    const variableRegex = /\{\{([^}#\/]+?)\}\}/g;
-    rendered = rendered.replace(variableRegex, (match, variable) => {
-        // Handle nested properties using a path string (e.g., "user.name")
-        const path = variable.trim().split('.');
-        let value = data;
-
-        for (const key of path) {
-            if (value === undefined || value === null) return '';
-            value = value[key];
-        }
-
-        // Return empty string for undefined/null values
-        return value !== undefined && value !== null ? value : '';
-    });
-
-    return rendered;
-}
-
-/**
- * Renders a page using the layout template and provided content
- * @param {string} content - Content to inject into the layout
- * @param {object} data - Data to use for template rendering
- * @returns {Promise<string>} - The fully rendered HTML page
- */
-async function renderPage(content, data) {
-    try {
-        // Ensure data has default values for expected template variables
-        const defaultData = {
-            // Default empty values for template variables
-            extraScripts: '',
-            extraStyles: '',
-            dashboardActive: '',
-            characterActive: '',
-            worldActive: '',
-            galleryActive: '',
-            twitchActive: '',
-            pageTitle: 'Enspira'
-        };
-
-        // Merge default data with provided data, ensuring defaults don't override provided values
-        const mergedData = { ...defaultData, ...data };
-
-        // Read the layout template
-        const layoutPath = path.join(process.cwd(), 'pages', 'layout.html');
-        let layoutTemplate = await fs.readFile(layoutPath, 'utf8');
-
-        // Render the content first with merged data
-        const renderedContent = renderTemplate(content, mergedData);
-
-        // Add the content to the data object
-        mergedData.mainContent = renderedContent;
-
-        // Render the layout with the content and merged data
-        return renderTemplate(layoutTemplate, mergedData);
-    } catch (error) {
-        logger.error("Web", `Error rendering page: ${error.message}`);
-        throw error;
-    }
-}
 
 /**
  * Loads text content from a file if it exists, or returns an empty string
@@ -234,8 +50,6 @@ import { verifySessionToken } from './v1.js'
  */
 async function requireAuth(request, reply) {
     // Check if cookies object exists and if the enspira_session cookie is set
-    logger.log("Auth", `Request cookies: ${JSON.stringify(request.cookies || {})}`);
-
     const sessionToken = request.cookies?.enspira_session;
 
     if (!sessionToken) {
@@ -274,6 +88,30 @@ async function requireAuth(request, reply) {
     }
 }
 
+// Helper function to extract form field values
+function getFieldValue(field) {
+    if (!field) return '';
+
+    // If the field is a Part object from @fastify/multipart
+    if (field.value !== undefined) {
+        return field.value;
+    }
+
+    // If the field is already a string
+    if (typeof field === 'string') {
+        return field;
+    }
+
+    // If the field is a readable stream (file upload)
+    if (field.pipe && typeof field.pipe === 'function') {
+        // For this implementation, we're not handling file uploads
+        return '';
+    }
+
+    // Return empty string for any other case
+    return '';
+}
+
 // Setup the web routes
 async function webRoutes(fastify, options) {
     // Register the form body parser to ensure form submissions work
@@ -286,83 +124,71 @@ async function webRoutes(fastify, options) {
     fastify.get('/dashboard', { preHandler: requireAuth }, async (request, reply) => {
         try {
             const user = request.user;
-    
-            // Get Twitch connection status - be more defensive with optional chaining
+
+            // Ensure we have proper defaults for all values the template uses
             const streamerConnected = !!user?.twitch_tokens?.streamer?.access_token;
             const botConnected = !!user?.twitch_tokens?.bot?.access_token;
-    
-            // Get streamer and bot names - only if connected
             const streamerName = streamerConnected ? (user.twitch_tokens.streamer.twitch_display_name || 'Unknown') : '';
             const botName = botConnected ? (user.twitch_tokens.bot.twitch_display_name || 'Unknown') : '';
-    
-            // Simple stats - just set to 0 for now
-            let chatCount = 0;
+
+            // Set default stats
+            const stats = {
+                chatMessages: 0
+            };
+
+            // Try to get actual chat count
             try {
                 const recentChats = await returnRecentChats(user.user_id, false, true);
-                chatCount = recentChats?.length || 0;
+                stats.chatMessages = recentChats?.length || 0;
             } catch (error) {
                 logger.error("Web", `Error fetching chat stats: ${error.message}`);
             }
-    
-            // Create the stats object with actual data
-            const stats = {
-                chatMessages: chatCount,
-            };
-    
-            // Get stream status data - make sure we set a default structure
+
+            // Always initialize streamStatus with default values for all properties
             let streamStatus = {
-                online: false
+                online: false,
+                title: '',
+                game: '',
+                viewers: 0,
+                duration: '',
+                thumbnail: null
             };
-    
+
             let followerCount = user.current_followers || 0;
-            let lastGame = null;
-    
+            let lastGame = user.current_game?.game || 'None';
+
             if (user.twitch_tokens?.streamer?.twitch_user_id) {
                 try {
-                    // Import and use the fetchStreamInfo function
                     const { fetchStreamInfo } = await import('../twitch-eventsub-manager.js');
                     const streamInfo = await fetchStreamInfo(user.user_id);
-    
+
                     if (streamInfo && streamInfo.success && streamInfo.isLive) {
-                        // Stream is online, format the data for display
+                        // Update streamStatus with actual values
                         streamStatus = {
                             online: true,
-                            title: streamInfo.data.title || user.stream_status?.title || 'Untitled Stream',
-                            game: streamInfo.data.gameName || user.current_game?.game || 'Unknown Game',
-                            viewers: streamInfo.data.viewerCount || user.current_viewers || 0,
+                            title: streamInfo.data.title || 'Untitled Stream',
+                            game: streamInfo.data.gameName || 'Unknown Game',
+                            viewers: streamInfo.data.viewerCount || 0,
                             duration: streamInfo.data.duration || 'Just started',
                             thumbnail: streamInfo.data.thumbnailUrl || null
                         };
-                    } else {
-                        // Stream is offline, ensure the status object is properly set
-                        streamStatus = {
-                            online: false
-                        };
-    
-                        // Get last game played if available
-                        if (user.current_game && user.current_game.game) {
-                            lastGame = user.current_game.game;
-                        }
                     }
-    
-                    // Get follower count
+
                     followerCount = user.current_followers || 0;
                 } catch (error) {
                     logger.error("Web", `Error fetching stream info: ${error.message}`);
-                    // Ensure we have a valid streamStatus object even if there's an error
-                    streamStatus = { online: false };
                 }
             }
-    
-            // Log the streamStatus for debugging
-            logger.log("Web", `Stream status for dashboard: ${JSON.stringify(streamStatus)}`);
-    
-            // Simplified data object with only what we need
-            const templateData = {
+
+            // Log complete data being sent to template
+            logger.log("Web", `Rendering dashboard with streamStatus: ${JSON.stringify(streamStatus)}`);
+
+            return reply.view('dashboard.njk', {
+                pageTitle: 'Dashboard',
+                dashboardActive: true,
                 user: {
                     display_name: user.display_name || user.user_name,
                 },
-                dashboardActive: 'active',
                 streamerConnected,
                 botConnected,
                 streamerName,
@@ -371,18 +197,10 @@ async function webRoutes(fastify, options) {
                 streamStatus,
                 followerCount,
                 lastGame
-            };
-    
-            // Read dashboard template
-            const dashboardTemplate = await fs.readFile(path.join(process.cwd(), 'pages', 'dashboard.html'), 'utf8');
-    
-            // Render the page with only the necessary data
-            const renderedPage = await renderPage(dashboardTemplate, templateData);
-    
-            reply.type('text/html').send(renderedPage);
+            });
         } catch (error) {
             logger.error("Web", `Error serving dashboard: ${error.message}`);
-            reply.code(500).send('Error loading dashboard');
+            return reply.code(500).send('Error loading dashboard');
         }
     });
 
@@ -396,33 +214,89 @@ async function webRoutes(fastify, options) {
             const characterDescription = await loadTextContent(user.user_id, 'character_card');
             const characterExamples = await loadTextContent(user.user_id, 'examples');
 
-            // Read character editor template
-            const characterPath = path.join(process.cwd(), 'pages', 'character.html');
-            let characterTemplate;
-
-            try {
-                await fs.access(characterPath);
-                characterTemplate = await fs.readFile(characterPath, 'utf8');
-            } catch (error) {
-                logger.warn("Web", `Character template not found at ${characterPath}, using fallback`);
-                characterTemplate = `<h1>Character Editor</h1>
-                            <p>Template files are being set up.</p>`;
-            }
-
-            // Render the page
-            const renderedPage = await renderPage(characterTemplate, {
-                characterActive: 'active',
+            return reply.view('character.njk', {
+                pageTitle: 'Character Editor',
+                characterActive: true,
                 user,
                 character: user,
                 characterPersonality,
                 characterDescription,
                 characterExamples
             });
-
-            reply.type('text/html').send(renderedPage);
         } catch (error) {
             logger.error("Web", `Error serving character editor: ${error.message}`);
-            reply.code(500).send('Error loading character editor');
+            return reply.code(500).send('Error loading character editor');
+        }
+    });
+
+    // World editor route
+    fastify.get('/world', { preHandler: requireAuth }, async (request, reply) => {
+        try {
+            const user = request.user;
+
+            // Load world data from files
+            const worldInfo = await loadTextContent(user.user_id, 'world_lore');
+            const playerInfo = await loadTextContent(user.user_id, 'player_info');
+            const scenario = await loadTextContent(user.user_id, 'scenario');
+
+            // Format commands list and aux bots for textarea
+            const commandsList = user.commands_list ? user.commands_list.join('\n') : '';
+            const auxBots = user.aux_bots ? user.aux_bots.join('\n') : '';
+
+            return reply.view('world.njk', {
+                pageTitle: 'World Editor',
+                worldActive: true,
+                user,
+                character: user,
+                worldInfo,
+                playerInfo,
+                scenario,
+                commandsList,
+                auxBots
+            });
+        } catch (error) {
+            logger.error("Web", `Error serving world editor: ${error.message}`);
+            return reply.code(500).send('Error loading world editor');
+        }
+    });
+
+    // Help page route
+    fastify.get('/help', { preHandler: requireAuth }, async (request, reply) => {
+        try {
+            return reply.view('help.njk', {
+                pageTitle: 'Help & Documentation',
+                helpActive: true
+            });
+        } catch (error) {
+            logger.error("Web", `Error serving help page: ${error.message}`);
+            return reply.code(500).send(`Error loading help page: ${error.message}`);
+        }
+    });
+
+    // Gallery route
+    fastify.get('/gallery', { preHandler: requireAuth }, async (request, reply) => {
+        try {
+            const user = request.user;
+
+            // Load all character presets
+            const presets = await loadAllPresets();
+
+            // Add placeholder images for presets that don't have one
+            presets.forEach(preset => {
+                if (!preset.image) {
+                    preset.image = '/api/placeholder/200/200';
+                }
+            });
+
+            return reply.view('gallery.njk', {
+                pageTitle: 'Character Gallery',
+                galleryActive: true,
+                presets,
+                user
+            });
+        } catch (error) {
+            logger.error("Web", `Error serving gallery: ${error.message}`);
+            return reply.code(500).send('Error loading character gallery');
         }
     });
 
@@ -444,153 +318,24 @@ async function webRoutes(fastify, options) {
                 characterData.image = '/api/placeholder/200/200';
             }
 
-            // Read the character details template
-            const detailsTemplatePath = path.join(process.cwd(), 'pages', 'character-details.html');
-            const detailsTemplate = await fs.readFile(detailsTemplatePath, 'utf8');
-
-            // Render the page with character data
-            const renderedPage = await renderPage(detailsTemplate, {
-                galleryActive: 'active',
+            return reply.view('character-details.njk', {
+                pageTitle: characterData.name,
+                galleryActive: true,
                 character: characterData,
                 user
             });
-
-            reply.type('text/html').send(renderedPage);
         } catch (error) {
             logger.error("Web", `Error serving character details: ${error.message}`);
-            reply.code(500).send('Error loading character details');
-        }
-    });
-
-    // World editor route
-    fastify.get('/world', { preHandler: requireAuth }, async (request, reply) => {
-        try {
-            const user = request.user;
-
-            // Load world data from files
-            const worldInfo = await loadTextContent(user.user_id, 'world_lore');
-            const playerInfo = await loadTextContent(user.user_id, 'player_info');
-            const scenario = await loadTextContent(user.user_id, 'scenario');
-
-            // Format commands list and aux bots for textarea
-            const commandsList = user.commands_list ? user.commands_list.join('\n') : '';
-            const auxBots = user.aux_bots ? user.aux_bots.join('\n') : '';
-
-            // Read world editor template
-            const worldPath = path.join(process.cwd(), 'pages', 'world.html');
-            let worldTemplate;
-
-            try {
-                await fs.access(worldPath);
-                worldTemplate = await fs.readFile(worldPath, 'utf8');
-            } catch (error) {
-                logger.warn("Web", `World template not found at ${worldPath}, using fallback`);
-                worldTemplate = `<h1>World Editor</h1>
-                          <p>Template files are being set up.</p>`;
-            }
-
-            // Render the page with explicitly set extraScripts variable
-            const renderedPage = await renderPage(worldTemplate, {
-                worldActive: 'active',
-                user,
-                character: user,
-                worldInfo,
-                playerInfo,
-                scenario,
-                commandsList,
-                auxBots,
-                extraScripts: '' // Explicitly set this to prevent template errors
-            });
-
-            reply.type('text/html').send(renderedPage);
-        } catch (error) {
-            logger.error("Web", `Error serving world editor: ${error.message}`);
-            reply.code(500).send('Error loading world editor');
-        }
-    });
-
-    fastify.get('/help', { preHandler: requireAuth }, async (request, reply) => {
-        try {
-            const helpPath = path.join(process.cwd(), 'pages', 'help.html');
-
-            let helpTemplate;
-
-            try {
-                await fs.access(helpPath);
-                helpTemplate = await fs.readFile(helpPath, 'utf8');
-            } catch (error) {
-                logger.warn("Web", `Help template not found at ${helpPath}, using fallback`);
-                helpTemplate = `<h1>Help Section</h1>
-                          <p>Template files are being set up.</p>`;
-            }
-
-            // Render the page with explicitly set extraScripts variable
-            const renderedPage = await renderPage(helpTemplate, {});
-
-            reply.type('text/html').send(renderedPage);
-        } catch (error) {
-            logger.error("Web", `Error serving help page: ${error.message}`);
-            reply.code(500).send(`Error loading help page. Error: ${error.message}`);
+            return reply.code(500).send('Error loading character details');
         }
     });
 
     // Authentication routes
     fastify.get('/auth/login', async (request, reply) => {
-        const loginForm = `<!doctype html>
-    <html>
-      <head>
-        <title>Enspira - Login</title>
-        <style>
-          body {
-            font-family: Arial, sans-serif;
-            max-width: 500px;
-            margin: 0 auto;
-            padding: 20px;
-          }
-          .form-group {
-            margin-bottom: 15px;
-          }
-          label {
-            display: block;
-            margin-bottom: 5px;
-          }
-          input[type="text"],
-          input[type="password"] {
-            width: 100%;
-            padding: 8px;
-          }
-          button {
-            background: #6441a4;
-            color: white;
-            border: none;
-            padding: 10px 15px;
-            cursor: pointer;
-          }
-          .error {
-            color: #e74c3c;
-            margin-bottom: 15px;
-          }
-        </style>
-      </head>
-      <body>
-        <h2>Enspira Login</h2>
-        ${request.query.error ? `<div class="error">${request.query.error}</div>` : ''}
-        
-        <form action="/api/v1/auth/login" method="POST">
-          <div class="form-group">
-            <label for="user_id">User ID:</label>
-            <input type="text" id="user_id" name="user_id" required />
-          </div>
-          <div class="form-group">
-            <label for="password">Password:</label>
-            <input type="password" id="password" name="password" required />
-          </div>
-          <button type="submit">Login</button>
-        </form>
-      </body>
-    </html>`;
-
-        reply.type('text/html').send(loginForm);
+        return reply.view('login.njk', {
+            pageTitle: 'Login',
+            error: request.query.error || null
+        });
     });
 
     fastify.get('/auth/logout', async (request, reply) => {
@@ -600,65 +345,260 @@ async function webRoutes(fastify, options) {
 
     // Redirect root to dashboard
     fastify.get('/', (request, reply) => {
-        reply.redirect('/web/dashboard');
+        return reply.redirect('/web/dashboard');
     });
-    fastify.get('/gallery', { preHandler: requireAuth }, async (request, reply) => {
+
+    // POST handlers for form submissions
+
+    // Character personality update endpoint
+    fastify.post('/character/personality', { preHandler: requireAuth }, async (request, reply) => {
         try {
             const user = request.user;
 
-            // Load all character presets
-            const presets = await loadAllPresets();
+            // Extract values safely from form data
+            const botName = getFieldValue(request.body.bot_name);
+            const personality = getFieldValue(request.body.personality);
 
-            // Add placeholder images for presets that don't have one
-            presets.forEach(preset => {
-                if (!preset.image) {
-                    preset.image = '/api/placeholder/200/200';
-                }
-            });
+            // Update bot name in user record
+            await updateUserParameter(user.user_id, 'bot_name', botName);
 
-            // Read gallery template file
-            const galleryPath = path.join(process.cwd(), 'pages', 'gallery.html');
-            const galleryTemplate = await fs.readFile(galleryPath, 'utf8');
+            // Save personality to file
+            const success = await saveTextContent(user.user_id, 'character_personality', personality);
 
-            // Render the page with presets data
-            const renderedPage = await renderPage(galleryTemplate, {
-                galleryActive: 'active',
-                presets,
-                user
-            });
-
-            reply.type('text/html').send(renderedPage);
+            if (success) {
+                reply.send({ success: true, message: 'Personality updated successfully' });
+            } else {
+                reply.code(500).send({ success: false, error: 'Failed to save personality' });
+            }
         } catch (error) {
-            logger.error("Web", `Error serving gallery: ${error.message}`);
-            reply.code(500).send('Error loading character gallery');
+            logger.error("Web", `Error updating personality: ${error.message}`);
+            reply.code(500).send({ success: false, error: 'An error occurred while updating personality' });
         }
     });
 
-    // Route handler for using a character preset
-    fastify.post('/gallery/:character/use', { preHandler: requireAuth }, async (req, res) => {
+    // Character description update endpoint
+    fastify.post('/character/description', { preHandler: requireAuth }, async (request, reply) => {
         try {
-            const characterName = req.params.character;
-            const characterData = await loadPreset(characterName);
+            const user = request.user;
 
-            if (!characterData) {
-                return res.status(404).json({ error: 'Character not found' });
+            // Extract values safely from form data
+            const description = getFieldValue(request.body.description);
+            const botTwitch = getFieldValue(request.body.bot_twitch);
+
+            // Save description to file
+            const success = await saveTextContent(user.user_id, 'character_card', description);
+
+            // Update bot_twitch if provided
+            if (botTwitch) {
+                await updateUserParameter(user.user_id, 'bot_twitch', botTwitch);
             }
 
-            // Here you would save the character data to the user's profile or session
-            // This depends on how your user data is stored
-
-            // For example, if using sessions:
-            req.session.selectedCharacter = characterData;
-
-            res.redirect('/dashboard'); // Redirect to the main dashboard with the character selected
+            if (success) {
+                reply.send({ success: true, message: 'Description updated successfully' });
+            } else {
+                reply.code(500).send({ success: false, error: 'Failed to save description' });
+            }
         } catch (error) {
-            console.error('Error using character preset:', error);
-            res.status(500).send('Error applying character preset');
+            logger.error("Web", `Error updating description: ${error.message}`);
+            reply.code(500).send({ success: false, error: 'An error occurred while updating description' });
         }
     });
+
+    // Character examples update endpoint
+    fastify.post('/character/examples', { preHandler: requireAuth }, async (request, reply) => {
+        try {
+            const user = request.user;
+
+            // Extract value safely from form data
+            const examples = getFieldValue(request.body.examples);
+
+            // Save examples to file
+            const success = await saveTextContent(user.user_id, 'examples', examples);
+
+            if (success) {
+                reply.send({ success: true, message: 'Examples updated successfully' });
+            } else {
+                reply.code(500).send({ success: false, error: 'Failed to save examples' });
+            }
+        } catch (error) {
+            logger.error("Web", `Error updating examples: ${error.message}`);
+            reply.code(500).send({ success: false, error: 'An error occurred while updating examples' });
+        }
+    });
+
+    // World info update endpoint
+    fastify.post('/world/info', { preHandler: requireAuth }, async (request, reply) => {
+        try {
+            const user = request.user;
+
+            // Extract values safely from form data
+            const worldInfo = getFieldValue(request.body.world_info);
+            const weatherEnabled = getFieldValue(request.body.weather_enabled);
+
+            // Update weather flag in user record
+            await updateUserParameter(user.user_id, 'weather', weatherEnabled === 'true');
+
+            // Save world info to file
+            const success = await saveTextContent(user.user_id, 'world_lore', worldInfo);
+
+            if (success) {
+                reply.send({ success: true, message: 'World information updated successfully' });
+            } else {
+                reply.code(500).send({ success: false, error: 'Failed to save world information' });
+            }
+        } catch (error) {
+            logger.error("Web", `Error updating world info: ${error.message}`);
+            reply.code(500).send({ success: false, error: 'An error occurred while updating world information' });
+        }
+    });
+
+    // Player info update endpoint
+    fastify.post('/world/player', { preHandler: requireAuth }, async (request, reply) => {
+        try {
+            const user = request.user;
+
+            // Extract values safely from form data
+            const playerInfo = getFieldValue(request.body.player_info);
+            const commandsList = getFieldValue(request.body.commands_list);
+
+            // Update commands list in user record if provided
+            if (commandsList) {
+                const commandsArray = commandsList.split('\n')
+                    .map(cmd => cmd.trim())
+                    .filter(cmd => cmd.length > 0);
+                await updateUserParameter(user.user_id, 'commands_list', commandsArray);
+            }
+
+            // Save player info to file
+            const success = await saveTextContent(user.user_id, 'player_info', playerInfo);
+
+            if (success) {
+                reply.send({ success: true, message: 'Player information updated successfully' });
+            } else {
+                reply.code(500).send({ success: false, error: 'Failed to save player information' });
+            }
+        } catch (error) {
+            logger.error("Web", `Error updating player info: ${error.message}`);
+            reply.code(500).send({ success: false, error: 'An error occurred while updating player information' });
+        }
+    });
+
+    // Scenario update endpoint
+    fastify.post('/world/scenario', { preHandler: requireAuth }, async (request, reply) => {
+        try {
+            const user = request.user;
+
+            // Extract values safely from form data
+            const scenario = getFieldValue(request.body.scenario);
+            const auxBots = getFieldValue(request.body.aux_bots);
+
+            // Update aux bots list in user record if provided
+            if (auxBots) {
+                const auxBotsArray = auxBots.split('\n')
+                    .map(bot => bot.trim())
+                    .filter(bot => bot.length > 0);
+                await updateUserParameter(user.user_id, 'aux_bots', auxBotsArray);
+            }
+
+            // Save scenario to file
+            const success = await saveTextContent(user.user_id, 'scenario', scenario);
+
+            if (success) {
+                reply.send({ success: true, message: 'Scenario updated successfully' });
+            } else {
+                reply.code(500).send({ success: false, error: 'Failed to save scenario' });
+            }
+        } catch (error) {
+            logger.error("Web", `Error updating scenario: ${error.message}`);
+            reply.code(500).send({ success: false, error: 'An error occurred while updating scenario' });
+        }
+    });
+
+    // Bot configuration update endpoint
+    fastify.post('/world/bot-config', { preHandler: requireAuth }, async (request, reply) => {
+        try {
+            const user = request.user;
+
+            // Extract values safely from form data
+            const commandsList = getFieldValue(request.body.commands_list);
+            const auxBots = getFieldValue(request.body.aux_bots);
+
+            // Update commands list in user record
+            const commandsArray = commandsList.split('\n')
+                .map(cmd => cmd.trim())
+                .filter(cmd => cmd.length > 0);
+
+            await updateUserParameter(user.user_id, 'commands_list', commandsArray);
+
+            // Update aux bots list in user record
+            const auxBotsArray = auxBots.split('\n')
+                .map(bot => bot.trim())
+                .filter(bot => bot.length > 0);
+
+            await updateUserParameter(user.user_id, 'aux_bots', auxBotsArray);
+
+            reply.send({ success: true, message: 'Bot configuration updated successfully' });
+        } catch (error) {
+            logger.error("Web", `Error updating bot configuration: ${error.message}`);
+            reply.code(500).send({ success: false, error: 'An error occurred while updating bot configuration' });
+        }
+    });
+
+    // Apply character preset
+    fastify.post('/gallery/:characterId/use', { preHandler: requireAuth }, async (request, reply) => {
+        const { user } = request;
+        const { characterId } = request.params;
+
+        try {
+            const preset = await loadPreset(characterId);
+            if (!preset) {
+                return reply.code(404).send({ success: false, error: 'Character preset not found' });
+            }
+
+            logger.log("Web", `Applying character preset: ${preset.name} (${characterId}) for user ${user.user_id}`);
+
+            // Extract the internal format for saving to user files
+            const personalityContent = preset.personality.internalFmt || preset.personality || '';
+            const descriptionContent = preset.char_description.internalFmt || preset.char_description || '';
+
+            // Apply the preset data to the user
+            const nameUpdate = await updateUserParameter(user.user_id, 'bot_name', preset.name);
+
+            // Save personality and description to files
+            const personalitySave = await saveTextContent(user.user_id, 'character_personality', personalityContent);
+            const descriptionSave = await saveTextContent(user.user_id, 'character_card', descriptionContent);
+
+            // Make sure bot_twitch is set if present in the preset
+            if (preset.bot_twitch) {
+                await updateUserParameter(user.user_id, 'bot_twitch', preset.bot_twitch);
+            }
+
+            if (nameUpdate && personalitySave && descriptionSave) {
+                logger.log("Web", `Successfully applied preset '${characterId}' for user ${user.user_id}`);
+
+                // Respond with success and a redirect URL for the frontend handler
+                return reply.send({
+                    success: true,
+                    message: `Character preset "${preset.name}" applied successfully!`,
+                    redirect: '/web/character'
+                });
+            } else {
+                logger.error("Web", `Failed to fully apply preset '${characterId}' for user ${user.user_id}`);
+                return reply.code(500).send({
+                    success: false,
+                    error: 'Failed to save all character data'
+                });
+            }
+        } catch (error) {
+            logger.error("Web", `Error applying preset '${characterId}' for user ${user.user_id}: ${error.message}`);
+            return reply.code(500).send({
+                success: false,
+                error: 'An error occurred while applying the preset'
+            });
+        }
+    });
+
     logger.log("Web", "Web routes registered successfully");
 }
-
-
 
 export default webRoutes;

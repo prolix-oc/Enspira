@@ -410,51 +410,51 @@ async function routes(fastify, options) {
   fastify.post('/auth/login', async (request, reply) => {
     try {
       const { user_id, password } = request.body;
-
+  
       if (!user_id || !password) {
-        return reply.redirect('/v1/auth/login?error=Missing+required+fields');
+        return reply.redirect('/api/v1/auth/login?error=Missing+required+fields');
       }
-
+  
       // Get user
       const user = await returnAuthObject(user_id);
-
+  
       if (!user) {
-        return reply.redirect('/v1/auth/login?error=Invalid+credentials');
+        return reply.redirect('/api/v1/auth/login?error=Invalid+credentials');
       }
-
+  
       // Check password
       if (!user.webPasswordHash || !user.webPasswordSalt) {
-        return reply.redirect('/v1/auth/login?error=No+password+set');
+        return reply.redirect('/api/v1/auth/login?error=No+password+set');
       }
-
+  
       const passwordCorrect = await isPasswordCorrect(
         user.webPasswordHash,
         user.webPasswordSalt,
         user.webPasswordIterations || 20480,
         password
       );
-
+  
       if (!passwordCorrect) {
-        return reply.redirect('/v1/auth/login?error=Invalid+credentials');
+        return reply.redirect('/api/v1/auth/login?error=Invalid+credentials');
       }
-
+  
       // Create session
       const sessionToken = createSessionToken(user_id);
-
+  
       // Set cookie
       reply.setCookie('enspira_session', sessionToken, {
         path: '/',
-        httpOnly: true, // Prevents JavaScript access
-        secure: process.env.NODE_ENV === 'production', // Use secure in production
-        sameSite: 'lax', // Protects against CSRF
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
         maxAge: 60 * 60 * 24 * 7 // 7 days
       });
-
-      // Redirect to dashboard or Twitch management
+  
+      // Redirect to dashboard
       return reply.redirect('/web/dashboard');
     } catch (error) {
       logger.error("Auth", `Login error: ${error.message}`);
-      return reply.redirect('/v1/auth/login?error=An+error+occurred');
+      return reply.redirect('/api/v1/auth/login?error=An+error+occurred');
     }
   });
 
