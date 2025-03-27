@@ -3,143 +3,221 @@
 
 <div class="card">
   <div class="card-header">
-    <h1>Help & Tutorial</h1>
+    <h1>Help & Documentation</h1>
   </div>
   
-  <p>Welcome to the Enspira Help page! This guide will show you how to edit your character, world info, and scenario cards using our custom templating engine. Simply insert the variables in your template, and they will be automatically replaced with your live data.</p>
+  <p>Welcome to Enspira's Help page! This guide explains how to use template variables in your character, world info, and scenario settings. Simply insert these variables in your templates, and they will be automatically replaced with your data.</p>
   
-  <div class="card" style="margin-top: 20px; background-color: rgba(80, 130, 190, 0.1); border-color: #4682B4;">
+  <div class="card" style="margin-top: 20px; background-color: rgba(88, 166, 255, 0.1); border-color: var(--accent);">
     <h2 style="margin-top: 0;">Quick Reference</h2>
-    <p>Examples of commonly used variables:</p>
-    <div style="display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px;">
-      <span style="background-color: var(--button-secondary-bg); padding: 4px 10px; border-radius: 4px; font-family: monospace;">{{user}}</span>
-      <span style="background-color: var(--button-secondary-bg); padding: 4px 10px; border-radius: 4px; font-family: monospace;">{{char}}</span>
-      <span style="background-color: var(--button-secondary-bg); padding: 4px 10px; border-radius: 4px; font-family: monospace;">{{socials}}</span>
-      <span style="background-color: var(--button-secondary-bg); padding: 4px 10px; border-radius: 4px; font-family: monospace;">{{socials.twitter}}</span>
-      <span style="background-color: var(--button-secondary-bg); padding: 4px 10px; border-radius: 4px; font-family: monospace;">{{datetime}}</span>
+    <p>Commonly used variables:</p>
+    <div class="scope-list" style="display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px;">
+      <code class="scope">&#123;&#123;user&#125;&#125;</code>
+      <code class="scope">&#123;&#123;char&#125;&#125;</code>
+      <code class="scope">&#123;&#123;socials&#125;&#125;</code>
+      <code class="scope">&#123;&#123;socials.twitter&#125;&#125;</code>
+      <code class="scope">&#123;&#123;datetime&#125;&#125;</code>
+      <code class="scope">&#123;&#123;current_game&#125;&#125;</code>
+      <code class="scope">&#123;&#123;current_views&#125;&#125;</code>
     </div>
   </div>
   
-  <h2 style="margin-top: 30px; border-bottom: 1px solid var(--border); padding-bottom: 10px;">Template Variable Definitions</h2>
+  <h2 class="section-title">Template Variables</h2>
   
-  <div class="card" style="margin-top: 20px;">
-    <h3 style="margin-top: 0; color: var(--accent);">Character Card & World Information Variables</h3>
-    <ul style="list-style-type: none; padding-left: 0;">
-      <li style="margin-bottom: 12px; padding-left: 20px; position: relative;">
-        <div style="position: absolute; left: 0; top: 2px; color: var(--accent);">›</div>
-        <code style="background: var(--input-bg); padding: 2px 6px; border-radius: 4px; font-weight: bold;">{{user}}</code>
-        <span style="margin-left: 5px;">Your name as recognized by the assistant – typically your streaming username.</span>
+  <div class="card">
+    <h3 class="card-subtitle">Character Card & World Information Variables</h3>
+    <ul class="variable-list">
+      <li class="variable-item">
+        <code class="variable-name">&#123;&#123;user&#125;&#125;</code>
+        <span class="variable-desc">Your name as recognized by the assistant – typically your streaming username</span>
       </li>
-      <li style="margin-bottom: 12px; padding-left: 20px; position: relative;">
-        <div style="position: absolute; left: 0; top: 2px; color: var(--accent);">›</div>
-        <code style="background: var(--input-bg); padding: 2px 6px; border-radius: 4px; font-weight: bold;">{{char}}</code>
-        <span style="margin-left: 5px;">The name of your AI assistant or character.</span>
+      <li class="variable-item">
+        <code class="variable-name">&#123;&#123;char&#125;&#125;</code>
+        <span class="variable-desc">The name of your AI assistant or character</span>
       </li>
-      <li style="margin-bottom: 12px; padding-left: 20px; position: relative;">
-        <div style="position: absolute; left: 0; top: 2px; color: var(--accent);">›</div>
-        <code style="background: var(--input-bg); padding: 2px 6px; border-radius: 4px; font-weight: bold;">{{socials}}</code>
-        <span style="margin-left: 5px;">A pre-formatted list of all your linked social media accounts (e.g., "Prolix_GG", "prolix_oc", "Prolix").</span>
+      <li class="variable-item">
+        <code class="variable-name">&#123;&#123;socials&#125;&#125;</code>
+        <span class="variable-desc">A pre-formatted list of all your linked social media accounts</span>
       </li>
-      <li style="margin-bottom: 12px; padding-left: 20px; position: relative;">
-        <div style="position: absolute; left: 0; top: 2px; color: var(--accent);">›</div>
-        <code style="background: var(--input-bg); padding: 2px 6px; border-radius: 4px; font-weight: bold;">{{socials.xxx}}</code>
-        <span style="margin-left: 5px;">A specific social media account. Replace <em>xxx</em> with one of these valid values:</span>
-        <div style="display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; margin-left: 20px;">
-          <span style="background: rgba(100, 65, 164, 0.2); color: #d2b8ff; padding: 3px 8px; border-radius: 4px; font-size: 0.9em;">tiktok</span>
-          <span style="background: rgba(100, 65, 164, 0.2); color: #d2b8ff; padding: 3px 8px; border-radius: 4px; font-size: 0.9em;">youtube</span>
-          <span style="background: rgba(100, 65, 164, 0.2); color: #d2b8ff; padding: 3px 8px; border-radius: 4px; font-size: 0.9em;">twitch</span>
-          <span style="background: rgba(100, 65, 164, 0.2); color: #d2b8ff; padding: 3px 8px; border-radius: 4px; font-size: 0.9em;">twitter</span>
-          <span style="background: rgba(100, 65, 164, 0.2); color: #d2b8ff; padding: 3px 8px; border-radius: 4px; font-size: 0.9em;">kick</span>
+      <li class="variable-item">
+        <code class="variable-name">&#123;&#123;socials.xxx&#125;&#125;</code>
+        <span class="variable-desc">A specific social media account where xxx is one of:</span>
+        <div class="platform-list">
+          <span class="platform">tiktok</span>
+          <span class="platform">youtube</span>
+          <span class="platform">twitch</span>
+          <span class="platform">twitter</span>
+          <span class="platform">kick</span>
         </div>
       </li>
-      <li style="margin-bottom: 12px; padding-left: 20px; position: relative;">
-        <div style="position: absolute; left: 0; top: 2px; color: var(--accent);">›</div>
-        <code style="background: var(--input-bg); padding: 2px 6px; border-radius: 4px; font-weight: bold;">{{datetime}}</code>
-        <span style="margin-left: 5px;">The current date and time when the page is rendered.</span>
+      <li class="variable-item">
+        <code class="variable-name">&#123;&#123;datetime&#125;&#125;</code>
+        <span class="variable-desc">The current date and time</span>
       </li>
     </ul>
   </div>
   
-  <div class="card" style="margin-top: 20px;">
-    <h3 style="margin-top: 0; color: var(--accent);">Scenario Card Variables</h3>
-    <ul style="list-style-type: none; padding-left: 0;">
-      <li style="margin-bottom: 12px; padding-left: 20px; position: relative;">
-        <div style="position: absolute; left: 0; top: 2px; color: var(--accent);">›</div>
-        <code style="background: var(--input-bg); padding: 2px 6px; border-radius: 4px; font-weight: bold;">{{current_game}}</code>
-        <span style="margin-left: 5px;">The game you are currently playing, as pulled from Twitch.</span>
+  <div class="card">
+    <h3 class="card-subtitle">Scenario Variables</h3>
+    <ul class="variable-list">
+      <li class="variable-item">
+        <code class="variable-name">&#123;&#123;current_game&#125;&#125;</code>
+        <span class="variable-desc">The game you are currently playing, as retrieved from Twitch</span>
       </li>
-      <li style="margin-bottom: 12px; padding-left: 20px; position: relative;">
-        <div style="position: absolute; left: 0; top: 2px; color: var(--accent);">›</div>
-        <code style="background: var(--input-bg); padding: 2px 6px; border-radius: 4px; font-weight: bold;">{{current_views}}</code>
-        <span style="margin-left: 5px;">The current viewer count of your channel from Twitch.</span>
+      <li class="variable-item">
+        <code class="variable-name">&#123;&#123;current_views&#125;&#125;</code>
+        <span class="variable-desc">The current viewer count of your Twitch channel</span>
       </li>
-      <li style="margin-bottom: 12px; padding-left: 20px; position: relative;">
-        <div style="position: absolute; left: 0; top: 2px; color: var(--accent);">›</div>
-        <code style="background: var(--input-bg); padding: 2px 6px; border-radius: 4px; font-weight: bold;">{{current_follows}}</code>
-        <span style="margin-left: 5px;">Your current follower count as provided by Twitch.</span>
+      <li class="variable-item">
+        <code class="variable-name">&#123;&#123;current_follows&#125;&#125;</code>
+        <span class="variable-desc">Your current follower count from Twitch</span>
       </li>
-      <li style="margin-bottom: 12px; padding-left: 20px; position: relative;">
-        <div style="position: absolute; left: 0; top: 2px; color: var(--accent);">›</div>
-        <span style="margin-left: 5px;">Also available: <code style="background: var(--input-bg); padding: 2px 6px; border-radius: 4px;">{{socials}}</code>, <code style="background: var(--input-bg); padding: 2px 6px; border-radius: 4px;">{{socials.xxx}}</code>, <code style="background: var(--input-bg); padding: 2px 6px; border-radius: 4px;">{{char}}</code>, <code style="background: var(--input-bg); padding: 2px 6px; border-radius: 4px;">{{user}}</code>, and <code style="background: var(--input-bg); padding: 2px 6px; border-radius: 4px;">{{datetime}}</code></span>
+      <li class="variable-item">
+        <span class="variable-desc">Also available: <code class="inline-code">&#123;&#123;user&#125;&#125;</code>, <code class="inline-code">&#123;&#123;char&#125;&#125;</code>, <code class="inline-code">&#123;&#123;socials&#125;&#125;</code>, <code class="inline-code">&#123;&#123;socials.xxx&#125;&#125;</code>, and <code class="inline-code">&#123;&#123;datetime&#125;&#125;</code></span>
       </li>
     </ul>
   </div>
   
-  <h2 style="margin-top: 30px; border-bottom: 1px solid var(--border); padding-bottom: 10px;">How to Build Your Cards</h2>
+  <h2 class="section-title">How to Use Template Variables</h2>
   
-  <div class="card" style="margin-top: 20px;">
-    <p>When editing your character or world card, simply place these variables within your template. For instance, if you want to show your name, include <code style="background: var(--input-bg); padding: 2px 6px; border-radius: 4px;">{{user}}</code> where appropriate. Similarly, use <code style="background: var(--input-bg); padding: 2px 6px; border-radius: 4px;">{{char}}</code> to display your assistant's name.</p>
+  <div class="card">
+    <p>When editing your character, world, or scenario, simply place these variables within your content. For example, to display your name, include <code class="inline-code">&#123;&#123;user&#125;&#125;</code> where appropriate.</p>
     
-    <h4 style="margin-top: 20px; color: var(--accent);">Example:</h4>
-    <pre style="background-color: var(--input-bg); padding: 15px; border-radius: 8px; overflow-x: auto; white-space: pre-wrap; margin-top: 10px;">Hello, my name is {{char}} and I'm {{user}}'s AI assistant!
-You can follow {{user}} on Twitter at @{{socials.twitter}}
+    <h4 class="example-heading">Example Template:</h4>
+    <pre class="code-example">Hello, my name is &#123;&#123;char&#125;&#125; and I'm &#123;&#123;user&#125;&#125;'s AI assistant!
+You can follow &#123;&#123;user&#125;&#125; on Twitter at @&#123;&#123;socials.twitter&#125;&#125;
 
-The current game being played is {{current_game}}
-There are {{current_views}} viewers watching right now!
-</pre>
+The current game being played is &#123;&#123;current_game&#125;&#125;
+There are &#123;&#123;current_views&#125;&#125; viewers watching right now!</pre>
   </div>
   
-  <h2 style="margin-top: 30px; border-bottom: 1px solid var(--border); padding-bottom: 10px;">Tips for Using the Templating Engine</h2>
+  <h2 class="section-title">Tips for Effective Templates</h2>
   
-  <div class="card" style="margin-top: 20px;">
-    <ul style="list-style-type: none; padding-left: 0;">
-      <li style="margin-bottom: 12px; padding-left: 25px; position: relative;">
-        <div style="position: absolute; left: 0; top: 2px; color: var(--success); font-weight: bold;">✓</div>
-        Always verify that you are using the exact variable names as defined above.
-      </li>
-      <li style="margin-bottom: 12px; padding-left: 25px; position: relative;">
-        <div style="position: absolute; left: 0; top: 2px; color: var(--success); font-weight: bold;">✓</div>
-        For social media handles, replace <code style="background: var(--input-bg); padding: 2px 6px; border-radius: 4px;">xxx</code> in <code style="background: var(--input-bg); padding: 2px 6px; border-radius: 4px;">{{socials.xxx}}</code> with a valid platform (e.g., <code style="background: var(--input-bg); padding: 2px 6px; border-radius: 4px;">twitter</code>).
-      </li>
-      <li style="margin-bottom: 12px; padding-left: 25px; position: relative;">
-        <div style="position: absolute; left: 0; top: 2px; color: var(--success); font-weight: bold;">✓</div>
-        You can combine static text with these variables to craft a personalized message or card for your channel.
-      </li>
-      <li style="margin-bottom: 12px; padding-left: 25px; position: relative;">
-        <div style="position: absolute; left: 0; top: 2px; color: var(--success); font-weight: bold;">✓</div>
-        Preview your changes by saving and reloading the page to see how the data populates.
-      </li>
+  <div class="card">
+    <ul class="tips-list">
+      <li class="tip-item">Always use the exact variable names as shown above (including curly braces)</li>
+      <li class="tip-item">For social media handles, replace <code class="inline-code">xxx</code> in <code class="inline-code">&#123;&#123;socials.xxx&#125;&#125;</code> with a valid platform name</li>
+      <li class="tip-item">Combine static text with variables to craft personalized messages</li>
+      <li class="tip-item">Preview your changes to see how the data populates</li>
+      <li class="tip-item">Be aware that some variables (like <code class="inline-code">&#123;&#123;current_game&#125;&#125;</code>) will only display data when your stream is active</li>
     </ul>
   </div>
   
   <div class="card" style="margin-top: 20px; background-color: rgba(86, 211, 100, 0.1); border-color: var(--success);">
-    <p style="margin: 0;">This tutorial is designed to simplify the process of creating dynamic, data-driven character and world cards for your streaming setup. If you have further questions, our support team is always here to help.</p>
+    <p style="margin: 0;">This guide is designed to help you create dynamic, data-driven character and world settings for your stream. If you have questions, check our <a href="https://github.com/prolix-oc/Enspira" target="_blank">GitHub repository</a> or reach out to the community.</p>
   </div>
 </div>
 
-{{extraScripts}}
-<script>
-  // Ensure all code examples show the actual curly braces
-  // and don't get interpreted as template variables
-  document.addEventListener('DOMContentLoaded', () => {
-    const codeElements = document.querySelectorAll('code');
-    codeElements.forEach(el => {
-      // Replace the text content directly to avoid template processing
-      const content = el.textContent;
-      if (content.includes('{{') && content.includes('}}')) {
-        // We display the literal content, not processed template variables
-        el.setAttribute('data-original', content);
-      }
-    });
-  });
-</script>
+<style>
+  .section-title {
+    margin-top: 30px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 10px;
+  }
+  
+  .card-subtitle {
+    margin-top: 0;
+    color: var(--accent);
+  }
+  
+  .variable-list {
+    list-style-type: none;
+    padding-left: 0;
+  }
+  
+  .variable-item {
+    margin-bottom: 12px;
+    padding-left: 20px;
+    position: relative;
+  }
+  
+  .variable-item::before {
+    content: '›';
+    position: absolute;
+    left: 0;
+    top: 2px;
+    color: var(--accent);
+  }
+  
+  .variable-name {
+    background: var(--input-bg);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-weight: bold;
+    font-family: monospace;
+  }
+  
+  .variable-desc {
+    margin-left: 5px;
+  }
+  
+  .platform-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-top: 5px;
+    margin-left: 20px;
+  }
+  
+  .platform {
+    background: rgba(100, 65, 164, 0.2);
+    color: #d2b8ff;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-size: 0.9em;
+  }
+  
+  .inline-code {
+    background: var(--input-bg);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-family: monospace;
+  }
+  
+  .code-example {
+    background-color: var(--input-bg);
+    padding: 15px;
+    border-radius: 8px;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    margin-top: 10px;
+  }
+  
+  .example-heading {
+    margin-top: 20px;
+    color: var(--accent);
+  }
+  
+  .tips-list {
+    list-style-type: none;
+    padding-left: 0;
+  }
+  
+  .tip-item {
+    margin-bottom: 12px;
+    padding-left: 25px;
+    position: relative;
+  }
+  
+  .tip-item::before {
+    content: '✓';
+    position: absolute;
+    left: 0;
+    top: 2px;
+    color: var(--success);
+    font-weight: bold;
+  }
+  
+  .scope {
+    background-color: var(--button-secondary-bg);
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-family: monospace;
+  }
+  
+  .scope-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+</style>
