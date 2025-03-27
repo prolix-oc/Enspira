@@ -174,29 +174,6 @@ async function loadTextContent(userId, fileName) {
     }
 }
 
-/**
- * Saves text content to a file
- * @param {string} userId - The user ID
- * @param {string} fileName - The file name
- * @param {string} content - The content to save
- * @returns {Promise<boolean>} - True if successful, false otherwise
- */
-async function saveTextContent(userId, fileName, content) {
-    try {
-        const filePath = path.join(process.cwd(), 'world_info', userId, `${fileName}.txt`);
-
-        // Create directory if it doesn't exist
-        await fs.ensureDir(path.join(process.cwd(), 'world_info', userId));
-
-        // Write content to file
-        await fs.writeFile(filePath, content);
-        return true;
-    } catch (error) {
-        logger.error("Web", `Error saving ${fileName} for user ${userId}: ${error.message}`);
-        return false;
-    }
-}
-
 // Import verifySessionToken function from existing auth code
 import { verifySessionToken } from './v1.js'
 
@@ -399,9 +376,31 @@ async function webRoutes(fastify, options) {
             reply.code(500).send('Error loading world editor');
         }
     });
-
-    // Character personality update endpoint
     
+    fastify.get('/help', { preHandler: requireAuth }, async (request, reply) => {
+        try {
+            const helpPath = path.join(process.cwd(), 'pages', 'help.html');
+
+            let helpTemplate; 
+
+            try {
+                await fs.access(helpPath);
+                helpTemplate = await fs.readFile(helpPath, 'utf8');
+            } catch (error) {
+                logger.warn("Web", `Help template not found at ${helpPath}, using fallback`);
+                helpTemplate = `<h1>Help Section</h1>
+                          <p>Template files are being set up.</p>`;
+            }
+
+            // Render the page with explicitly set extraScripts variable
+            const renderedPage = await renderPage(helpTemplate, {});
+
+            reply.type('text/html').send(renderedPage);
+        } catch (error) {
+            logger.error("Web", `Error serving help page: ${error.message}`);
+            reply.code(500).send(`Error loading help page. Error: ${error.message}`);
+        }
+    });
 
     // Authentication routes
     fastify.get('/auth/login', async (request, reply) => {

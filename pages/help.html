@@ -1,0 +1,145 @@
+{{pageTitle = "Help"}}
+{{helpActive = "active"}}
+
+<div class="card">
+  <div class="card-header">
+    <h1>Help & Tutorial</h1>
+  </div>
+  
+  <p>Welcome to the Enspira Help page! This guide will show you how to edit your character, world info, and scenario cards using our custom templating engine. Simply insert the variables in your template, and they will be automatically replaced with your live data.</p>
+  
+  <div class="card" style="margin-top: 20px; background-color: rgba(80, 130, 190, 0.1); border-color: #4682B4;">
+    <h2 style="margin-top: 0;">Quick Reference</h2>
+    <p>Examples of commonly used variables:</p>
+    <div style="display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px;">
+      <span style="background-color: var(--button-secondary-bg); padding: 4px 10px; border-radius: 4px; font-family: monospace;">{{user}}</span>
+      <span style="background-color: var(--button-secondary-bg); padding: 4px 10px; border-radius: 4px; font-family: monospace;">{{char}}</span>
+      <span style="background-color: var(--button-secondary-bg); padding: 4px 10px; border-radius: 4px; font-family: monospace;">{{socials}}</span>
+      <span style="background-color: var(--button-secondary-bg); padding: 4px 10px; border-radius: 4px; font-family: monospace;">{{socials.twitter}}</span>
+      <span style="background-color: var(--button-secondary-bg); padding: 4px 10px; border-radius: 4px; font-family: monospace;">{{datetime}}</span>
+    </div>
+  </div>
+  
+  <h2 style="margin-top: 30px; border-bottom: 1px solid var(--border); padding-bottom: 10px;">Template Variable Definitions</h2>
+  
+  <div class="card" style="margin-top: 20px;">
+    <h3 style="margin-top: 0; color: var(--accent);">Character Card & World Information Variables</h3>
+    <ul style="list-style-type: none; padding-left: 0;">
+      <li style="margin-bottom: 12px; padding-left: 20px; position: relative;">
+        <div style="position: absolute; left: 0; top: 2px; color: var(--accent);">›</div>
+        <code style="background: var(--input-bg); padding: 2px 6px; border-radius: 4px; font-weight: bold;">{{user}}</code>
+        <span style="margin-left: 5px;">Your name as recognized by the assistant – typically your streaming username.</span>
+      </li>
+      <li style="margin-bottom: 12px; padding-left: 20px; position: relative;">
+        <div style="position: absolute; left: 0; top: 2px; color: var(--accent);">›</div>
+        <code style="background: var(--input-bg); padding: 2px 6px; border-radius: 4px; font-weight: bold;">{{char}}</code>
+        <span style="margin-left: 5px;">The name of your AI assistant or character.</span>
+      </li>
+      <li style="margin-bottom: 12px; padding-left: 20px; position: relative;">
+        <div style="position: absolute; left: 0; top: 2px; color: var(--accent);">›</div>
+        <code style="background: var(--input-bg); padding: 2px 6px; border-radius: 4px; font-weight: bold;">{{socials}}</code>
+        <span style="margin-left: 5px;">A pre-formatted list of all your linked social media accounts (e.g., "Prolix_GG", "prolix_oc", "Prolix").</span>
+      </li>
+      <li style="margin-bottom: 12px; padding-left: 20px; position: relative;">
+        <div style="position: absolute; left: 0; top: 2px; color: var(--accent);">›</div>
+        <code style="background: var(--input-bg); padding: 2px 6px; border-radius: 4px; font-weight: bold;">{{socials.xxx}}</code>
+        <span style="margin-left: 5px;">A specific social media account. Replace <em>xxx</em> with one of these valid values:</span>
+        <div style="display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; margin-left: 20px;">
+          <span style="background: rgba(100, 65, 164, 0.2); color: #d2b8ff; padding: 3px 8px; border-radius: 4px; font-size: 0.9em;">tiktok</span>
+          <span style="background: rgba(100, 65, 164, 0.2); color: #d2b8ff; padding: 3px 8px; border-radius: 4px; font-size: 0.9em;">youtube</span>
+          <span style="background: rgba(100, 65, 164, 0.2); color: #d2b8ff; padding: 3px 8px; border-radius: 4px; font-size: 0.9em;">twitch</span>
+          <span style="background: rgba(100, 65, 164, 0.2); color: #d2b8ff; padding: 3px 8px; border-radius: 4px; font-size: 0.9em;">twitter</span>
+          <span style="background: rgba(100, 65, 164, 0.2); color: #d2b8ff; padding: 3px 8px; border-radius: 4px; font-size: 0.9em;">kick</span>
+        </div>
+      </li>
+      <li style="margin-bottom: 12px; padding-left: 20px; position: relative;">
+        <div style="position: absolute; left: 0; top: 2px; color: var(--accent);">›</div>
+        <code style="background: var(--input-bg); padding: 2px 6px; border-radius: 4px; font-weight: bold;">{{datetime}}</code>
+        <span style="margin-left: 5px;">The current date and time when the page is rendered.</span>
+      </li>
+    </ul>
+  </div>
+  
+  <div class="card" style="margin-top: 20px;">
+    <h3 style="margin-top: 0; color: var(--accent);">Scenario Card Variables</h3>
+    <ul style="list-style-type: none; padding-left: 0;">
+      <li style="margin-bottom: 12px; padding-left: 20px; position: relative;">
+        <div style="position: absolute; left: 0; top: 2px; color: var(--accent);">›</div>
+        <code style="background: var(--input-bg); padding: 2px 6px; border-radius: 4px; font-weight: bold;">{{current_game}}</code>
+        <span style="margin-left: 5px;">The game you are currently playing, as pulled from Twitch.</span>
+      </li>
+      <li style="margin-bottom: 12px; padding-left: 20px; position: relative;">
+        <div style="position: absolute; left: 0; top: 2px; color: var(--accent);">›</div>
+        <code style="background: var(--input-bg); padding: 2px 6px; border-radius: 4px; font-weight: bold;">{{current_views}}</code>
+        <span style="margin-left: 5px;">The current viewer count of your channel from Twitch.</span>
+      </li>
+      <li style="margin-bottom: 12px; padding-left: 20px; position: relative;">
+        <div style="position: absolute; left: 0; top: 2px; color: var(--accent);">›</div>
+        <code style="background: var(--input-bg); padding: 2px 6px; border-radius: 4px; font-weight: bold;">{{current_follows}}</code>
+        <span style="margin-left: 5px;">Your current follower count as provided by Twitch.</span>
+      </li>
+      <li style="margin-bottom: 12px; padding-left: 20px; position: relative;">
+        <div style="position: absolute; left: 0; top: 2px; color: var(--accent);">›</div>
+        <span style="margin-left: 5px;">Also available: <code style="background: var(--input-bg); padding: 2px 6px; border-radius: 4px;">{{socials}}</code>, <code style="background: var(--input-bg); padding: 2px 6px; border-radius: 4px;">{{socials.xxx}}</code>, <code style="background: var(--input-bg); padding: 2px 6px; border-radius: 4px;">{{char}}</code>, <code style="background: var(--input-bg); padding: 2px 6px; border-radius: 4px;">{{user}}</code>, and <code style="background: var(--input-bg); padding: 2px 6px; border-radius: 4px;">{{datetime}}</code></span>
+      </li>
+    </ul>
+  </div>
+  
+  <h2 style="margin-top: 30px; border-bottom: 1px solid var(--border); padding-bottom: 10px;">How to Build Your Cards</h2>
+  
+  <div class="card" style="margin-top: 20px;">
+    <p>When editing your character or world card, simply place these variables within your template. For instance, if you want to show your name, include <code style="background: var(--input-bg); padding: 2px 6px; border-radius: 4px;">{{user}}</code> where appropriate. Similarly, use <code style="background: var(--input-bg); padding: 2px 6px; border-radius: 4px;">{{char}}</code> to display your assistant's name.</p>
+    
+    <h4 style="margin-top: 20px; color: var(--accent);">Example:</h4>
+    <pre style="background-color: var(--input-bg); padding: 15px; border-radius: 8px; overflow-x: auto; white-space: pre-wrap; margin-top: 10px;">Hello, my name is {{char}} and I'm {{user}}'s AI assistant!
+You can follow {{user}} on Twitter at @{{socials.twitter}}
+
+The current game being played is {{current_game}}
+There are {{current_views}} viewers watching right now!
+</pre>
+  </div>
+  
+  <h2 style="margin-top: 30px; border-bottom: 1px solid var(--border); padding-bottom: 10px;">Tips for Using the Templating Engine</h2>
+  
+  <div class="card" style="margin-top: 20px;">
+    <ul style="list-style-type: none; padding-left: 0;">
+      <li style="margin-bottom: 12px; padding-left: 25px; position: relative;">
+        <div style="position: absolute; left: 0; top: 2px; color: var(--success); font-weight: bold;">✓</div>
+        Always verify that you are using the exact variable names as defined above.
+      </li>
+      <li style="margin-bottom: 12px; padding-left: 25px; position: relative;">
+        <div style="position: absolute; left: 0; top: 2px; color: var(--success); font-weight: bold;">✓</div>
+        For social media handles, replace <code style="background: var(--input-bg); padding: 2px 6px; border-radius: 4px;">xxx</code> in <code style="background: var(--input-bg); padding: 2px 6px; border-radius: 4px;">{{socials.xxx}}</code> with a valid platform (e.g., <code style="background: var(--input-bg); padding: 2px 6px; border-radius: 4px;">twitter</code>).
+      </li>
+      <li style="margin-bottom: 12px; padding-left: 25px; position: relative;">
+        <div style="position: absolute; left: 0; top: 2px; color: var(--success); font-weight: bold;">✓</div>
+        You can combine static text with these variables to craft a personalized message or card for your channel.
+      </li>
+      <li style="margin-bottom: 12px; padding-left: 25px; position: relative;">
+        <div style="position: absolute; left: 0; top: 2px; color: var(--success); font-weight: bold;">✓</div>
+        Preview your changes by saving and reloading the page to see how the data populates.
+      </li>
+    </ul>
+  </div>
+  
+  <div class="card" style="margin-top: 20px; background-color: rgba(86, 211, 100, 0.1); border-color: var(--success);">
+    <p style="margin: 0;">This tutorial is designed to simplify the process of creating dynamic, data-driven character and world cards for your streaming setup. If you have further questions, our support team is always here to help.</p>
+  </div>
+</div>
+
+{{extraScripts}}
+<script>
+  // Ensure all code examples show the actual curly braces
+  // and don't get interpreted as template variables
+  document.addEventListener('DOMContentLoaded', () => {
+    const codeElements = document.querySelectorAll('code');
+    codeElements.forEach(el => {
+      // Replace the text content directly to avoid template processing
+      const content = el.textContent;
+      if (content.includes('{{') && content.includes('}}')) {
+        // We display the literal content, not processed template variables
+        el.setAttribute('data-original', content);
+      }
+    });
+  });
+</script>

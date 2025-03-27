@@ -13,7 +13,7 @@ import cors from "@fastify/cors";
 import fastifyCompress from "@fastify/compress";
 import fs from 'fs-extra'
 import * as crypto from 'crypto'
-import fastifyCookie from '@fastify/cookie';
+import path from "path";
 
 const chatResponseSchema = {
   type: 'object',
@@ -941,13 +941,41 @@ async function routes(fastify, options) {
     }
   });
 
+  function getFieldValue(field) {
+    if (!field) return '';
+
+    // If the field is a Part object from @fastify/multipart
+    if (field.value !== undefined) {
+      return field.value;
+    }
+
+    // If the field is already a string
+    if (typeof field === 'string') {
+      return field;
+    }
+
+    // If the field is a readable stream (file upload)
+    if (field.pipe && typeof field.pipe === 'function') {
+      // For this implementation, we're not handling file uploads
+      // If needed, use stream handling here
+      return '';
+    }
+
+    // Return empty string for any other case
+    return '';
+  }
+
+  // Character personality update endpoint
   fastify.post('/character/personality', { preHandler: requireAuth }, async (request, reply) => {
     try {
       const user = request.user;
-      const { bot_name, personality } = request.body;
+
+      // Extract values safely from multipart form data
+      const botName = getFieldValue(request.body.bot_name);
+      const personality = getFieldValue(request.body.personality);
 
       // Update bot name in user record
-      await updateUserParameter(user.user_id, 'bot_name', bot_name);
+      await updateUserParameter(user.user_id, 'bot_name', botName);
 
       // Save personality to file
       const success = await saveTextContent(user.user_id, 'character_personality', personality);
@@ -967,10 +995,18 @@ async function routes(fastify, options) {
   fastify.post('/character/description', { preHandler: requireAuth }, async (request, reply) => {
     try {
       const user = request.user;
-      const { description } = request.body;
+
+      // Extract values safely from multipart form data
+      const description = getFieldValue(request.body.description);
+      const botTwitch = getFieldValue(request.body.bot_twitch);
 
       // Save description to file
       const success = await saveTextContent(user.user_id, 'character_card', description);
+
+      // Update bot_twitch if provided
+      if (botTwitch) {
+        await updateUserParameter(user.user_id, 'bot_twitch', botTwitch);
+      }
 
       if (success) {
         reply.send({ success: true, message: 'Description updated successfully' });
@@ -987,7 +1023,9 @@ async function routes(fastify, options) {
   fastify.post('/character/examples', { preHandler: requireAuth }, async (request, reply) => {
     try {
       const user = request.user;
-      const { examples } = request.body;
+
+      // Extract value safely from multipart form data
+      const examples = getFieldValue(request.body.examples);
 
       // Save examples to file
       const success = await saveTextContent(user.user_id, 'examples', examples);
@@ -1007,13 +1045,16 @@ async function routes(fastify, options) {
   fastify.post('/world/info', { preHandler: requireAuth }, async (request, reply) => {
     try {
       const user = request.user;
-      const { world_info, weather_enabled } = request.body;
+
+      // Extract values safely from multipart form data
+      const worldInfo = getFieldValue(request.body.world_info);
+      const weatherEnabled = getFieldValue(request.body.weather_enabled);
 
       // Update weather flag in user record
-      await updateUserParameter(user.user_id, 'weather', weather_enabled === 'true');
+      await updateUserParameter(user.user_id, 'weather', weatherEnabled === 'true');
 
       // Save world info to file
-      const success = await saveTextContent(user.user_id, 'world_lore', world_info);
+      const success = await saveTextContent(user.user_id, 'world_lore', worldInfo);
 
       if (success) {
         reply.send({ success: true, message: 'World information updated successfully' });
@@ -1030,10 +1071,21 @@ async function routes(fastify, options) {
   fastify.post('/world/player', { preHandler: requireAuth }, async (request, reply) => {
     try {
       const user = request.user;
-      const { player_info } = request.body;
+
+      // Extract values safely from multipart form data
+      const playerInfo = getFieldValue(request.body.player_info);
+      const commandsList = getFieldValue(request.body.commands_list);
+
+      // Update commands list in user record if provided
+      if (commandsList) {
+        const commandsArray = commandsList.split('\n')
+          .map(cmd => cmd.trim())
+          .filter(cmd => cmd.length > 0);
+        await updateUserParameter(user.user_id, 'commands_list', commandsArray);
+      }
 
       // Save player info to file
-      const success = await saveTextContent(user.user_id, 'player_info', player_info);
+      const success = await saveTextContent(user.user_id, 'player_info', playerInfo);
 
       if (success) {
         reply.send({ success: true, message: 'Player information updated successfully' });
@@ -1050,7 +1102,18 @@ async function routes(fastify, options) {
   fastify.post('/world/scenario', { preHandler: requireAuth }, async (request, reply) => {
     try {
       const user = request.user;
-      const { scenario } = request.body;
+
+      // Extract values safely from multipart form data
+      const scenario = getFieldValue(request.body.scenario);
+      const auxBots = getFieldValue(request.body.aux_bots);
+
+      // Update aux bots list in user record if provided
+      if (auxBots) {
+        const auxBotsArray = auxBots.split('\n')
+          .map(bot => bot.trim())
+          .filter(bot => bot.length > 0);
+        await updateUserParameter(user.user_id, 'aux_bots', auxBotsArray);
+      }
 
       // Save scenario to file
       const success = await saveTextContent(user.user_id, 'scenario', scenario);
@@ -1070,17 +1133,20 @@ async function routes(fastify, options) {
   fastify.post('/world/bot-config', { preHandler: requireAuth }, async (request, reply) => {
     try {
       const user = request.user;
-      const { commands_list, aux_bots } = request.body;
+
+      // Extract values safely from multipart form data
+      const commandsList = getFieldValue(request.body.commands_list);
+      const auxBots = getFieldValue(request.body.aux_bots);
 
       // Update commands list in user record
-      const commandsArray = commands_list.split('\n')
+      const commandsArray = commandsList.split('\n')
         .map(cmd => cmd.trim())
         .filter(cmd => cmd.length > 0);
 
       await updateUserParameter(user.user_id, 'commands_list', commandsArray);
 
       // Update aux bots list in user record
-      const auxBotsArray = aux_bots.split('\n')
+      const auxBotsArray = auxBots.split('\n')
         .map(bot => bot.trim())
         .filter(bot => bot.length > 0);
 
@@ -1092,6 +1158,29 @@ async function routes(fastify, options) {
       reply.code(500).send({ success: false, error: 'An error occurred while updating bot configuration' });
     }
   });
+}
+
+/**
+ * Saves text content to a file
+ * @param {string} userId - The user ID
+ * @param {string} fileName - The file name
+ * @param {string} content - The content to save
+ * @returns {Promise<boolean>} - True if successful, false otherwise
+ */
+export async function saveTextContent(userId, fileName, content) {
+  try {
+    const filePath = path.join(process.cwd(), 'world_info', userId, `${fileName}.txt`);
+
+    // Create directory if it doesn't exist
+    await fs.ensureDir(path.join(process.cwd(), 'world_info', userId));
+
+    // Write content to file
+    await fs.writeFile(filePath, content);
+    return true;
+  } catch (error) {
+    logger.error("Web", `Error saving ${fileName} for user ${userId}: ${error.message}`);
+    return false;
+  }
 }
 
 export async function refreshTwitchToken(userId, tokenType = 'streamer') {

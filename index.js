@@ -81,6 +81,18 @@ const createServer = async () => {
     parseOptions: {}
   });
 
+  await fastify.register(import('@fastify/multipart'), {
+    limits: {
+      fieldNameSize: 100,
+      fieldSize: 1000000,
+      fields: 20,
+      fileSize: 5000000,
+      files: 5,
+      headerPairs: 2000
+    },
+    attachFieldsToBody: true
+  });
+
   fastify.setErrorHandler((error, request, reply) => {
     if (error instanceof Fastify.errorCodes.FST_ERR_ROUTE_METHOD_NOT_SUPPORTED) {
       reply.code(405).send({
@@ -286,7 +298,7 @@ export async function initializeApp() {
       logger.log("System", "Registering Twitch EventSub subscriptions...");
       const eventSubResults = await registerAllUsersEventSub();
       logger.log("System", `EventSub registration complete: ${eventSubResults.success} successful, ${eventSubResults.failures} failed`);
-      
+
       // Set up periodic Twitch data update jobs
       logger.log("System", "Setting up Twitch cron jobs...");
       setupTwitchCronJobs();
