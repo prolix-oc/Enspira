@@ -1,0 +1,100 @@
+{{pageTitle = character.name}}
+{{galleryActive = "active"}}
+
+<div class="card character-header">
+  <div class="character-avatar-large">
+    <img src="{{character.image}}" alt="{{character.name}} Avatar">
+  </div>
+  <div class="character-meta">
+    <h1>{{character.name}}</h1>
+    <p class="author">By: {{character.author}}</p>
+    <p class="summary">{{character.summary}}</p>
+    <form action="/api/v1/gallery/{{character.id}}/use" method="POST" data-async>
+      <button type="submit" class="btn btn-primary btn-use-char">Use {{character.name}}</button>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Personality</h2>
+  <pre class="character-content">{{character.personality}}</pre>
+</div>
+
+<div class="card">
+  <h2>Description</h2>
+  <pre class="character-content">{{character.char_description}}</pre>
+</div>
+
+{{extraStyles}}
+<style>
+  .character-header {
+    display: flex;
+    gap: 30px;
+    align-items: flex-start; /* Align items to the top */
+  }
+
+  .character-avatar-large {
+    flex-shrink: 0;
+    width: 200px;
+    height: 200px;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+  }
+
+  .character-avatar-large img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
+  .character-meta {
+    flex-grow: 1;
+  }
+
+  .character-meta h1 {
+    margin-top: 0;
+    margin-bottom: 5px;
+  }
+
+  .character-meta .author {
+    color: var(--secondary-text);
+    font-style: italic;
+    margin-bottom: 15px;
+  }
+
+   .character-meta .summary {
+    color: var(--primary-text);
+    margin-bottom: 20px;
+    font-size: 1.05em;
+   }
+
+  .character-content {
+    background-color: var(--input-bg);
+    padding: 15px;
+    border-radius: 6px;
+    white-space: pre-wrap; /* Allows wrapping */
+    word-wrap: break-word; /* Ensures long words break */
+    font-family: monospace;
+    border: 1px solid var(--border);
+  }
+
+  .btn-use-char {
+    margin-top: 10px; /* Add some space above the button */
+  }
+
+  @media (max-width: 600px) {
+    .character-header {
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+    }
+
+    .character-avatar-large {
+      width: 150px;
+      height: 150px;
+      margin-bottom: 15px;
+    }
+  }
+</style>

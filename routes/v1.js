@@ -13,7 +13,8 @@ import cors from "@fastify/cors";
 import fastifyCompress from "@fastify/compress";
 import fs from 'fs-extra'
 import * as crypto from 'crypto'
-import path from "path";
+import path from 'path';
+
 
 const chatResponseSchema = {
   type: 'object',
@@ -1158,6 +1159,34 @@ async function routes(fastify, options) {
       reply.code(500).send({ success: false, error: 'An error occurred while updating bot configuration' });
     }
   });
+  fastify.post('/gallery/:characterId/use', { preHandler: requireAuth }, async (request, reply) => {
+    const { user } = request;
+    const { characterId } = request.params;
+
+    try {
+      const preset = await loadPreset(characterId);
+      if (!preset) {
+        return reply.code(404).send({ success: false, error: 'Character preset not found' });
+      }
+
+      // Apply the preset data to the user
+      const nameUpdate = await updateUserParameter(user.user_id, 'bot_name', preset.name);
+      const personalitySave = await saveTextContent(user.user_id, 'character_personality', preset.personality || '');
+      const descriptionSave = await saveTextContent(user.user_id, 'character_card', preset.char_description || '');
+
+      if (nameUpdate && personalitySave && descriptionSave) {
+        logger.log("API", `User ${user.user_id} applied preset '${characterId}'`);
+        // Respond with success and a redirect URL for the frontend handler
+        reply.send({ success: true, message: `${preset.name} preset applied successfully!`, redirect: '/web/character' });
+      } else {
+        logger.error("API", `Failed to fully apply preset '${characterId}' for user ${user.user_id}`);
+        reply.code(500).send({ success: false, error: 'Failed to save all character data' });
+      }
+    } catch (error) {
+      logger.error("API", `Error applying preset '${characterId}' for user ${user.user_id}: ${error.message}`);
+      reply.code(500).send({ success: false, error: 'An error occurred while applying the preset' });
+    }
+  });
 }
 
 /**
@@ -1695,6 +1724,64 @@ async function handleNonChatMessage(
       message: error.message
     });
     return response;
+  }
+}
+
+/**
+ * Load all character presets from the presets directory
+ * @returns {Promise<Array>} Array of character preset objects
+ */
+export async function loadAllPresets() {
+  try {
+      const presetsDir = path.join(process.cwd(), 'presets');
+      const files = await fs.readdir(presetsDir);
+
+      // Only process JSON files
+      const jsonFiles = files.filter(file => file.endsWith('.json'));
+
+      // Load each preset file
+      const presets = await Promise.all(
+          jsonFiles.map(async file => {
+              const filePath = path.join(presetsDir, file);
+              const data = await fs.readFile(filePath, 'utf8');
+              const preset = JSON.parse(data);
+
+              // Add the filename (without extension) as an ID
+              preset.id = path.basename(file, '.json');
+
+              return preset;
+          })
+      );
+
+      return presets;
+  } catch (error) {
+      console.error('Error loading presets:', error);
+      throw error;
+  }
+}
+
+/**
+* Load a specific character preset by name
+* @param {string} characterName - Name of the character (filename without .json)
+* @returns {Promise<Object|null>} Character preset object or null if not found
+*/
+export async function loadPreset(characterName) {
+  try {
+      const filePath = path.join(process.cwd(), 'presets', `${characterName}.json`);
+      const data = await fs.readFile(filePath, 'utf8');
+      const preset = JSON.parse(data);
+
+      // Add the characterName as an ID
+      preset.id = characterName;
+
+      return preset;
+  } catch (error) {
+      if (error.code === 'ENOENT') {
+          // File not found
+          return null;
+      }
+      console.error(`Error loading preset ${characterName}:`, error);
+      throw error;
   }
 }
 

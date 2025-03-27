@@ -149,3 +149,4 @@ bin/*
 logs/*
 *.sh
 repomix-output.md
+images/*

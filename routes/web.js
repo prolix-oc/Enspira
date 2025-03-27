@@ -6,6 +6,7 @@ import { logger } from '../create-global-logger.js';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { returnRecentChats } from '../ai-logic.js';
+import { loadPreset, loadAllPresets } from './v1.js';
 // Get the directory name properly in ESM
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -122,6 +123,7 @@ async function renderPage(content, data) {
             dashboardActive: '',
             characterActive: '',
             worldActive: '',
+            galleryActive: '',
             twitchActive: '',
             pageTitle: 'Enspira'
         };
@@ -236,102 +238,102 @@ async function webRoutes(fastify, options) {
     // Dashboard route
     fastify.get('/dashboard', { preHandler: requireAuth }, async (request, reply) => {
         try {
-          const user = request.user;
-      
-          // Get Twitch connection status - be more defensive with optional chaining
-          const streamerConnected = !!user?.twitch_tokens?.streamer?.access_token;
-          const botConnected = !!user?.twitch_tokens?.bot?.access_token;
-      
-          // Get streamer and bot names - only if connected
-          const streamerName = streamerConnected ? user.twitch_tokens.streamer.twitch_display_name : '';
-          const botName = botConnected ? user.twitch_tokens.bot.twitch_display_name : '';
-      
-          // Simple stats - just set to 0 for now
-          let chatCount = 0;
-          try {
-            const recentChats = await returnRecentChats(user.user_id, false, true);
-            chatCount = recentChats?.length || 0;
-          } catch (error) {
-            logger.error("Web", `Error fetching chat stats: ${error.message}`);
-          }
-      
-          // Create the stats object with actual data
-          const stats = {
-            chatMessages: chatCount,
-          };
-      
-          // Get stream status data
-          let streamStatus = {
-            online: false
-          };
-          
-          let followerCount = user.current_followers || 0;
-          let lastGame = null;
-      
-          if (user.twitch_tokens?.streamer?.twitch_user_id) {
+            const user = request.user;
+
+            // Get Twitch connection status - be more defensive with optional chaining
+            const streamerConnected = !!user?.twitch_tokens?.streamer?.access_token;
+            const botConnected = !!user?.twitch_tokens?.bot?.access_token;
+
+            // Get streamer and bot names - only if connected
+            const streamerName = streamerConnected ? user.twitch_tokens.streamer.twitch_display_name : '';
+            const botName = botConnected ? user.twitch_tokens.bot.twitch_display_name : '';
+
+            // Simple stats - just set to 0 for now
+            let chatCount = 0;
             try {
-              // Import and use the fetchStreamInfo function
-              const { fetchStreamInfo } = await import('../twitch-eventsub-manager.js');
-              const streamInfo = await fetchStreamInfo(user.user_id);
-              
-              if (streamInfo.success && streamInfo.isLive) {
-                // Stream is online, format the data for display
-                streamStatus = {
-                  online: true,
-                  title: streamInfo.data.title || user.stream_status?.title || 'Untitled Stream',
-                  game: streamInfo.data.gameName || user.current_game?.game || 'Unknown Game',
-                  viewers: streamInfo.data.viewerCount || user.current_viewers || 0,
-                  duration: streamInfo.data.duration || 'Just started',
-                  thumbnail: streamInfo.data.thumbnailUrl || null
-                };
-              } else {
-                // Stream is offline, but still get data for display
-                streamStatus = {
-                  online: false
-                };
-                
-                // Get last game played if available
-                if (user.current_game && user.current_game.game) {
-                  lastGame = user.current_game.game;
-                }
-              }
-              
-              // Get follower count
-              followerCount = user.current_followers || 0;
+                const recentChats = await returnRecentChats(user.user_id, false, true);
+                chatCount = recentChats?.length || 0;
             } catch (error) {
-              logger.error("Web", `Error fetching stream info: ${error.message}`);
-              // Continue with default values
+                logger.error("Web", `Error fetching chat stats: ${error.message}`);
             }
-          }
-      
-          // Simplified data object with only what we need
-          const templateData = {
-            user: {
-              display_name: user.display_name || user.user_name,
-            },
-            dashboardActive: 'active',
-            streamerConnected,
-            botConnected,
-            streamerName,
-            botName,
-            stats,
-            streamStatus,
-            followerCount,
-            lastGame
-          };
-      
-          // Read dashboard template
-          const dashboardTemplate = await fs.readFile(path.join(process.cwd(), 'pages', 'dashboard.html'), 'utf8');
-      
-          // Render the page with only the necessary data
-          const renderedPage = await renderPage(dashboardTemplate, templateData);
-      
-          reply.type('text/html').send(renderedPage);
+
+            // Create the stats object with actual data
+            const stats = {
+                chatMessages: chatCount,
+            };
+
+            // Get stream status data
+            let streamStatus = {
+                online: false
+            };
+
+            let followerCount = user.current_followers || 0;
+            let lastGame = null;
+
+            if (user.twitch_tokens?.streamer?.twitch_user_id) {
+                try {
+                    // Import and use the fetchStreamInfo function
+                    const { fetchStreamInfo } = await import('../twitch-eventsub-manager.js');
+                    const streamInfo = await fetchStreamInfo(user.user_id);
+
+                    if (streamInfo.success && streamInfo.isLive) {
+                        // Stream is online, format the data for display
+                        streamStatus = {
+                            online: true,
+                            title: streamInfo.data.title || user.stream_status?.title || 'Untitled Stream',
+                            game: streamInfo.data.gameName || user.current_game?.game || 'Unknown Game',
+                            viewers: streamInfo.data.viewerCount || user.current_viewers || 0,
+                            duration: streamInfo.data.duration || 'Just started',
+                            thumbnail: streamInfo.data.thumbnailUrl || null
+                        };
+                    } else {
+                        // Stream is offline, but still get data for display
+                        streamStatus = {
+                            online: false
+                        };
+
+                        // Get last game played if available
+                        if (user.current_game && user.current_game.game) {
+                            lastGame = user.current_game.game;
+                        }
+                    }
+
+                    // Get follower count
+                    followerCount = user.current_followers || 0;
+                } catch (error) {
+                    logger.error("Web", `Error fetching stream info: ${error.message}`);
+                    // Continue with default values
+                }
+            }
+
+            // Simplified data object with only what we need
+            const templateData = {
+                user: {
+                    display_name: user.display_name || user.user_name,
+                },
+                dashboardActive: 'active',
+                streamerConnected,
+                botConnected,
+                streamerName,
+                botName,
+                stats,
+                streamStatus,
+                followerCount,
+                lastGame
+            };
+
+            // Read dashboard template
+            const dashboardTemplate = await fs.readFile(path.join(process.cwd(), 'pages', 'dashboard.html'), 'utf8');
+
+            // Render the page with only the necessary data
+            const renderedPage = await renderPage(dashboardTemplate, templateData);
+
+            reply.type('text/html').send(renderedPage);
         } catch (error) {
-          logger.error("Web", `Error serving dashboard: ${error.message}`);
-          reply.code(500).send('Error loading dashboard');
+            logger.error("Web", `Error serving dashboard: ${error.message}`);
+            reply.code(500).send('Error loading dashboard');
         }
-      });
+    });
 
     // Character editor route
     fastify.get('/character', { preHandler: requireAuth }, async (request, reply) => {
@@ -370,6 +372,34 @@ async function webRoutes(fastify, options) {
         } catch (error) {
             logger.error("Web", `Error serving character editor: ${error.message}`);
             reply.code(500).send('Error loading character editor');
+        }
+    });
+
+    fastify.get('/gallery/:characterId', { preHandler: requireAuth }, async (request, reply) => {
+        const { user } = request;
+        const { characterId } = request.params;
+        try {
+            const characterData = await loadPreset(characterId);
+
+            if (!characterData) {
+                logger.warn("Web", `Character preset '${characterId}' not found.`);
+                return reply.redirect('/web/gallery');
+            }
+
+            const detailsTemplatePath = path.join(process.cwd(), 'pages', 'character-details.html');
+            const detailsTemplate = await fs.readFile(detailsTemplatePath, 'utf8');
+
+            const renderedPage = await renderPage(detailsTemplate, {
+                pageTitle: `${characterData.name} Details`,
+                galleryActive: "active",
+                character: characterData,
+                user: user
+            });
+
+            reply.type('text/html').send(renderedPage);
+        } catch (error) {
+            logger.error("Web", `Error serving character details page: ${error.message}`);
+            reply.code(500).send('Error loading character details');
         }
     });
 
@@ -419,12 +449,12 @@ async function webRoutes(fastify, options) {
             reply.code(500).send('Error loading world editor');
         }
     });
-    
+
     fastify.get('/help', { preHandler: requireAuth }, async (request, reply) => {
         try {
             const helpPath = path.join(process.cwd(), 'pages', 'help.html');
 
-            let helpTemplate; 
+            let helpTemplate;
 
             try {
                 await fs.access(helpPath);
@@ -513,8 +543,45 @@ async function webRoutes(fastify, options) {
     fastify.get('/', (request, reply) => {
         reply.redirect('/web/dashboard');
     });
+    fastify.get('/gallery', { preHandler: requireAuth }, async (request, reply) => {
+        try {
+            const presets = await loadAllPresets();
+            const renderedPage = await renderPage('gallery', {
+                title: 'Character Gallery',
+                presets
+            });
+            reply.type('text/html').send(renderedPage);
+        } catch (error) {
+            console.error('Error loading gallery presets:', error);
+            reply.status(500).send('Error loading character gallery');
+        }
+    });
 
+    // Route handler for using a character preset
+    fastify.post('/gallery/:character/use', { preHandler: requireAuth }, async (req, res) => {
+        try {
+            const characterName = req.params.character;
+            const characterData = await loadPreset(characterName);
+
+            if (!characterData) {
+                return res.status(404).json({ error: 'Character not found' });
+            }
+
+            // Here you would save the character data to the user's profile or session
+            // This depends on how your user data is stored
+
+            // For example, if using sessions:
+            req.session.selectedCharacter = characterData;
+
+            res.redirect('/dashboard'); // Redirect to the main dashboard with the character selected
+        } catch (error) {
+            console.error('Error using character preset:', error);
+            res.status(500).send('Error applying character preset');
+        }
+    });
     logger.log("Web", "Web routes registered successfully");
 }
+
+
 
 export default webRoutes;

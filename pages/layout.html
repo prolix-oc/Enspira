@@ -38,55 +38,6 @@
         overflow-x: hidden;
       }
 
-      body.page-transition {
-        opacity: 0;
-      }
-
-      /* Page content transition */
-      main {
-        opacity: 1;
-        transition:
-          opacity 0.3s ease,
-          transform 0.3s ease;
-        transform: translateY(0);
-      }
-
-      main.fade-out {
-        opacity: 0;
-        transform: translateY(-10px);
-      }
-
-      main.fade-in {
-        opacity: 0;
-        transform: translateY(10px);
-      }
-
-      /* Make sure z-index is appropriate to prevent flickering */
-      header,
-      footer {
-        position: relative;
-        z-index: 10;
-      }
-
-      /* Page transition overlay for smoother transitions */
-      .page-transition-overlay {
-        position: fixed;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        background-color: var(--background);
-        z-index: 1000;
-        opacity: 0;
-        pointer-events: none;
-        transition: opacity 0.3s ease;
-      }
-
-      .page-transition-overlay.active {
-        opacity: 1;
-        pointer-events: all;
-      }
-
       .container {
         width: 100%;
         max-width: 1200px;
@@ -310,75 +261,27 @@
 
       .tabs {
         display: flex;
+        border-bottom: 1px solid var(--border);
         margin-bottom: 20px;
-        position: relative;
       }
 
       .tab {
         padding: 10px 20px;
         cursor: pointer;
-        position: relative;
-        transition:
-          background-color 0.2s ease,
-          color 0.2s ease;
-        user-select: none;
+        border-bottom: 2px solid transparent;
       }
 
-      /* Hover effect with lighter background */
-      .tab:hover {
-        background-color: rgba(255, 255, 255, 0.05);
-      }
-
-      /* Active tab styling with static underline */
       .tab.active {
+        border-bottom-color: var(--accent);
         color: var(--accent);
-        position: relative;
-      }
-
-      /* Static underline for active tab */
-      .tab.active::after {
-        content: "";
-        position: absolute;
-        bottom: 0px;
-        left: 0;
-        width: 100%;
-        height: 2px;
-        background-color: var(--accent);
-      }
-
-      .tabs-container {
-        position: relative;
-        overflow: hidden;
-        min-height: 200px;
       }
 
       .tab-content {
         display: none;
-        opacity: 0;
-        position: absolute;
-        width: 100%;
-        left: 0;
-        right: 0;
-        pointer-events: none;
-        transform: translateY(8px);
-        transition:
-          opacity 0.3s ease,
-          transform 0.3s ease;
       }
 
       .tab-content.active {
         display: block;
-        opacity: 1;
-        position: relative;
-        transform: translateY(0);
-        pointer-events: auto;
-      }
-
-      /* Ensure the container auto-heights to the active content */
-      .tabs-container::after {
-        content: "";
-        display: block;
-        clear: both;
       }
 
       .two-column {
@@ -405,138 +308,6 @@
         }
       }
 
-      .toast-container {
-        position: fixed;
-        bottom: 20px;
-        right: 20px;
-        z-index: 1000;
-        display: flex;
-        flex-direction: column-reverse; /* Newest toasts appear at the bottom */
-        gap: 10px;
-        max-width: 350px;
-        width: 100%;
-        pointer-events: none; /* Allow clicking through the container */
-      }
-
-      /* Individual toast notification */
-      .toast {
-        background-color: var(--card-bg);
-        color: var(--primary-text);
-        border-radius: 6px;
-        padding: 12px 16px;
-        font-size: 14px;
-        font-weight: 500;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-        margin-bottom: 10px;
-        opacity: 0;
-        transform: translateY(100%);
-        transition:
-          transform 0.3s ease,
-          opacity 0.3s ease;
-        overflow: hidden;
-        display: flex;
-        align-items: center;
-        position: relative;
-        pointer-events: auto; /* Make the toast itself clickable */
-        border-left: 4px solid var(--accent);
-      }
-
-      /* Toast that is visible */
-      .toast.show {
-        opacity: 1;
-        transform: translateY(0);
-      }
-
-      /* Toast that is being removed */
-      .toast.hide {
-        opacity: 0;
-        transform: translateY(100%);
-        transition:
-          transform 0.3s ease,
-          opacity 0.3s ease;
-      }
-
-      /* Success toast variant */
-      .toast-success {
-        border-left-color: var(--success);
-      }
-
-      .toast-success .toast-icon {
-        color: var(--success);
-      }
-
-      /* Error toast variant */
-      .toast-error {
-        border-left-color: var(--error);
-      }
-
-      .toast-error .toast-icon {
-        color: var(--error);
-      }
-
-      /* Toast icon */
-      .toast-icon {
-        margin-right: 12px;
-        flex-shrink: 0;
-        width: 20px;
-        height: 20px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-      }
-
-      /* Toast content */
-      .toast-content {
-        flex-grow: 1;
-      }
-
-      /* Toast close button */
-      .toast-close {
-        background: none;
-        border: none;
-        cursor: pointer;
-        color: var(--secondary-text);
-        opacity: 0.7;
-        padding: 4px;
-        margin-left: 10px;
-        transition: opacity 0.2s;
-        flex-shrink: 0;
-      }
-
-      .toast-close:hover {
-        opacity: 1;
-      }
-
-      /* Progress bar animation for auto-dismiss */
-      .toast-progress {
-        position: absolute;
-        bottom: 0;
-        left: 0;
-        height: 3px;
-        background-color: rgba(255, 255, 255, 0.2);
-        width: 100%;
-        transform-origin: left;
-      }
-
-      /* Animation for toast stacking */
-      @keyframes toast-push-up {
-        0% {
-          transform: translateY(0);
-        }
-        100% {
-          transform: translateY(-100%);
-        }
-      }
-
-      /* Responsive adjustments */
-      @media (max-width: 480px) {
-        .toast-container {
-          right: 10px;
-          left: 10px;
-          max-width: calc(100% - 20px);
-        }
-      }
-
       .loading {
         display: inline-block;
         width: 20px;
@@ -545,61 +316,6 @@
         border-radius: 50%;
         border-top-color: var(--accent);
         animation: spin 1s ease-in-out infinite;
-      }
-      .tab-content {
-        display: none;
-        opacity: 0;
-        transform: translateY(10px);
-        transition:
-          opacity 0.3s ease,
-          transform 0.3s ease;
-        position: relative;
-      }
-
-      .tab-content.active {
-        display: block;
-        opacity: 1;
-        transform: translateY(0);
-      }
-
-      .tab {
-        padding: 10px 20px;
-        cursor: pointer;
-        border-bottom: 2px solid transparent;
-        transition:
-          color 0.2s ease,
-          border-color 0.2s ease;
-        position: relative;
-      }
-
-      .tab.active {
-        border-bottom-color: var(--accent);
-        color: var(--accent);
-      }
-
-      .tab::after {
-        content: "";
-        position: absolute;
-        bottom: -2px;
-        left: 0;
-        width: 0;
-        height: 2px;
-        background-color: var(--accent);
-        transition: width 0.3s ease;
-      }
-
-      .tab:hover::after {
-        width: 100%;
-      }
-
-      .tab.active::after {
-        width: 100%;
-      }
-
-      /* Prevents content jumps during tab transitions */
-      .tabs-container {
-        position: relative;
-        min-height: 300px;
       }
 
       @keyframes spin {
@@ -654,6 +370,9 @@
               <a href="/web/help" class="{{helpActive}}">Help</a>
             </li>
             <li>
+              <a href="/web/gallery" class="{{galleryActive}}">Gallery</a>
+            </li>
+            <li>
               <a href="/api/v1/auth/logout" class="btn btn-secondary">Logout</a>
             </li>
           </ul>
@@ -678,228 +397,32 @@
 
     <script>
       // Common JavaScript functions
-      // Common JavaScript functions
       document.addEventListener("DOMContentLoaded", () => {
-        // Create an object to store unsaved form data
-        const unsavedFormData = {};
-
-        // Assign IDs to forms that don't have them for tracking purposes
-        document.querySelectorAll("form").forEach((form, index) => {
-          if (!form.id) {
-            form.id = `form-${index}`;
-          }
-        });
-
-        // Tab handling with form data persistence and smooth transitions
+        // Tab handling
         const tabGroups = document.querySelectorAll(".tabs");
         tabGroups.forEach((tabGroup) => {
           const tabs = tabGroup.querySelectorAll(".tab");
           const tabContents = document.querySelectorAll(".tab-content");
 
-          // Create or wrap tab contents in a container
-          if (tabContents.length > 0) {
-            const tabContentsParent = tabContents[0].parentElement;
-            if (!tabContentsParent.classList.contains("tabs-container")) {
-              const tabsContainer = document.createElement("div");
-              tabsContainer.className = "tabs-container";
-              tabContents[0].parentNode.insertBefore(
-                tabsContainer,
-                tabContents[0]
-              );
-
-              tabContents.forEach((content) => {
-                tabsContainer.appendChild(content);
-              });
-            }
-          }
-
-          // Get the container height of the current active tab content
-          function updateContainerHeight() {
-            const activeContent = document.querySelector(".tab-content.active");
-            if (activeContent) {
-              const container = activeContent.closest(".tabs-container");
-              if (container) {
-                const contentHeight = activeContent.offsetHeight;
-                container.style.height = `${contentHeight}px`;
-              }
-            }
-          }
-
-          // Initial container height
-          updateContainerHeight();
-
-          // Also adjust heights after images or other resources load
-          window.addEventListener("load", updateContainerHeight);
-          window.addEventListener("resize", updateContainerHeight);
-
           tabs.forEach((tab) => {
             tab.addEventListener("click", () => {
-              // Don't do anything if this tab is already active
-              if (tab.classList.contains("active")) {
-                return;
-              }
-
-              // Before switching tabs, save current form data
-              const activeTab = tabGroup.querySelector(".tab.active");
-              if (activeTab) {
-                const activeTabTarget = activeTab.getAttribute("data-target");
-                const activeTabContent =
-                  document.getElementById(activeTabTarget);
-
-                if (activeTabContent) {
-                  const forms = activeTabContent.querySelectorAll("form");
-                  forms.forEach((form) => {
-                    // Create a form data entry if it doesn't exist
-                    if (!unsavedFormData[form.id]) {
-                      unsavedFormData[form.id] = {};
-                    }
-
-                    // Save all form field values
-                    const formFields = form.querySelectorAll(
-                      "input, textarea, select"
-                    );
-                    formFields.forEach((field) => {
-                      unsavedFormData[form.id][field.id || field.name] =
-                        field.value;
-                    });
-                  });
-                }
-              }
-
-              // Get current container height to maintain it during transition
-              const container = document.querySelector(".tabs-container");
-              const currentHeight = container.offsetHeight;
-              container.style.height = `${currentHeight}px`;
-
-              // Get the target tab content
-              const target = tab.getAttribute("data-target");
-              const targetContent = document.getElementById(target);
-
-              // Update the active tab first (before animation)
+              // Remove active class from all tabs
               tabs.forEach((t) => t.classList.remove("active"));
+
+              // Add active class to clicked tab
               tab.classList.add("active");
 
-              // Find the currently active content to fade out
-              const currentActiveContent = document.querySelector(
-                ".tab-content.active"
-              );
-
-              // STEP 1: Fade out current content completely
-              if (currentActiveContent) {
-                currentActiveContent.style.opacity = "0";
-                currentActiveContent.style.transform = "translateY(-8px)";
-                currentActiveContent.style.pointerEvents = "none";
-              }
-
-              // STEP 2: After fade out completes, resize container and prepare new content
-              setTimeout(() => {
-                if (currentActiveContent) {
-                  currentActiveContent.classList.remove("active");
+              // Show corresponding tab content
+              const target = tab.getAttribute("data-target");
+              tabContents.forEach((content) => {
+                if (content.id === target) {
+                  content.classList.add("active");
+                } else {
+                  content.classList.remove("active");
                 }
-
-                // Prepare the new content but keep it invisible
-                targetContent.style.display = "block";
-                targetContent.style.opacity = "0";
-                targetContent.style.transform = "translateY(8px)";
-
-                // Get height of new content
-                const newHeight = targetContent.offsetHeight;
-
-                // Animate container to new height
-                container.style.transition = "height 0.3s ease";
-                container.style.height = `${newHeight}px`;
-
-                // STEP 3: After resize is mostly complete, add active class to new content
-                setTimeout(() => {
-                  targetContent.classList.add("active");
-
-                  // STEP 4: Fade in new content
-                  setTimeout(() => {
-                    targetContent.style.opacity = "1";
-                    targetContent.style.transform = "translateY(0)";
-                    targetContent.style.pointerEvents = "auto";
-
-                    // Restore any unsaved form data for this tab
-                    const forms = targetContent.querySelectorAll("form");
-                    forms.forEach((form) => {
-                      if (unsavedFormData[form.id]) {
-                        const formFields = form.querySelectorAll(
-                          "input, textarea, select"
-                        );
-                        formFields.forEach((field) => {
-                          const fieldKey = field.id || field.name;
-                          if (
-                            fieldKey &&
-                            unsavedFormData[form.id][fieldKey] !== undefined
-                          ) {
-                            field.value = unsavedFormData[form.id][fieldKey];
-                          }
-                        });
-                      }
-                    });
-
-                    // Adjust textarea heights after content is fully visible
-                    const textareas =
-                      targetContent.querySelectorAll("textarea");
-                    textareas.forEach((textarea) => {
-                      textarea.style.height = "auto";
-                      textarea.style.height = textarea.scrollHeight + "px";
-                    });
-
-                    // After everything is done, remove fixed height from container
-                    setTimeout(() => {
-                      container.style.height = "";
-                      container.style.transition = "";
-
-                      // Hide all inactive content
-                      tabContents.forEach((content) => {
-                        if (!content.classList.contains("active")) {
-                          content.style.display = "none";
-                        }
-                      });
-                    }, 100);
-                  }, 50);
-                }, 250);
-              }, 300); // Wait for current content to fully fade out
+              });
             });
           });
-
-          // Handle window resize to update container height
-          window.addEventListener("resize", () => {
-            updateContainerHeight();
-          });
-        });
-
-        // Add "Discard Changes" buttons to forms
-        document.querySelectorAll("form[data-async]").forEach((form) => {
-          if (!form.querySelector(".btn-reset")) {
-            const submitBtn = form.querySelector('button[type="submit"]');
-            if (submitBtn) {
-              const resetBtn = document.createElement("button");
-              resetBtn.type = "button";
-              resetBtn.className = "btn btn-secondary btn-reset";
-              resetBtn.style.marginLeft = "10px";
-              resetBtn.textContent = "Discard Changes";
-              submitBtn.parentNode.insertBefore(
-                resetBtn,
-                submitBtn.nextSibling
-              );
-
-              // Add click event to reset button
-              resetBtn.addEventListener("click", () => {
-                // Reset the form
-                form.reset();
-
-                // Clear stored data for this form
-                if (unsavedFormData[form.id]) {
-                  delete unsavedFormData[form.id];
-                }
-
-                // Show toast notification instead of inline alert
-                Toast.success("Changes discarded");
-              });
-            }
-          }
         });
 
         // Form submission handling
@@ -928,28 +451,35 @@
               const result = await response.json();
 
               if (response.ok) {
-                // Clear the stored form data when successfully saved
-                if (unsavedFormData[form.id]) {
-                  delete unsavedFormData[form.id];
-                }
+                // Show success message
+                const alertEl = document.createElement("div");
+                alertEl.className = "alert alert-success";
+                alertEl.textContent =
+                  result.message || "Changes saved successfully!";
+                form.prepend(alertEl);
 
-                // Show success toast notification instead of inline alert
-                Toast.success(result.message || "Changes saved successfully!");
+                // Remove alert after 3 seconds
+                setTimeout(() => alertEl.remove(), 3000);
 
                 // If there's a redirect URL, navigate there
                 if (result.redirect) {
                   window.location.href = result.redirect;
                 }
               } else {
-                // Show error toast notification instead of inline alert
-                Toast.error(
-                  result.error || "An error occurred. Please try again."
-                );
+                // Show error message
+                const alertEl = document.createElement("div");
+                alertEl.className = "alert alert-error";
+                alertEl.textContent =
+                  result.error || "An error occurred. Please try again.";
+                form.prepend(alertEl);
               }
             } catch (error) {
               console.error("Error:", error);
-              // Show error toast for unexpected errors
-              Toast.error("An unexpected error occurred. Please try again.");
+              const alertEl = document.createElement("div");
+              alertEl.className = "alert alert-error";
+              alertEl.textContent =
+                "An unexpected error occurred. Please try again.";
+              form.prepend(alertEl);
             } finally {
               // Restore button state
               submitBtn.disabled = false;
@@ -957,418 +487,6 @@
             }
           });
         });
-
-        // Add event listeners to detect form changes
-        document.querySelectorAll("form[data-async]").forEach((form) => {
-          const formFields = form.querySelectorAll("input, textarea, select");
-          formFields.forEach((field) => {
-            field.addEventListener("input", () => {
-              // Store the changed value
-              if (!unsavedFormData[form.id]) {
-                unsavedFormData[form.id] = {};
-              }
-              unsavedFormData[form.id][field.id || field.name] = field.value;
-            });
-          });
-        });
-
-        // Auto-resize textareas as content grows
-        const textareas = document.querySelectorAll("textarea");
-        textareas.forEach((textarea) => {
-          const adjustHeight = () => {
-            textarea.style.height = "auto";
-            textarea.style.height = textarea.scrollHeight + "px";
-          };
-
-          // Initial adjustment
-          adjustHeight();
-
-          // Adjust on input
-          textarea.addEventListener("input", adjustHeight);
-        });
-      });
-
-      const Toast = {
-        container: null,
-        queue: [],
-        processing: false,
-
-        // Initialize the toast container
-        init() {
-          if (this.container) return;
-
-          // Create the toast container if it doesn't exist
-          this.container = document.createElement("div");
-          this.container.className = "toast-container";
-          document.body.appendChild(this.container);
-        },
-
-        // Show a toast notification
-        show(message, type = "success", duration = 4000) {
-          this.init();
-
-          // Add to queue and process
-          this.queue.push({ message, type, duration });
-          if (!this.processing) {
-            this.processQueue();
-          }
-        },
-
-        // Process toast queue to avoid overwhelming the UI
-        async processQueue() {
-          if (this.queue.length === 0) {
-            this.processing = false;
-            return;
-          }
-
-          this.processing = true;
-          const { message, type, duration } = this.queue.shift();
-
-          // Create and display the toast
-          const toast = this.createToastElement(message, type, duration);
-          this.container.appendChild(toast);
-
-          // Trigger reflow to make the transition work
-          void toast.offsetWidth;
-
-          // Show the toast
-          toast.classList.add("show");
-
-          // Set up auto-dismiss
-          await this.setupAutoDismiss(toast, duration);
-
-          // Process next toast with a small delay
-          setTimeout(() => this.processQueue(), 300);
-        },
-
-        // Create a toast element
-        createToastElement(message, type, duration) {
-          const toast = document.createElement("div");
-          toast.className = `toast toast-${type}`;
-
-          // Set up toast icon based on type
-          let iconSvg = "";
-          if (type === "success") {
-            iconSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>`;
-          } else if (type === "error") {
-            iconSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>`;
-          }
-
-          toast.innerHTML = `
-      <div class="toast-icon">${iconSvg}</div>
-      <div class="toast-content">${message}</div>
-      <button class="toast-close" aria-label="Close">
-        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-      </button>
-      <div class="toast-progress"></div>
-    `;
-
-          // Add click handler for close button
-          toast.querySelector(".toast-close").addEventListener("click", () => {
-            this.dismiss(toast);
-          });
-
-          return toast;
-        },
-
-        // Set up auto-dismiss with progress bar
-        async setupAutoDismiss(toast, duration) {
-          // Add progress bar animation
-          const progressBar = toast.querySelector(".toast-progress");
-          progressBar.style.animation = `progress-bar ${duration}ms linear forwards`;
-          progressBar.style.background =
-            "linear-gradient(to right, var(--accent), var(--accent))";
-          progressBar.style.backgroundSize = "0% 100%";
-
-          // Using CSS animation for better performance
-          progressBar.style.animation = "none";
-          void progressBar.offsetWidth; // Trigger reflow
-          progressBar.style.animation = ``;
-          progressBar.style.transition = `width ${duration}ms linear`;
-          progressBar.style.width = "100%";
-
-          // Set timeout for auto-dismiss
-          return new Promise((resolve) => {
-            const dismissTimeout = setTimeout(() => {
-              this.dismiss(toast);
-              resolve();
-            }, duration);
-
-            // Clear timeout if manually dismissed
-            toast.addEventListener("dismiss", () => {
-              clearTimeout(dismissTimeout);
-              resolve();
-            });
-          });
-        },
-
-        // Dismiss a toast
-        dismiss(toast) {
-          if (!toast.classList.contains("show")) return;
-
-          // Add hide class for animation
-          toast.classList.remove("show");
-          toast.classList.add("hide");
-
-          // Remove from DOM after animation completes
-          const dismissEvent = new CustomEvent("dismiss");
-          toast.dispatchEvent(dismissEvent);
-
-          setTimeout(() => {
-            if (toast.parentNode) {
-              toast.parentNode.removeChild(toast);
-            }
-          }, 300);
-        },
-
-        // Show a success toast
-        success(message, duration = 4000) {
-          this.show(message, "success", duration);
-        },
-
-        // Show an error toast
-        error(message, duration = 5000) {
-          this.show(message, "error", duration);
-        },
-      };
-
-      // Initialize toast system when DOM is ready
-      document.addEventListener("DOMContentLoaded", () => {
-        Toast.init();
-      });
-
-      // Page transition system
-      const PageTransition = {
-        isTransitioning: false,
-        overlay: null,
-
-        init() {
-          // Create transition overlay
-          this.overlay = document.createElement("div");
-          this.overlay.className = "page-transition-overlay";
-          document.body.appendChild(this.overlay);
-
-          // Add initial fade-in effect on page load
-          document.addEventListener("DOMContentLoaded", () => {
-            const mainContent = document.querySelector("main");
-            if (mainContent) {
-              mainContent.classList.add("fade-in");
-
-              // Remove the class after a small delay to trigger animation
-              setTimeout(() => {
-                mainContent.classList.remove("fade-in");
-              }, 50);
-            }
-          });
-
-          // Intercept all internal navigation link clicks
-          this.setupLinkInterception();
-        },
-
-        setupLinkInterception() {
-          // Handle all link clicks
-          document.addEventListener("click", (e) => {
-            // Find closest anchor tag if the click was on a child element
-            const link = e.target.closest("a");
-
-            // Skip if no link was found or if it's an external link or has specific attributes
-            if (
-              !link ||
-              !link.href ||
-              link.target === "_blank" ||
-              link.hasAttribute("download") ||
-              link.href.startsWith("mailto:") ||
-              link.href.startsWith("tel:") ||
-              e.ctrlKey ||
-              e.metaKey
-            ) {
-              return;
-            }
-
-            // Check if this is an internal link (same origin)
-            const currentUrl = window.location.origin;
-            const linkUrl = new URL(link.href);
-
-            if (linkUrl.origin === currentUrl) {
-              // Skip API endpoints and non-web routes
-              if (
-                linkUrl.pathname.startsWith("/api/") ||
-                !linkUrl.pathname.startsWith("/web/")
-              ) {
-                return;
-              }
-
-              // Prevent default behavior and handle the transition
-              e.preventDefault();
-
-              // Don't navigate if already transitioning
-              if (this.isTransitioning) {
-                return;
-              }
-
-              this.navigateTo(link.href);
-            }
-          });
-
-          // Handle browser back/forward buttons
-          window.addEventListener("popstate", (e) => {
-            if (this.isTransitioning) return;
-
-            const mainContent = document.querySelector("main");
-            if (mainContent) {
-              this.fadeOut(mainContent).then(() => {
-                // Let the browser handle the actual navigation by not preventing default
-                // The new page will load normally via browser's built-in logic
-              });
-            }
-          });
-        },
-
-        navigateTo(url) {
-          this.isTransitioning = true;
-          const mainContent = document.querySelector("main");
-
-          if (mainContent) {
-            // First fade out the current page
-            this.fadeOut(mainContent).then(() => {
-              // Update browser history
-              window.history.pushState({}, "", url);
-
-              // Fetch the new page content
-              fetch(url)
-                .then((response) => response.text())
-                .then((html) => {
-                  // Extract just the main content from the new page
-                  const parser = new DOMParser();
-                  const newDoc = parser.parseFromString(html, "text/html");
-                  const newMain = newDoc.querySelector("main");
-
-                  if (newMain) {
-                    // Update the title
-                    document.title = newDoc.title;
-
-                    // Update active nav state to match the new page
-                    this.updateNavigation(url);
-
-                    // Replace the main content
-                    const container =
-                      document.querySelector("main > .container");
-                    if (container && newMain.querySelector(".container")) {
-                      container.innerHTML =
-                        newMain.querySelector(".container").innerHTML;
-                    } else {
-                      mainContent.innerHTML = newMain.innerHTML;
-                    }
-
-                    // Fade in the new content
-                    this.fadeIn(mainContent).then(() => {
-                      this.isTransitioning = false;
-
-                      // Reinitialize any JavaScript that needs to run on the new page
-                      this.reinitializePageScripts();
-                    });
-                  } else {
-                    // If we couldn't extract the main content, just redirect normally
-                    window.location.href = url;
-                  }
-                })
-                .catch((error) => {
-                  console.error("Error during page transition:", error);
-                  // If there's an error, just navigate normally
-                  window.location.href = url;
-                });
-            });
-          } else {
-            // If main element not found, just navigate normally
-            window.location.href = url;
-          }
-        },
-
-        fadeOut(element) {
-          return new Promise((resolve) => {
-            // Activate overlay for smoother transition
-            this.overlay.classList.add("active");
-
-            // Add the fade-out class
-            element.classList.add("fade-out");
-
-            // Wait for animation to complete
-            setTimeout(() => {
-              resolve();
-            }, 300);
-          });
-        },
-
-        fadeIn(element) {
-          return new Promise((resolve) => {
-            // Add the fade-in class first
-            element.classList.add("fade-in");
-
-            // Remove the fade-out class if present
-            element.classList.remove("fade-out");
-
-            // Small delay to ensure the initial state is set
-            setTimeout(() => {
-              // Remove the fade-in class to trigger the animation
-              element.classList.remove("fade-in");
-
-              // Remove overlay
-              this.overlay.classList.remove("active");
-
-              // Wait for animation to complete
-              setTimeout(resolve, 300);
-            }, 50);
-          });
-        },
-
-        updateNavigation(url) {
-          // Remove active class from all nav links
-          document.querySelectorAll("nav a").forEach((navLink) => {
-            navLink.classList.remove("active");
-          });
-
-          // Add active class to matching nav link
-          const path = new URL(url).pathname;
-          const navLink = document.querySelector(`nav a[href="${path}"]`);
-          if (navLink) {
-            navLink.classList.add("active");
-          } else {
-            // Check for partial matches (in case the URL has additional segments)
-            document.querySelectorAll("nav a").forEach((link) => {
-              if (path.startsWith(link.getAttribute("href"))) {
-                link.classList.add("active");
-              }
-            });
-          }
-        },
-
-        reinitializePageScripts() {
-          // Re-initialize tab system
-          const tabGroups = document.querySelectorAll(".tabs");
-          if (tabGroups.length > 0) {
-            // Trigger a custom event that your tab initialization code can listen for
-            document.dispatchEvent(new CustomEvent("page:loaded"));
-          }
-
-          // Re-initialize form handlers
-          const forms = document.querySelectorAll("form[data-async]");
-          if (forms.length > 0) {
-            // Trigger a custom event that your form initialization code can listen for
-            document.dispatchEvent(new CustomEvent("forms:reload"));
-          }
-
-          // Auto-resize textareas
-          const textareas = document.querySelectorAll("textarea");
-          textareas.forEach((textarea) => {
-            textarea.style.height = "auto";
-            textarea.style.height = textarea.scrollHeight + "px";
-          });
-        },
-      };
-
-      // Initialize page transition system
-      document.addEventListener("DOMContentLoaded", () => {
-        PageTransition.init();
       });
     </script>
 

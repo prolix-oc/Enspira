@@ -1,0 +1,87 @@
+{{pageTitle = "Character Gallery"}}
+{{galleryActive = "active"}}
+
+<div class="card">
+  <div class="card-header">
+    <h1>Character Gallery</h1>
+  </div>
+  <p>Choose a pre-defined character preset for your AI assistant. Click on a character to see more details and apply the preset.</p>
+</div>
+
+{{#if presets}}
+<div class="gallery-grid">
+  {{#each presets}}
+  <a href="/web/gallery/{{this.id}}" class="card preset-card">
+    <div class="preset-image">
+      <img src="{{this.image}}" alt="{{this.name}} Avatar" loading="lazy">
+    </div>
+    <div class="preset-info">
+      <h3 class="preset-name">{{this.name}}</h3>
+      <p class="preset-author">By: {{this.author}}</p>
+    </div>
+  </a>
+  {{/each}}
+</div>
+{{else}}
+<div class="card">
+  <p>No character presets found. Please check the 'presets' directory.</p>
+</div>
+{{/if}}
+
+{{extraStyles}}
+<style>
+  .gallery-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 20px;
+    margin-top: 20px;
+  }
+
+  .preset-card {
+    text-decoration: none;
+    color: var(--primary-text);
+    transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden; /* Ensure image corners are rounded */
+    padding: 0; /* Remove default card padding */
+  }
+
+  .preset-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 8px 16px rgba(0, 0, 0, 0.2);
+    text-decoration: none;
+    color: var(--accent-hover);
+  }
+
+  .preset-image {
+    width: 100%;
+    aspect-ratio: 1 / 1; /* Square aspect ratio for images */
+    background-color: var(--background); /* Fallback color */
+    overflow: hidden;
+  }
+
+  .preset-image img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .preset-info {
+    padding: 15px;
+    text-align: center;
+  }
+
+  .preset-name {
+    margin: 0 0 5px 0;
+    font-size: 1.1em;
+  }
+
+  .preset-author {
+    font-size: 0.9em;
+    color: var(--secondary-text);
+    margin: 0;
+  }
+</style>
