@@ -40,12 +40,6 @@
         <p>Describe your assistant's appearance, physical attributes, clothing, and other visual aspects.</p>
       </div>
       
-      <div class="form-group">
-        <label for="bot_twitch">Bot Twitch Username</label>
-        <input type="text" id="bot_twitch" name="bot_twitch" value="{{character.bot_twitch}}" required>
-        <p>The Twitch username your bot will use (include @ if necessary).</p>
-      </div>
-      
       <button type="submit" class="btn btn-primary">Save Description</button>
     </form>
   </div>
@@ -57,10 +51,8 @@
         <textarea id="examples" name="examples" rows="15" required>{{characterExamples}}</textarea>
         <p>Provide examples of how your assistant would respond to different situations. This helps establish the assistant's tone and style. Format as:</p>
         <pre style="background-color: var(--input-bg); padding: 10px; margin-top: 5px; border-radius: 6px;">
-User: [Example user message]
 {{character.bot_name}}: [Example response]
 
-User: [Another example]
 {{character.bot_name}}: [Another response]</pre>
       </div>
       

@@ -19,52 +19,52 @@ const __dirname = dirname(__filename);
 function renderTemplate(templateContent, data) {
     // Simple template rendering with handlebars-like syntax
     let rendered = templateContent;
-    
+
     // Handle basic variable substitution
     const variableRegex = /\{\{([^}]+)\}\}/g;
     rendered = rendered.replace(variableRegex, (match, variable) => {
-      // Check if this is a simple assignment (like {{pageTitle = "Dashboard"}})
-      if (variable.includes('=')) {
-        const [varName, varValue] = variable.split('=').map(s => s.trim());
-        data[varName] = varValue.replace(/"/g, ''); // Remove quotes if present
-        return ''; // Remove the assignment from output
-      }
-      
-      // Skip if this is part of a conditional - we'll handle those separately
-      if (variable.startsWith('#if') || variable.startsWith('/if') || 
-          variable.startsWith('#else') || variable.startsWith('else')) {
-        return match;
-      }
-      
-      // Handle nested properties using a path string (e.g., "user.name")
-      const path = variable.trim().split('.');
-      let value = data;
-      
-      for (const key of path) {
-        if (value === undefined || value === null) return '';
-        value = value[key];
-      }
-      
-      // Return empty string for undefined/null values
-      return value !== undefined && value !== null ? value : '';
+        // Check if this is a simple assignment (like {{pageTitle = "Dashboard"}})
+        if (variable.includes('=')) {
+            const [varName, varValue] = variable.split('=').map(s => s.trim());
+            data[varName] = varValue.replace(/"/g, ''); // Remove quotes if present
+            return ''; // Remove the assignment from output
+        }
+
+        // Skip if this is part of a conditional - we'll handle those separately
+        if (variable.startsWith('#if') || variable.startsWith('/if') ||
+            variable.startsWith('#else') || variable.startsWith('else')) {
+            return match;
+        }
+
+        // Handle nested properties using a path string (e.g., "user.name")
+        const path = variable.trim().split('.');
+        let value = data;
+
+        for (const key of path) {
+            if (value === undefined || value === null) return '';
+            value = value[key];
+        }
+
+        // Return empty string for undefined/null values
+        return value !== undefined && value !== null ? value : '';
     });
-    
+
     // Handle conditional blocks - be sure this captures the right patterns
     const conditionalRegex = /\{\{#if ([^}]+)\}\}([\s\S]*?)\{\{else\}\}([\s\S]*?)\{\{\/if\}\}/g;
     rendered = rendered.replace(conditionalRegex, (match, condition, ifTrue, ifFalse) => {
-      // Evaluate the condition from data object
-      const path = condition.trim().split('.');
-      let value = data;
-      
-      for (const key of path) {
-        if (value === undefined || value === null) {
-          value = false;
-          break;
+        // Evaluate the condition from data object
+        const path = condition.trim().split('.');
+        let value = data;
+
+        for (const key of path) {
+            if (value === undefined || value === null) {
+                value = false;
+                break;
+            }
+            value = value[key];
         }
-        value = value[key];
-      }
-      
-      return value ? ifTrue : ifFalse;
+
+        return value ? ifTrue : ifFalse;
     });
 
     // Handle simple conditionals without else
@@ -243,58 +243,58 @@ async function webRoutes(fastify, options) {
     // Dashboard route
     fastify.get('/dashboard', { preHandler: requireAuth }, async (request, reply) => {
         try {
-          const user = request.user;
-          
-          // Get Twitch connection status - be more defensive with optional chaining
-          const streamerConnected = !!user?.twitch_tokens?.streamer?.access_token;
-          const botConnected = !!user?.twitch_tokens?.bot?.access_token;
-          
-          // Get streamer and bot names - only if connected
-          const streamerName = streamerConnected ? user.twitch_tokens.streamer.twitch_display_name : '';
-          const botName = botConnected ? user.twitch_tokens.bot.twitch_display_name : '';
-          
-          // Simple stats - just set to 0 for now
-          let chatCount = 0;
-          try {
-            const recentChats = await returnRecentChats(user.user_id, false, true); 
-            chatCount = recentChats?.length || 0;
-          } catch (error) {
-            logger.error("Web", `Error fetching chat stats: ${error.message}`);
-          }
-          
-          // Then create the stats object with actual data
-          const stats = {
-            chatMessages: chatCount,
-          };
-          
-          // Check if online (mocked for now - could implement real status check later)
-          const isOnline = false;
-          
-          // Simplified data object with only what we need
-          const templateData = {
-            user: {
-              display_name: user.display_name || user.user_name,
-            },
-            streamerConnected,
-            botConnected,
-            streamerName,
-            botName,
-            stats,
-            isOnline
-          };
-          
-          // Read dashboard template
-          const dashboardTemplate = await fs.readFile(path.join(process.cwd(), 'pages', 'dashboard.html'), 'utf8');
-          
-          // Render the page with only the necessary data
-          const renderedPage = await renderPage(dashboardTemplate, templateData);
-          
-          reply.type('text/html').send(renderedPage);
+            const user = request.user;
+
+            // Get Twitch connection status - be more defensive with optional chaining
+            const streamerConnected = !!user?.twitch_tokens?.streamer?.access_token;
+            const botConnected = !!user?.twitch_tokens?.bot?.access_token;
+
+            // Get streamer and bot names - only if connected
+            const streamerName = streamerConnected ? user.twitch_tokens.streamer.twitch_display_name : '';
+            const botName = botConnected ? user.twitch_tokens.bot.twitch_display_name : '';
+
+            // Simple stats - just set to 0 for now
+            let chatCount = 0;
+            try {
+                const recentChats = await returnRecentChats(user.user_id, false, true);
+                chatCount = recentChats?.length || 0;
+            } catch (error) {
+                logger.error("Web", `Error fetching chat stats: ${error.message}`);
+            }
+
+            // Then create the stats object with actual data
+            const stats = {
+                chatMessages: chatCount,
+            };
+
+            // Check if online (mocked for now - could implement real status check later)
+            const isOnline = false;
+
+            // Simplified data object with only what we need
+            const templateData = {
+                user: {
+                    display_name: user.display_name || user.user_name,
+                },
+                streamerConnected,
+                botConnected,
+                streamerName,
+                botName,
+                stats,
+                isOnline
+            };
+
+            // Read dashboard template
+            const dashboardTemplate = await fs.readFile(path.join(process.cwd(), 'pages', 'dashboard.html'), 'utf8');
+
+            // Render the page with only the necessary data
+            const renderedPage = await renderPage(dashboardTemplate, templateData);
+
+            reply.type('text/html').send(renderedPage);
         } catch (error) {
-          logger.error("Web", `Error serving dashboard: ${error.message}`);
-          reply.code(500).send('Error loading dashboard');
+            logger.error("Web", `Error serving dashboard: ${error.message}`);
+            reply.code(500).send('Error loading dashboard');
         }
-      });
+    });
     // Character editor route
     fastify.get('/character', { preHandler: requireAuth }, async (request, reply) => {
         try {
@@ -406,14 +406,11 @@ async function webRoutes(fastify, options) {
     fastify.post('/api/v1/character/description', { preHandler: requireAuth }, async (request, reply) => {
         try {
             const user = request.user;
-            const { description, bot_twitch } = request.body;
-
-            // Update bot twitch name in user record
-            await updateUserParameter(user.user_id, 'bot_twitch', bot_twitch);
-
+            const { description } = request.body;
+    
             // Save description to file
             const success = await saveTextContent(user.user_id, 'character_card', description);
-
+    
             if (success) {
                 reply.send({ success: true, message: 'Description updated successfully' });
             } else {
@@ -472,14 +469,7 @@ async function webRoutes(fastify, options) {
     fastify.post('/api/v1/world/player', { preHandler: requireAuth }, async (request, reply) => {
         try {
             const user = request.user;
-            const { player_info, commands_list } = request.body;
-
-            // Update commands list in user record
-            const commandsArray = commands_list.split('\n')
-                .map(cmd => cmd.trim())
-                .filter(cmd => cmd.length > 0);
-
-            await updateUserParameter(user.user_id, 'commands_list', commandsArray);
+            const { player_info } = request.body;
 
             // Save player info to file
             const success = await saveTextContent(user.user_id, 'player_info', player_info);
@@ -499,14 +489,7 @@ async function webRoutes(fastify, options) {
     fastify.post('/api/v1/world/scenario', { preHandler: requireAuth }, async (request, reply) => {
         try {
             const user = request.user;
-            const { scenario, aux_bots } = request.body;
-
-            // Update aux bots list in user record
-            const auxBotsArray = aux_bots.split('\n')
-                .map(bot => bot.trim())
-                .filter(bot => bot.length > 0);
-
-            await updateUserParameter(user.user_id, 'aux_bots', auxBotsArray);
+            const { scenario } = request.body;
 
             // Save scenario to file
             const success = await saveTextContent(user.user_id, 'scenario', scenario);
@@ -522,6 +505,31 @@ async function webRoutes(fastify, options) {
         }
     });
 
+    fastify.post('/api/v1/world/bot-config', { preHandler: requireAuth }, async (request, reply) => {
+        try {
+            const user = request.user;
+            const { commands_list, aux_bots } = request.body;
+
+            // Update commands list in user record
+            const commandsArray = commands_list.split('\n')
+                .map(cmd => cmd.trim())
+                .filter(cmd => cmd.length > 0);
+
+            await updateUserParameter(user.user_id, 'commands_list', commandsArray);
+
+            // Update aux bots list in user record
+            const auxBotsArray = aux_bots.split('\n')
+                .map(bot => bot.trim())
+                .filter(bot => bot.length > 0);
+
+            await updateUserParameter(user.user_id, 'aux_bots', auxBotsArray);
+
+            reply.send({ success: true, message: 'Bot configuration updated successfully' });
+        } catch (error) {
+            logger.error("Web", `Error updating bot configuration: ${error.message}`);
+            reply.code(500).send({ success: false, error: 'An error occurred while updating bot configuration' });
+        }
+    });
 
     fastify.get('/auth/login', async (request, reply) => {
         const loginForm = `<!doctype html>
@@ -585,7 +593,7 @@ async function webRoutes(fastify, options) {
     fastify.get('/auth/logout', async (request, reply) => {
         reply.clearCookie('enspira_session');
         return reply.redirect('/web/auth/login');  // Updated path
-      });
+    });
 
     // Redirect root to dashboard
     fastify.get('/', (request, reply) => {
