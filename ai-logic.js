@@ -20,7 +20,6 @@ import {
   replyStripped,
   queryPrompt,
   contextPromptChat,
-  contextPromptChatCoT,
   eventPromptChat,
   rerankPrompt,
   fixTTSString,
@@ -29,7 +28,7 @@ import {
 } from "./prompt-helper.js";
 import { SummaryRequestBody } from "./oai-requests.js"
 import { returnTwitchEvent } from "./twitch-helper.js";
-import { resultsReranked, pullFromWeb, pullFromWebScraper } from "./data-helper.js";
+import { resultsReranked, createRagError, pullFromWebScraper } from "./data-helper.js";
 import { returnAuthObject } from "./api-helper.js";
 import { retrieveConfigValue } from "./config-helper.js";
 import { fileURLToPath } from 'url';
@@ -1324,34 +1323,116 @@ export async function retrieveWebContext(urls, query, subject, userId) {
 }
 
 async function summarizePage(pageContent, subject) {
-  // Generate a summary request for the individual page
-  const instruct = await SummaryRequestBody.create(
-    `Please summarize the following content about "${subject}" in a way that provides both a concise vector-optimized sentence and a detailed summary.`,
-    await retrieveConfigValue("models.summary.model"),
-    pageContent
-  );
-  const chatTask = await sendToolCompletionRequest(instruct, await retrieveConfigValue("models.summary"));
-  // Parse the JSON response according to our fixed schema
-  return JSON.parse(chatTask.response);
+  try {
+    // Generate a summary request for the individual page
+    const instruct = await SummaryRequestBody.create(
+      `Please summarize the following content about "${subject}" in a way that provides both a concise vector-optimized sentence and a detailed summary.`,
+      await retrieveConfigValue("models.summary.model"),
+      pageContent
+    );
+    
+    const chatTask = await sendToolCompletionRequest(instruct, await retrieveConfigValue("models.summary"));
+    
+    // Handle the response based on its type
+    if (!chatTask) {
+      logger.log("Augment", "Empty response from summary request");
+      return null;
+    }
+    
+    if (chatTask.error) {
+      logger.log("Augment", `Error in summary request: ${chatTask.error}`);
+      return { error: chatTask.error };
+    }
+    
+    // If response is already an object (from the guided format), use it directly
+    if (typeof chatTask.response === 'object' && chatTask.response !== null) {
+      return chatTask.response;
+    }
+    
+    // Otherwise try parsing it as JSON
+    try {
+      return JSON.parse(chatTask.response);
+    } catch (parseError) {
+      logger.log("Augment", `Failed to parse summary response as JSON: ${parseError.message}`);
+      return { 
+        error: "JSON parsing failed",
+        details: parseError.message
+      };
+    }
+  } catch (error) {
+    logger.log("Augment", `Error in summarizePage: ${error.message}`);
+    return { error: error.message };
+  }
 }
 
 async function finalCombinedSummary(summaries, subject) {
-  // Combine the individual summaries into one text block.
-  // You might choose to include both the vectorString and summaryContents.
-  const combinedText = summaries
-    .map(s => `Vector hint: ${s.vectorString}\nDetailed: ${s.summaryContents}`)
-    .join("\n\n");
+  try {
+    // Combine the individual summaries into one text block
+    const combinedText = summaries
+      .map(s => `Vector hint: ${s.vectorString}\nDetailed: ${s.summaryContents}`)
+      .join("\n\n");
 
-  // Create a final summary prompt that instructs the model to produce a unified summary.
-  const finalPrompt = `You are provided with multiple summaries for content about "${subject}". Please consolidate these into a final summary. Your output must be in JSON format with two properties: "vectorString" (a single concise sentence optimized for vector search) and "summaryContents" (the complete final summary). Here are the individual summaries:\n\n${combinedText}`;
+    // Create a final summary prompt that instructs the model to produce a unified summary
+    const finalPrompt = `You are provided with multiple summaries for content about "${subject}". Please consolidate these into a final summary. Your output must be in JSON format with two properties: "vectorString" (a single concise sentence optimized for vector search) and "summaryContents" (the complete final summary). Here are the individual summaries:\n\n${combinedText}`;
 
-  const instruct = await SummaryRequestBody.create(
-    finalPrompt,
-    await retrieveConfigValue("models.summary.model"),
-    combinedText // you can also pass an empty message if you rely solely on the prompt
-  );
-  const chatTask = await sendToolCompletionRequest(instruct, await retrieveConfigValue("models.summary"));
-  return JSON.parse(chatTask.response);
+    const instruct = await SummaryRequestBody.create(
+      finalPrompt,
+      await retrieveConfigValue("models.summary.model"),
+      combinedText
+    );
+    
+    const chatTask = await sendToolCompletionRequest(instruct, await retrieveConfigValue("models.summary"));
+    
+    // Handle the response based on its type
+    if (!chatTask) {
+      logger.log("Augment", "Empty response from final summary request");
+      return createRagError('summary-generation', 'Empty response from summary tool');
+    }
+    
+    if (chatTask.error) {
+      logger.log("Augment", `Error in final summary request: ${chatTask.error}`);
+      return createRagError('summary-generation', chatTask.error);
+    }
+    
+    // If response is already an object (from the guided format), use it directly
+    if (typeof chatTask.response === 'object' && chatTask.response !== null) {
+      // Validate that the object has the expected properties
+      if (!chatTask.response.vectorString || !chatTask.response.summaryContents) {
+        logger.log("Augment", "Final summary response missing required properties");
+        return createRagError(
+          'summary-format',
+          'Summary response missing required properties',
+          { response: JSON.stringify(chatTask.response).substring(0, 100) + '...' }
+        );
+      }
+      return chatTask.response;
+    }
+    
+    // Otherwise try parsing it as JSON
+    try {
+      const parsedResponse = JSON.parse(chatTask.response);
+      // Validate parsed response
+      if (!parsedResponse.vectorString || !parsedResponse.summaryContents) {
+        logger.log("Augment", "Parsed final summary response missing required properties");
+        return createRagError(
+          'summary-format',
+          'Parsed summary response missing required properties',
+          { response: JSON.stringify(parsedResponse).substring(0, 100) + '...' }
+        );
+      }
+      return parsedResponse;
+    } catch (parseError) {
+      logger.log("Augment", `Failed to parse final summary response as JSON: ${parseError.message}`);
+      return createRagError(
+        'summary-parsing',
+        'Failed to parse summary as JSON',
+        { error: parseError.message, rawResponse: chatTask.response.substring(0, 100) + '...' }
+      );
+    }
+  } catch (error) {
+    logger.log("Augment", `Error in finalCombinedSummary: ${error.message}`);
+    return createRagError('summary-execution', error.message, { stack: error.stack });
+  }
 }
 
 /**

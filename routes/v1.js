@@ -1270,14 +1270,15 @@ async function handleChatMessage(data, authObject, message, user, formattedDate,
             const audio_url = authObject.tts_enabled
               ? await aiHelper.respondWithVoice(finalResp.response, authObject.user_id)
               : null;
-            response.send({ response: finalResp.response, audio_url, thoughtProcess: finalResp.thoughtProcess });
+            response.send({ response: finalResp.response, audio_url, thoughts: finalResp.thoughtProcess });
+            return response; 
           } catch (ttsError) {
             logger.log("API", `TTS error: ${ttsError.message}`);
-            response.send({ response: finalResp.response, thoughtProcess: finalResp.thoughtProcess, tts_error: "TTS failed but text response is available" });
+            response.send({ response: finalResp.response, thoughts: finalResp.thoughtProcess, tts_error: "TTS failed but text response is available" });
             return response;
           }
         } else {
-          response.send({ response: finalResp.response, thoughtProcess: finalResp.thoughtProcess });
+          response.send({ response: finalResp.response, thoughts: finalResp.thoughtProcess });
           return response;
         }
       } catch (error) {
@@ -1499,12 +1500,12 @@ async function handleVoiceConversion(data, authObject, response) {
  * Handles chat messages not directed at the character.
  * @param {object} data - The data object containing message details.
  * @param {object} authObject - The authentication object.
- * @param {string} message - The message object.
+ * @param {string} message - The message to process.
  * @param {string} moderationResult - The result of the moderation check.
  * @param {string} user - The user who sent the message.
  * @param {string} formattedDate - The formatted date and time of the message.
  * @param {object} response - The response object.
- * @returns {Promise<void>} - A promise that resolves when the response is sent.
+ * @returns {Promise<object>} - The response object for chaining.
  */
 async function handleNonChatMessage(
   data,
@@ -1516,74 +1517,101 @@ async function handleNonChatMessage(
 ) {
   const fromBot = await containsAuxBotName(data.user, authObject.user_id);
 
-  if (
-    (await twitchHelper.isCommandMatch(data.message, authObject.user_id)) ==
-    false
-  ) {
-    if (containsJailbreakAttempt(message)) {
-      logger.log("API", `Jailbreak attempt. Not saving.`);
-      response.send({ response: "OK" });
-    } else if (!fromBot) {
-      if (data.firstMessage) {
-        const aiResp = await aiHelper.respondToEvent(
-          data,
-          authObject.user_id,
-        );
-        const contextString = `On ${formattedDate}, ${user} said in ${user === authObject.user_name
-          ? "their own"
-          : `${authObject.user_name}'s`
-          } chat: "${message}". You responded by saying: ${aiResp.response}`;
-        const summaryString = `On ${formattedDate}, ${user} said to you in ${user === authObject.user_name
-          ? "their own"
-          : `${authObject.user_name}'s`
-          } chat: "${message}". You responded by saying: ${aiResp.response}`;
-        await aiHelper.addChatMessageAsVector(
-          summaryString,
-          message,
-          user,
-          formattedDate,
-          aiResp.response,
-          authObject.user_id,
-        );
-        logger.log(
-          "API",
-          `Processing ${data.user}'s message '${message}' into vector memory.`,
-        );
-        const ttsResponse = authObject.tts_enabled
-          ? {
-            response: aiResp.response,
-            audio_url: await aiHelper.respondWithVoice(
-              aiResp.response,
-              authObject.user_id,
-            ),
-            thoughtProcess: aiResp.thoughtProcess
-          }
-          : { response: aiResp.response };
-        response.send({ ...ttsResponse });
-      } else {
-        const summaryString = `On ${formattedDate} ${user} said in ${user === authObject.user_name
-          ? "their own"
-          : `${authObject.user_name}'s`
-          } Twitch chat: "${message}"`;
-        const contextString = `On ${formattedDate}, ${user} said in ${user === authObject.user_name
-          ? "their own"
-          : `${authObject.user_name}'s`
-          } chat: "${message}"`;
-        await aiHelper.addChatMessageAsVector(
-          summaryString,
-          message,
-          user,
-          formattedDate,
-          "None",
-          authObject.user_id,
-        );
-        logger.log("API", `Processing memory request.`);
+  try {
+    if (
+      (await twitchHelper.isCommandMatch(data.message, authObject.user_id)) ==
+      false
+    ) {
+      if (containsJailbreakAttempt(message)) {
+        logger.log("API", `Jailbreak attempt. Not saving.`);
         response.send({ response: "OK" });
+        return response;
+      } else if (!fromBot) {
+        if (data.firstMessage) {
+          const aiResp = await aiHelper.respondToEvent(
+            data,
+            authObject.user_id,
+          )
+          const summaryString = `On ${formattedDate}, ${user} said to you in ${user === authObject.user_name
+            ? "their own"
+            : `${authObject.user_name}'s`
+            } chat: "${message}". You responded by saying: ${aiResp.response}`;
+          await aiHelper.addChatMessageAsVector(
+            summaryString,
+            message,
+            user,
+            formattedDate,
+            aiResp.response,
+            authObject.user_id,
+          );
+          logger.log(
+            "API",
+            `Processing ${data.user}'s message '${message}' into vector memory.`,
+          );
+          
+          if (authObject.tts_enabled) {
+            try {
+              const audioUrl = await aiHelper.respondWithVoice(
+                aiResp.response,
+                authObject.user_id,
+              );
+              response.send({ 
+                response: aiResp.response,
+                audio_url: audioUrl,
+                thoughtProcess: aiResp.thoughtProcess 
+              });
+            } catch (ttsError) {
+              logger.log("API", `TTS error: ${ttsError.message}`);
+              response.send({ 
+                response: aiResp.response,
+                thoughtProcess: aiResp.thoughtProcess,
+                tts_error: "TTS failed but text response is available" 
+              });
+            }
+          } else {
+            response.send({ 
+              response: aiResp.response,
+              thoughtProcess: aiResp.thoughtProcess 
+            });
+          }
+          return response;
+        } else {
+          const summaryString = `On ${formattedDate} ${user} said in ${user === authObject.user_name
+            ? "their own"
+            : `${authObject.user_name}'s`
+            } Twitch chat: "${message}"`;
+          const contextString = `On ${formattedDate}, ${user} said in ${user === authObject.user_name
+            ? "their own"
+            : `${authObject.user_name}'s`
+            } chat: "${message}"`;
+          await aiHelper.addChatMessageAsVector(
+            summaryString,
+            message,
+            user,
+            formattedDate,
+            "None",
+            authObject.user_id,
+          );
+          logger.log("API", `Processing memory request.`);
+          response.send({ response: "OK" });
+          return response;
+        }
+      } else {
+        response.send({ response: "OK" });
+        return response;
       }
+    } else {
+      logger.log("API", `Known bot ${data.user}, ignoring.`);
+      response.send({ response: "OK" });
+      return response;
     }
-  } else {
-    logger.log("API", `Known bot ${data.user}, ignoring.`);
-    response.send({ response: "OK" });
+  } catch (error) {
+    logger.log("API", `Error in handleNonChatMessage: ${error.message}`);
+    response.code(500).send({ 
+      error: "Internal server error", 
+      message: error.message 
+    });
+    return response;
   }
 }
 

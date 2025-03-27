@@ -71,6 +71,15 @@ export async function sendToolCompletionRequest(requestBody, modelConfig) {
     
     // For JSON responses, make sure we have valid JSON
     if (requestBody.response_format?.type === "json_schema") {
+      // Check if the response is already an object
+      if (typeof fullResponse === 'object' && fullResponse !== null) {
+        return {
+          response: fullResponse,
+          rawResponse: JSON.stringify(fullResponse),
+          processingTime: totalTime.toFixed(3)
+        };
+      }
+      
       try {
         // Try parsing the JSON response
         const jsonResponse = JSON.parse(fullResponse);
@@ -118,7 +127,6 @@ export async function sendToolCompletionRequest(requestBody, modelConfig) {
     return { error: error.message };
   }
 }
-
 export async function sendChatCompletionRequest(requestBody, modelConfig, userObj) {
   const openai = new OpenAI({
     baseURL: modelConfig.endpoint,
@@ -181,16 +189,75 @@ export async function sendChatCompletionRequest(requestBody, modelConfig, userOb
       backendTokensPerSecond = (generatedTokens / backendTimeElapsed).toFixed(2);
     }
 
-    // Split the full response into thought process and final response (if applicable)
+    // Enhanced thought process extraction
     let thoughtProcess = "";
-    var finalResponse = fullResponse;
+    let finalResponse = "";
+
+    // Check for thought tags and determine pattern
     const startTag = "<think>";
     const endTag = "</think>";
-    const startIndex = fullResponse.indexOf(startTag);
-    const endIndex = fullResponse.indexOf(endTag);
-    if (startIndex !== -1 && endIndex !== -1 && endIndex > startIndex) {
-      thoughtProcess = fullResponse.substring(startIndex + startTag.length, endIndex).trim();
-      finalResponse = fullResponse.substring(endIndex + endTag.length).trim();
+    const startTagIndex = fullResponse.indexOf(startTag);
+    const endTagIndex = fullResponse.indexOf(endTag);
+
+    // Case 1: Standard format with both <think> and </think>
+    if (startTagIndex !== -1 && endTagIndex !== -1 && endTagIndex > startTagIndex) {
+      thoughtProcess = fullResponse.substring(startTagIndex + startTag.length, endTagIndex).trim();
+      finalResponse = fullResponse.substring(endTagIndex + endTag.length).trim();
+    }
+    // Case 2: Only </think> exists (no opening tag)
+    else if (startTagIndex === -1 && endTagIndex !== -1) {
+      thoughtProcess = fullResponse.substring(0, endTagIndex).trim();
+      finalResponse = fullResponse.substring(endTagIndex + endTag.length).trim();
+    }
+    // Case 3: Multiple thought segments or complex pattern
+    else if (fullResponse.includes("</think>")) {
+      // Initialize markers
+      let currentPos = 0;
+      let thoughts = [];
+      let lastEndTagPos = -1;
+      
+      // Iterate through finding all segments
+      while (true) {
+        const nextStartTag = fullResponse.indexOf(startTag, currentPos);
+        const nextEndTag = fullResponse.indexOf(endTag, currentPos);
+        
+        // No more tags found
+        if (nextEndTag === -1) break;
+        
+        // Found a new segment
+        lastEndTagPos = nextEndTag;
+        
+        // If we found a start tag and it comes before the end tag
+        if (nextStartTag !== -1 && nextStartTag < nextEndTag) {
+          thoughts.push(fullResponse.substring(nextStartTag + startTag.length, nextEndTag).trim());
+          currentPos = nextEndTag + endTag.length;
+        } 
+        // If we only found an end tag (or the end tag comes first)
+        else {
+          // If this is the first segment and there's no start tag, capture from beginning
+          if (thoughts.length === 0 && nextStartTag === -1) {
+            thoughts.push(fullResponse.substring(0, nextEndTag).trim());
+          } else {
+            // Otherwise capture from current position to end tag
+            thoughts.push(fullResponse.substring(currentPos, nextEndTag).trim());
+          }
+          currentPos = nextEndTag + endTag.length;
+        }
+      }
+      
+      // Combine all thought segments
+      thoughtProcess = thoughts.join("\n");
+      
+      // Final response is everything after the last </think>
+      if (lastEndTagPos !== -1) {
+        finalResponse = fullResponse.substring(lastEndTagPos + endTag.length).trim();
+      } else {
+        finalResponse = fullResponse; // Fallback to full response
+      }
+    } 
+    // Case 4: No think tags found
+    else {
+      finalResponse = fullResponse.trim();
     }
     
     return {
@@ -476,7 +543,7 @@ const contextPromptChat = async (promptData, message, userID) => {
     },
     
     // The actual user message
-    userMessage: `${promptData.chat_user} says: "message"`
+    userMessage: `${promptData.chat_user} says: "${message}"`
   };
 
   // Create the chat request body with our structured prompt data

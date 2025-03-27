@@ -12,6 +12,7 @@ import { join } from "path";
 import * as cheerio from 'cheerio';
 import { JSDOM } from "jsdom";
 import { retrieveConfigValue } from './config-helper.js'
+import { Models } from "openai/resources/models.mjs";
 
 const userAgentStrings = [
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.2227.0 Safari/537.36",
@@ -102,7 +103,7 @@ export async function resultsReranked(
           if (webResults.optedOut) {
             return "- No additional context available for this query.\n";
           }
-          logger.log("Embedding", `Web search failed: ${webResults.message}`);
+          logger.log("Search", `Web search failed: ${webResults.message}`);
           return "- Unable to find relevant information for this query.\n";
         }
         
@@ -163,6 +164,7 @@ export async function resultsReranked(
       model: await retrieveConfigValue("models.rerank.model"),
       query: rerankOptimized,
       documents: resultsRaw,
+      top_k: contextBody.length
     };
 
     logger.log("Embedding", `Starting rerank...`);
@@ -173,27 +175,28 @@ export async function resultsReranked(
           "Content-Type": "application/json",
           "Accept-Encoding": "gzip, deflate, br",
           Connection: "keep-alive",
+          Authorization: `Bearer ${await retrieveConfigValue("models.rerank.apiKey")}`
         },
-        timeout: 30000,
+        timeout: 10000,
       });
 
       logger.log("Embedding", `Rerank finished. Sorting results.`);
-      const rerankedArray = response.data.results;
+      const rerankedArray = response.data;
 
       // ADJUSTED RELEVANCE THRESHOLDS FOR LOGIT SCORES (-10 to 10 range)
-      const HIGH_RELEVANCE_THRESHOLD = 7.0;    // Very high relevance (was 0.7)
-      const ACCEPTABLE_THRESHOLD = 5.0;        // Good relevance (was 0.5)
-      const LOW_RELEVANCE_THRESHOLD = 2.0;     // Low but possibly useful (new)
+      const HIGH_RELEVANCE_THRESHOLD = 6.0;    // Very high relevance (was 0.7)
+      const ACCEPTABLE_THRESHOLD = 4.5;        // Good relevance (was 0.5)
+      const LOW_RELEVANCE_THRESHOLD = 1.4;     // Low but possibly useful (new)
       
       // Count documents in each relevance category
-      const highRelevanceCount = rerankedArray.filter(item => item.relevance_score >= HIGH_RELEVANCE_THRESHOLD).length;
-      const acceptableCount = rerankedArray.filter(item => item.relevance_score >= ACCEPTABLE_THRESHOLD).length;
-      const lowRelevanceCount = rerankedArray.filter(item => item.relevance_score < ACCEPTABLE_THRESHOLD).length;
+      const highRelevanceCount = rerankedArray.filter(item => item.score >= HIGH_RELEVANCE_THRESHOLD).length;
+      const acceptableCount = rerankedArray.filter(item => item.score >= ACCEPTABLE_THRESHOLD).length;
+      const lowRelevanceCount = rerankedArray.filter(item => item.score < ACCEPTABLE_THRESHOLD).length;
       
       // Calculate average relevance of top 5 results
       const avgTopRelevance = rerankedArray
         .slice(0, 5)
-        .reduce((sum, item) => sum + item.relevance_score, 0) / Math.min(5, rerankedArray.length);
+        .reduce((sum, item) => sum + item.score, 0) / Math.min(5, rerankedArray.length);
       
       logger.log("Embedding", `Relevance stats - High (>=${HIGH_RELEVANCE_THRESHOLD}): ${highRelevanceCount}, ` +
         `Acceptable (>=${ACCEPTABLE_THRESHOLD}): ${acceptableCount}, Low: ${lowRelevanceCount}, ` +
@@ -201,7 +204,7 @@ export async function resultsReranked(
       
       // Filter results based on the new acceptable threshold (5.0)
       let rerankProcessed = rerankedArray
-        .filter(item => item.relevance_score >= ACCEPTABLE_THRESHOLD)
+        .filter(item => item.score >= ACCEPTABLE_THRESHOLD)
         .map(item => resultsRaw[parseInt(item.index)]);
 
       // If we have less than 3 acceptable results, include some lower-scoring ones
@@ -210,7 +213,7 @@ export async function resultsReranked(
         
         // Get additional items that didn't meet the acceptable threshold, but still have some relevance
         const additionalItems = rerankedArray
-          .filter(item => item.relevance_score >= LOW_RELEVANCE_THRESHOLD && item.relevance_score < ACCEPTABLE_THRESHOLD)
+          .filter(item => item.score >= LOW_RELEVANCE_THRESHOLD && item.relevance_score < ACCEPTABLE_THRESHOLD)
           .map(item => resultsRaw[parseInt(item.index)]);
         
         // Add them to our processed results
@@ -491,7 +494,14 @@ export async function pullFromWebScraper(urls, subject) {
 
         const response = await axios.get(url.toString(), { timeout: 15000 });
         
-        if (!response.data || !response.data.textContent) {
+        // Check if the response has the expected structure
+        if (!response.data || typeof response.data !== 'object') {
+          logger.log("Augment", `Invalid response format for URL ${link.url}`);
+          return "";
+        }
+        
+        // Check for textContent property specifically
+        if (!response.data.textContent || typeof response.data.textContent !== 'string') {
           logger.log("Augment", `No text content found for URL ${link.url}`);
           return "";
         }
@@ -517,6 +527,7 @@ export async function pullFromWebScraper(urls, subject) {
     // Construct the final page content text
     let pageContentText = `# Start of documents related to the subject "${subject}"\n\n`;
     pageContentText += validContents.join("\n\n");
+    pageContentText += `\n\n# End of documents related to the subject "${subject}"`;
 
     return pageContentText;
   } catch (error) {
