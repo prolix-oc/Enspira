@@ -2025,6 +2025,51 @@ async function processFiles(directory, userId) {
 }
 
 /**
+ * Responds to a chat message from any source
+ * @param {object} messageData - The message data 
+ * @param {string} userId - The user ID
+ * @returns {Promise<object>} - The response
+ */
+export async function respondToChat(messageData, userId) {
+  try {
+    const { message, user } = messageData;
+    
+    // Format date for context
+    const formattedDate = new Date().toLocaleString();
+    
+    // Use existing response function
+    const response = await respondWithContext(message, user, userId);
+    
+    if (response && response.response) {
+      // Add the conversation to vector storage
+      const summaryString = `On ${formattedDate}, ${user} said: "${message}". You responded by saying: ${response.response}`;
+      
+      addChatMessageAsVector(
+        summaryString, 
+        message, 
+        user, 
+        formattedDate, 
+        response.response, 
+        userId
+      ).catch(err => {
+        logger.log("API", "Error saving chat message vector:", err);
+      });
+      
+      return {
+        success: true,
+        text: response.response,
+        thoughtProcess: response.thoughtProcess || null
+      };
+    }
+    
+    return { success: false, error: "No response generated" };
+  } catch (error) {
+    logger.log("AI", `Error responding to chat: ${error.message}`);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
  * Responds to a message with context retrieved from Milvus.
  * @param {string} message - The message to respond to.
  * @param {string} username - The username of the sender.

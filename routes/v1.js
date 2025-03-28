@@ -1357,66 +1357,57 @@ async function isPasswordCorrect(savedHash, savedSalt, savedIterations, password
 }
 
 async function handleChatMessage(data, authObject, message, user, formattedDate, response) {
-  // Check if the message is a command or a jailbreak attempt first…
+  // Check if the message is a command or a jailbreak attempt
   if (!(await twitchHelper.isCommandMatch(message, authObject.user_id))) {
     if (containsJailbreakAttempt(message)) {
-      logger.log("API", "Processing message as jailbreak attempt.");
+      // Handle jailbreak attempts as before
       const aiJBResp = await aiHelper.respondWithoutContext(
         `Creatively be mean towards ${data.user} for trying to stop you from doing your job and ruin ${authObject.user_name}'s stream.`,
         authObject.user_id
       );
-      response.send({ response: aiJBResp });
+      response.send({ response: aiJBResp.response });
     } else {
-      let finalResp;
       try {
-        if (data.firstMessage) {
-          finalResp = await aiHelper.respondToEvent(data, authObject.user_id);
-        } else {
-          finalResp = await aiHelper.respondWithContext(message, user, authObject.user_id);
-        }
-
-        logger.log("LLM", `Thought tokens: ${finalResp.thoughtProcess}`)
-        logger.log("LLM", `Response tokens: ${finalResp.response}`)
-
-        if (!finalResp.response) {
-          logger.log("API", "Received empty response from AI model, sending error response to client");
+        // Use the unified chat processing function
+        const messageData = {
+          message: message,
+          user: user
+        };
+        
+        const aiResponse = await aiHelper.respondToChat(messageData, authObject.user_id);
+        
+        if (!aiResponse || !aiResponse.text) {
           response.send({
             response: "I'm sorry, I encountered an issue processing your request. Please try again.",
             error: "Empty response from AI model"
           });
           return;
         }
-
-        // Check if response is too large
-        if (finalResp.response && finalResp.response.length > 1000000) { // 1MB threshold
-          logger.log("API", `Response size (${finalResp.length} bytes) exceeds safe limit, truncating`);
-          finalResp = finalResp.response.substring(0, 500000) + "\n[Response truncated due to excessive length]";
-        }
-
-        const summaryString = `On ${formattedDate}, ${user} said: "${message}". You responded by saying: ${finalResp.response}`;
-
-        // Optimization: Fire-and-forget vector saving instead of awaiting it.
-        aiHelper.addChatMessageAsVector(summaryString, message, user, formattedDate, finalResp.response, authObject.user_id)
-          .catch(err => logger.log("API", "Error saving chat message vector:", err));
-
-        logger.log("API", "Processing message as normal.");
-
+        
+        // Handle voice if needed
         if (data.withVoice) {
-          // Optionally, run TTS in parallel
           try {
             const audio_url = authObject.tts_enabled
-              ? await aiHelper.respondWithVoice(finalResp.response, authObject.user_id)
+              ? await aiHelper.respondWithVoice(aiResponse.text, authObject.user_id)
               : null;
-            response.send({ response: finalResp.response, audio_url, thoughts: finalResp.thoughtProcess });
-            return response;
+            response.send({ 
+              response: aiResponse.text, 
+              audio_url, 
+              thoughts: aiResponse.thoughtProcess 
+            });
           } catch (ttsError) {
             logger.log("API", `TTS error: ${ttsError.message}`);
-            response.send({ response: finalResp.response, thoughts: finalResp.thoughtProcess, tts_error: "TTS failed but text response is available" });
-            return response;
+            response.send({ 
+              response: aiResponse.text, 
+              thoughts: aiResponse.thoughtProcess, 
+              tts_error: "TTS failed but text response is available" 
+            });
           }
         } else {
-          response.send({ response: finalResp.response, thoughts: finalResp.thoughtProcess });
-          return response;
+          response.send({ 
+            response: aiResponse.text, 
+            thoughts: aiResponse.thoughtProcess 
+          });
         }
       } catch (error) {
         logger.log("API", `Error in AI response generation: ${error.message}`);
@@ -1424,12 +1415,10 @@ async function handleChatMessage(data, authObject, message, user, formattedDate,
           response: "I'm sorry, I encountered an error while processing your message.",
           error: error.message
         });
-        return response
       }
     }
   } else {
     response.send({ response: "OK" });
-    return response;
   }
 }
 

@@ -47,30 +47,108 @@ async function returnTwitchEvent(eventThing, userId) {
   }
 }
 
-async function addGameStatline(newStatLine, userID) {
-  const userObj = returnAuthObject(userID)
-  const chatContextPath = join(
-    process.cwd(),
-    `/world_info/${userID}/recent_games.txt`,
-  );
-
-  await fs.ensureFile(chatContextPath);
-
-  const currentLines = (await fs.readFile(chatContextPath, "utf-8"))
-    .split("\n")
-    .filter(Boolean);
-
-  currentLines.push("- " + newLine);
-
-  if (currentLines.length > userObj.max_chats) {
-    currentLines.shift();
+/**
+ * Processes command-driven events from chat
+ * @param {string} command - The command text 
+ * @param {string} userId - The user ID
+ * @returns {Promise<object>} - Event object if command is valid
+ */
+export async function processCommandEvent(command, userId) {
+  if (command.startsWith('!summary')) {
+    return {
+      eventType: 'summary',
+      eventData: {}
+    };
+  } else if (command.startsWith('!trivia')) {
+    return {
+      eventType: 'trivia',
+      eventData: {}
+    };
   }
 
-  await fs.writeFile(chatContextPath, currentLines.join("\n") + "\n");
+  return null;
 }
 
-async function changeCurrentlyPlayingGame(gameName, userID) {
-  await updateUserParameter(userID, "game_playing", gameName)
+/**
+ * Processes real-time chat messages from any source
+ * @param {object} chatEvent - The chat event data
+ * @param {string} userId - The user ID
+ * @returns {Promise<object>} - The processing result
+ */
+export async function processChatMessage(chatEvent, userId) {
+  try {
+    // Normalize the chat message
+    const normalizedChat = normalizeMessageFormat(chatEvent);
+    
+    // Get user data
+    const user = await returnAuthObject(userId);
+    
+    // Skip messages from ignored bots
+    const fromBot = await containsAuxBotName(normalizedChat.user, userId);
+    if (fromBot) return { success: true, ignored: true, reason: "bot_user" };
+    
+    // Check if message is a command
+    const isCommand = await isCommandMatch(normalizedChat.message, userId);
+    if (isCommand) return { success: true, ignored: true, reason: "command" };
+    
+    // Check if message mentions the character
+    const mentionsChar = await containsCharacterName(normalizedChat.message, userId);
+    
+    // Format date for context
+    const formattedDate = new Date().toLocaleString();
+    
+    // Process first messages or character mentions
+    if (normalizedChat.firstMessage || mentionsChar) {
+      // Add message to vector storage
+      const summaryString = `On ${formattedDate} ${normalizedChat.user} said in ${user.twitch_name}'s Twitch chat: "${normalizedChat.message}"`;
+      
+      // Store asynchronously
+      addChatMessageAsVector(
+        summaryString,
+        normalizedChat.message,
+        normalizedChat.user,
+        formattedDate,
+        "",
+        userId
+      ).catch(err => logger.error("Twitch", `Error storing chat vector: ${err.message}`));
+      
+      // Return data needed for response generation
+      return {
+        success: true,
+        processed: true,
+        mentioned: mentionsChar,
+        firstMessage: normalizedChat.firstMessage,
+        requiresResponse: mentionsChar || normalizedChat.firstMessage,
+        messageData: {
+          message: normalizedChat.message,
+          user: normalizedChat.user
+        }
+      };
+    }
+    
+    // For other messages, store if configured
+    if (user.store_all_chat) {
+      const summaryString = `On ${formattedDate} ${normalizedChat.user} said in ${user.twitch_name}'s Twitch chat: "${normalizedChat.message}"`;
+      
+      addChatMessageAsVector(
+        summaryString,
+        normalizedChat.message,
+        normalizedChat.user,
+        formattedDate,
+        "",
+        userId
+      ).catch(err => logger.error("Twitch", `Error storing regular chat: ${err.message}`));
+    }
+    
+    return {
+      success: true,
+      processed: false,
+      requiresResponse: false
+    };
+  } catch (error) {
+    logger.error("Twitch", `Error processing chat: ${error.message}`);
+    return { success: false, error: error.message };
+  }
 }
 
 /**
@@ -110,6 +188,43 @@ async function readEventMessages(playerId) {
     logger.log("Files", `Error reading event messages for player ${playerId}: ${error}`);
     return {};
   }
+}
+
+/**
+ * Normalizes chat messages from various sources into a standard format
+ * @param {object} messageData - Raw message from EventSub or API
+ * @returns {object} - Standardized chat object
+ */
+export function normalizeMessageFormat(messageData) {
+  // From EventSub webhook
+  if (messageData.chatter && messageData.message && messageData.message.text) {
+    return {
+      user: messageData.chatter.user_name,
+      userId: messageData.chatter.user_id,
+      message: messageData.message.text,
+      firstMessage: messageData.message.is_first || false,
+      badges: messageData.chatter.badges?.map(badge => badge.set_id) || [],
+      emotes: messageData.message.fragments
+        ?.filter(f => f.type === 'emote')
+        .map(e => ({ id: e.id, code: e.text })) || [],
+      emoteCount: messageData.message.fragments?.filter(f => f.type === 'emote').length || 0,
+      color: messageData.color,
+      source: 'eventsub'
+    };
+  }
+  
+  // From Enspira API
+  return {
+    user: messageData.user,
+    userId: messageData.userId || null,
+    message: messageData.message,
+    firstMessage: messageData.firstMessage || false,
+    badges: messageData.badges || [],
+    emotes: messageData.emotes || [],
+    emoteCount: messageData.emoteCount || 0,
+    color: messageData.color || null,
+    source: 'api'
+  };
 }
 
 /**

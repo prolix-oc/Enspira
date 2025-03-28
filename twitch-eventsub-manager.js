@@ -6,6 +6,216 @@ import { logger } from './create-global-logger.js';
 import { refreshTwitchToken } from './routes/v1.js';
 import cron from "node-cron";
 
+class TwitchAPIManager {
+    constructor() {
+        // Rate limit buckets - track API call counts
+        this.buckets = {
+            helix: { // Core API 
+                points: 800,
+                remaining: 800,
+                resetAt: Date.now() + 60000,
+                perMinute: 800
+            },
+            auth: { // Auth API
+                points: 120,
+                remaining: 120,
+                resetAt: Date.now() + 60000,
+                perMinute: 120
+            }
+        };
+
+        // Track per-endpoint usage
+        this.endpointCounts = new Map();
+
+        // Default retry settings
+        this.defaultRetryConfig = {
+            maxRetries: 3,
+            initialDelay: 500,
+            maxDelay: 10000,
+            factor: 2,
+            jitter: true
+        };
+    }
+
+    /**
+     * Make a rate-limited API call with automatic retries
+     * @param {Object} config - Axios config object
+     * @param {String} bucketType - API type ('helix' or 'auth')
+     * @param {Object} retryOptions - Custom retry options
+     * @returns {Promise<Object>} - API response
+     */
+    async makeRequest(config, bucketType = 'helix', retryOptions = {}) {
+        // Track this endpoint
+        const endpoint = this.getEndpointFromUrl(config.url);
+        this.trackEndpointUsage(endpoint);
+
+        // Merge retry options
+        const retryConfig = { ...this.defaultRetryConfig, ...retryOptions };
+
+        // Check rate limits before proceeding
+        await this.checkRateLimits(bucketType);
+
+        // Try the request with retries
+        let lastError;
+        let delay = retryConfig.initialDelay;
+
+        for (let attempt = 0; attempt < retryConfig.maxRetries; attempt++) {
+            try {
+                const response = await axios(config);
+
+                // Update rate limit info from headers
+                this.updateRateLimits(bucketType, response.headers);
+
+                return response;
+            } catch (error) {
+                lastError = error;
+
+                // Check if error is due to rate limiting
+                if (error.response?.status === 429) {
+                    // Get retry-after header or use exponential backoff
+                    const retryAfter = parseInt(error.response.headers['retry-after'] || '0') * 1000;
+                    delay = Math.max(retryAfter, this.calculateBackoff(attempt, retryConfig));
+
+                    logger.warn("Twitch", `Rate limited on ${endpoint}. Retrying in ${delay}ms`);
+
+                    // Update our rate limit tracking
+                    this.buckets[bucketType].remaining = 0;
+                    this.buckets[bucketType].resetAt = Date.now() + retryAfter || delay;
+                } else if (this.isRetryableError(error)) {
+                    // For other retryable errors, use exponential backoff
+                    delay = this.calculateBackoff(attempt, retryConfig);
+                    logger.warn("Twitch", `Retryable error on ${endpoint}: ${error.message}. Retry ${attempt + 1}/${retryConfig.maxRetries} in ${delay}ms`);
+                } else {
+                    // Non-retryable error
+                    throw error;
+                }
+
+                // Wait before retry
+                await new Promise(resolve => setTimeout(resolve, delay));
+            }
+        }
+
+        // If we've exhausted retries, throw the last error
+        throw lastError;
+    }
+
+    /**
+     * Calculate backoff delay with jitter
+     */
+    calculateBackoff(attempt, config) {
+        const baseDelay = config.initialDelay * Math.pow(config.factor, attempt);
+        const maxDelay = config.maxDelay;
+
+        // Apply jitter if enabled (helps distribute retries)
+        if (config.jitter) {
+            return Math.min(maxDelay, Math.random() * baseDelay);
+        }
+
+        return Math.min(maxDelay, baseDelay);
+    }
+
+    /**
+     * Check if we should attempt to retry this error
+     */
+    isRetryableError(error) {
+        // Network errors
+        if (error.code === 'ECONNRESET' || error.code === 'ETIMEDOUT' || error.code === 'ECONNABORTED') {
+            return true;
+        }
+
+        // Server errors (5xx)
+        if (error.response && error.response.status >= 500) {
+            return true;
+        }
+
+        // Rate limiting (429)
+        if (error.response && error.response.status === 429) {
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Update rate limit info from response headers
+     */
+    updateRateLimits(bucketType, headers) {
+        if (!headers) return;
+
+        const remaining = headers['ratelimit-remaining'];
+        const reset = headers['ratelimit-reset'];
+        const limit = headers['ratelimit-limit'];
+
+        if (remaining) this.buckets[bucketType].remaining = parseInt(remaining);
+        if (limit) this.buckets[bucketType].points = parseInt(limit);
+        if (reset) this.buckets[bucketType].resetAt = parseInt(reset) * 1000; // Convert to ms
+    }
+
+    /**
+     * Wait if we're close to hitting rate limits
+     */
+    async checkRateLimits(bucketType) {
+        const bucket = this.buckets[bucketType];
+        const now = Date.now();
+
+        // Reset bucket if time has passed
+        if (now > bucket.resetAt) {
+            bucket.remaining = bucket.points;
+            bucket.resetAt = now + 60000; // Default 1 minute
+            return;
+        }
+
+        // If close to limit (less than 10% remaining), delay the request
+        if (bucket.remaining < bucket.points * 0.1) {
+            const timeToReset = Math.max(0, bucket.resetAt - now);
+            logger.warn("Twitch", `Approaching rate limit for ${bucketType}, delaying request by ${timeToReset}ms`);
+
+            // Sleep until rate limit resets
+            await new Promise(resolve => setTimeout(resolve, timeToReset));
+
+            // Reset the bucket
+            bucket.remaining = bucket.points;
+            bucket.resetAt = now + 60000;
+        }
+
+        // Decrement remaining points
+        bucket.remaining--;
+    }
+
+    /**
+     * Extract endpoint from URL for tracking
+     */
+    getEndpointFromUrl(url) {
+        try {
+            const parsedUrl = new URL(url);
+            const path = parsedUrl.pathname;
+            // Get first two path segments
+            const segments = path.split('/').filter(s => s);
+            return segments.slice(0, 2).join('/');
+        } catch (e) {
+            return url;
+        }
+    }
+
+    /**
+     * Track usage per endpoint for analytics
+     */
+    trackEndpointUsage(endpoint) {
+        const count = this.endpointCounts.get(endpoint) || 0;
+        this.endpointCounts.set(endpoint, count + 1);
+    }
+
+    /**
+     * Get usage statistics
+     */
+    getUsageStats() {
+        return {
+            buckets: this.buckets,
+            endpoints: Object.fromEntries(this.endpointCounts)
+        };
+    }
+}
+
 // EventSub subscription definitions with accurate condition requirements
 const SUBSCRIPTION_TYPES = [
     // Version 1 endpoints - Standard events
@@ -286,6 +496,14 @@ export async function registerAllUsersEventSub() {
         logger.error("Twitch", `Error in registerAllUsersEventSub: ${error.message}`);
         throw error;
     }
+}
+
+// Create singleton instance
+const twitchAPI = new TwitchAPIManager();
+
+// Export a wrapper function for all Twitch API calls
+export async function callTwitchAPI(config, bucketType = 'helix', retryOptions = {}) {
+    return twitchAPI.makeRequest(config, bucketType, retryOptions);
 }
 
 /**
@@ -1464,6 +1682,127 @@ export async function processEventSubNotification(eventType, eventData, userId, 
 }
 
 /**
+ * Enriches EventSub data with additional broadcaster information
+ * @param {string} eventType - The type of event
+ * @param {object} eventData - The basic EventSub data
+ * @param {string} userId - Enspira user ID
+ * @returns {Promise<object>} - Enriched event data
+ */
+export async function enrichEventData(eventType, eventData, userId) {
+    try {
+        // Get app access token for API calls
+        const appToken = await getAppAccessToken();
+        const user = await returnAuthObject(userId);
+
+        // Determine which broadcaster ID we need to fetch data for
+        let targetId;
+        if (eventType === 'channel.raid') {
+            targetId = eventData.from_broadcaster_user_id;
+        } else if (eventType === 'channel.shoutout.create') {
+            targetId = eventData.to_broadcaster_user_id;
+        } else {
+            return eventData; // No enrichment needed
+        }
+
+        // Prepare API call configurations
+        const channelConfig = {
+            method: 'get',
+            url: `https://api.twitch.tv/helix/channels?broadcaster_id=${targetId}`,
+            headers: {
+                'Client-ID': await retrieveConfigValue("twitch.clientId"),
+                'Authorization': `Bearer ${appToken}`
+            }
+        };
+
+        const streamConfig = {
+            method: 'get',
+            url: `https://api.twitch.tv/helix/streams?user_id=${targetId}`,
+            headers: {
+                'Client-ID': await retrieveConfigValue("twitch.clientId"),
+                'Authorization': `Bearer ${appToken}`
+            }
+        };
+
+        const userConfig = {
+            method: 'get',
+            url: `https://api.twitch.tv/helix/users?id=${targetId}`,
+            headers: {
+                'Client-ID': await retrieveConfigValue("twitch.clientId"),
+                'Authorization': `Bearer ${appToken}`
+            }
+        };
+
+        const followConfig = {
+            method: 'get',
+            url: `https://api.twitch.tv/helix/channels/followers?broadcaster_id=${user.twitch_tokens?.streamer?.twitch_user_id}&user_id=${targetId}`,
+            headers: {
+                'Client-ID': await retrieveConfigValue("twitch.clientId"),
+                'Authorization': `Bearer ${appToken}`
+            }
+        };
+
+        // Execute API calls in parallel with rate limiting
+        const [channelInfo, streamInfo, userData, followData] = await Promise.all([
+            callTwitchAPI(channelConfig),
+            callTwitchAPI(streamConfig),
+            callTwitchAPI(userConfig),
+            callTwitchAPI(followConfig).catch(e => ({ data: { total: 0 } }))
+        ]);
+
+        // Check for affiliate/partner status (based on badges)
+        if (userData.data.data[0]?.broadcaster_type === 'affiliate') {
+            enriched.isAffiliate = true;
+            enriched.isPartner = false;
+        } else if (userData.data.data[0]?.broadcaster_type === 'partner') {
+            enriched.isAffiliate = false;
+            enriched.isPartner = true;
+        } else {
+            enriched.isAffiliate = false;
+            enriched.isPartner = false;
+        }
+
+        // Check if target is subbed or is a mod (requires specific API calls with user tokens)
+        if (user.twitch_tokens?.streamer?.access_token) {
+            try {
+                // Check if target is a moderator
+                const modResponse = await axios.get(
+                    `https://api.twitch.tv/helix/moderation/moderators?broadcaster_id=${user.twitch_tokens.streamer.twitch_user_id}&user_id=${targetId}`,
+                    {
+                        headers: {
+                            'Client-ID': await retrieveConfigValue("twitch.clientId"),
+                            'Authorization': `Bearer ${user.twitch_tokens.streamer.access_token}`
+                        }
+                    }
+                );
+
+                enriched.isMod = modResponse.data.data.length > 0;
+
+                // Check subscription status (if the shoutout target is subscribed to the streamer)
+                const subResponse = await axios.get(
+                    `https://api.twitch.tv/helix/subscriptions?broadcaster_id=${user.twitch_tokens.streamer.twitch_user_id}&user_id=${targetId}`,
+                    {
+                        headers: {
+                            'Client-ID': await retrieveConfigValue("twitch.clientId"),
+                            'Authorization': `Bearer ${user.twitch_tokens.streamer.access_token}`
+                        }
+                    }
+                ).catch(e => ({ data: { data: [] } }));
+
+                enriched.isSubbed = subResponse.data.data.length > 0;
+            } catch (error) {
+                enriched.isMod = false;
+                enriched.isSubbed = false;
+            }
+        }
+
+        return enriched;
+    } catch (error) {
+        logger.error("Twitch", `Error enriching data: ${error.message}`);
+        return {}; // Return empty object on error
+    }
+}
+
+/**
  * Convert EventSub format to our internal format used by the AI
  * @param {string} eventType - The EventSub event type
  * @param {object} eventData - The event data from Twitch
@@ -1625,6 +1964,69 @@ function mapEventSubToInternalFormat(eventType, eventData, version = '1') {
             mappedEvent.eventData = {
                 endTime: new Date().toISOString() // EventSub doesn't provide this, so use current time
             };
+            break;
+        case 'channel.raid':
+            mappedEvent.eventType = 'raid';
+            mappedEvent.eventData = {
+                username: eventData.from_broadcaster_user_name || '',
+                viewers: eventData.viewers || 0,
+                accountAge: 'Unknown', // Will need separate API call
+                isFollowing: false,    // Will need separate API call
+                lastGame: 'Unknown',   // Will need separate API call
+            };
+            break;
+
+        case 'channel.charity_campaign.donate':
+            mappedEvent.eventType = 'dono';
+            mappedEvent.eventData = {
+                donoType: 'charity',
+                donoFrom: eventData.user_name || 'Anonymous',
+                donoAmt: eventData.amount.value || 0,
+                forCharity: eventData.charity_name || 'Unknown Charity',
+                donoMessage: eventData.message || ''
+            };
+            break;
+
+        case 'channel.channel_points_custom_reward_redemption.add':
+            mappedEvent.eventType = 'reward';
+            mappedEvent.eventData = {
+                username: eventData.user_name || '',
+                rewardTitle: eventData.reward.title || 'Unknown Reward',
+                rewardCost: eventData.reward.cost || 0,
+                userInput: eventData.user_input || ''
+            };
+            break;
+
+        case 'channel.commercial.begin':
+            mappedEvent.eventType = 'ad';
+            mappedEvent.eventData = {
+                minutesLeft: eventData.duration / 60 || 0,
+            };
+            break;
+
+        case 'channel.shoutout.create':
+            mappedEvent.eventType = 'shoutout';
+            mappedEvent.eventData = {
+                user: eventData.to_broadcaster_user_name || '',
+                user_id: eventData.to_broadcaster_user_id || '',
+                accountAge: 'Unknown', // Requires separate API call
+                game: 'Unknown',       // Requires separate API call
+                lastActive: 'Unknown', // Requires separate API call
+                streamTitle: 'Unknown', // Requires separate API call
+                isMod: false,
+                isAffiliate: false,
+                isPartner: false,
+                isSubbed: false
+            };
+            break;
+
+        case 'channel.chat.notification':
+            // For summary and trivia events that come through chat
+            if (eventData.message.text && eventData.message.text.startsWith('!summary')) {
+                mappedEvent.eventType = 'summary';
+            } else if (eventData.message.text && eventData.message.text.startsWith('!trivia')) {
+                mappedEvent.eventType = 'trivia';
+            }
             break;
 
         default:

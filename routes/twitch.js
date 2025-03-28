@@ -318,325 +318,344 @@ async function twitchEventSubRoutes(fastify, options) {
             return reply.code(500).send({ error: error.message });
         }
     });
+}
 
-    // Helper functions for processing events
-    async function processEvent(notification, userId) {
+// Helper functions for processing events
+async function processEvent(notification, userId) {
+    try {
         const eventType = notification.subscription.type;
+        const eventVersion = notification.subscription.version || '1';
         const event = notification.event;
 
-        logger.log("Twitch", `Processing ${eventType} event for user ${userId}`);
+        // Log the event
+        logger.log("Twitch", `Processing ${eventType} (v${eventVersion}) event for user ${userId}`);
 
-        // Store the event data based on type
+        // Import the event processor from the manager
+        const { enrichEventData } = await import('../twitch-eventsub-manager.js');
+
+        // Map the event to our internal format
+        const mappedEvent = mapEventSubToInternalFormat(eventType, event, eventVersion);
+
+        // For events needing enrichment, add the extra data
+        if (eventType === 'channel.raid' || eventType === 'channel.shoutout.create') {
+            const enrichedData = await enrichEventData(eventType, event, userId);
+
+            // Merge the enriched data with the mapped event
+            mappedEvent.eventData = {
+                ...mappedEvent.eventData,
+                ...enrichedData
+            };
+        }
+
+        // Process based on the mapped event type
+        if (eventType === 'channel.chat.message') {
+            // Handle chat with our unified function
+            const { processChatMessage } = await import('../twitch-helper.js');
+            const chatResult = await processChatMessage(event, userId);
+
+            // If the message requires a response, generate and send it
+            if (chatResult.requiresResponse) {
+                const { respondToChat } = await import('../ai-logic.js');
+                const responseResult = await respondToChat(chatResult.messageData, userId);
+
+                // If we have a response and a bot account, send to chat
+                if (responseResult && responseResult.text) {
+                    const { sendChatMessage } = await import('../twitch-eventsub-manager.js');
+                    await sendChatMessage(responseResult.text, userId);
+                }
+            }
+        } else {
+            // For other events, use the existing AI response system
+            const { respondToEvent } = await import('./ai-logic.js');
+            await respondToEvent(mappedEvent, userId);
+        }
+
+        // Continue with specific event handling for database updates
         switch (eventType) {
             case 'channel.update':
-                // Handle game/title updates
                 await handleChannelUpdate(event, userId);
                 break;
-
-            case 'channel.follow':
-                // Handle new follower
-                await handleChannelFollow(event, userId);
-                break;
-
-            case 'channel.subscribe':
-            case 'channel.subscription.gift':
-            case 'channel.subscription.message':
-                // Handle subscription events
-                await handleSubscriptionEvent(eventType, event, userId);
-                break;
-
-            case 'channel.hype_train.begin':
-            case 'channel.hype_train.progress':
-            case 'channel.hype_train.end':
-                // Handle hype train events
-                await handleHypeTrainEvent(eventType, event, userId);
-                break;
-
-            case 'channel.cheer':
-                // Handle bits donation
-                await handleCheerEvent(event, userId);
-                break;
-
             case 'stream.online':
             case 'stream.offline':
-                // Handle stream state changes
                 await handleStreamStateChange(eventType, event, userId);
                 break;
-
-            default:
-                logger.log("Twitch", `Unhandled event type: ${eventType}`);
+            // Other handlers as needed
         }
+
+        // Store event data for analytics
+        await storeEventData(eventType, event, userId, eventVersion);
+        
+        const { processEventSubNotification } = await import('../twitch-eventsub-manager.js');
+        await processEventSubNotification(eventType, event, userId, eventVersion, mappedEvent);
+    } catch (error) {
+        logger.error("Twitch", `Error processing event: ${error.message}`);
+    }
+}
+
+// Implementation of specific event handlers
+async function handleChannelUpdate(event, userId) {
+    // Extract game name and title
+    const { title, category_name, category_id } = event;
+
+    // Update user's current game info
+    await updateUserParameter(userId, "current_game", {
+        title,
+        game: category_name,
+        game_id: category_id,
+        updated_at: new Date().toISOString()
+    });
+
+    logger.log("Twitch", `Updated game info for ${userId}: ${category_name}`);
+}
+
+async function handleChannelFollow(event, userId) {
+    // Process follow event
+    const followEvent = {
+        eventType: 'follow',
+        eventData: {
+            username: event.user_name,
+            user_id: event.user_id,
+            followed_at: event.followed_at
+        }
+    };
+    logger.log("Twitch", `New follower for ${userId}: ${event.user_name}`);
+}
+
+async function handleSubscriptionEvent(eventType, event, userId) {
+    // Map the EventSub event to your existing system's format
+    let subEvent = {
+        eventType: 'sub',
+        eventData: {
+            user: event.user_name,
+            user_id: event.user_id
+        }
+    };
+
+    // Different handling based on sub event type
+    switch (eventType) {
+        case 'channel.subscribe':
+            subEvent.eventData.subType = 'sub';
+            subEvent.eventData.subTier = mapTwitchTier(event.tier);
+            subEvent.eventData.isGift = event.is_gift || false;
+            break;
+
+        case 'channel.subscription.gift':
+            subEvent.eventData.subType = 'gift_sub';
+            subEvent.eventData.subTier = mapTwitchTier(event.tier);
+            subEvent.eventData.total = event.total;
+            subEvent.eventData.recipientUserName = event.recipient_user_name;
+            subEvent.eventData.anonymous = event.is_anonymous || false;
+            break;
+
+        case 'channel.subscription.message':
+            subEvent.eventData.subType = 'resub';
+            subEvent.eventData.subTier = mapTwitchTier(event.tier);
+            subEvent.eventData.streak = event.streak_months;
+            subEvent.eventData.tenure = event.cumulative_months;
+            subEvent.eventData.sharedChat = event.message.text;
+            break;
     }
 
-    // Implementation of specific event handlers
-    async function handleChannelUpdate(event, userId) {
-        // Extract game name and title
-        const { title, category_name, category_id } = event;
+    logger.log("Twitch", `Subscription event for ${userId}: ${eventType}`);
 
-        // Update user's current game info
-        await updateUserParameter(userId, "current_game", {
-            title,
-            game: category_name,
-            game_id: category_id,
-            updated_at: new Date().toISOString()
+    // Forward to your existing event system
+    // This would connect to your event processing logic
+}
+
+// Helper function to map Twitch tier format to your system's format
+function mapTwitchTier(tier) {
+    switch (tier) {
+        case '1000': return 'tier 1';
+        case '2000': return 'tier 2';
+        case '3000': return 'tier 3';
+        default: return 'prime';
+    }
+}
+
+async function handleHypeTrainEvent(eventType, event, userId) {
+    // Extract event suffix from full event type
+    const eventSuffix = eventType.split('.').pop();
+
+    // Create event object in your system's format
+    const hypeEvent = {
+        eventType: `hype_${eventSuffix}`,
+        eventData: {
+            level: event.level,
+            total: event.total,
+            progress: event.progress,
+            goal: event.goal,
+            started_at: event.started_at,
+            expires_at: event.expires_at,
+            percent: event.progress / event.goal,
+            contributors: event.total_users,
+            topBitsUser: event.top_contributions?.[0]?.user_name || "Unknown",
+            topBitsAmt: event.top_contributions?.[0]?.total || 0,
+            topSubUser: event.top_contributions?.[1]?.user_name || "Unknown",
+            topSubTotal: event.top_contributions?.[1]?.total || 0
+        }
+    };
+
+    logger.log("Twitch", `Hype train ${eventSuffix} for ${userId}`);
+
+    // Forward to your event processing system
+}
+
+async function handleCheerEvent(event, userId) {
+    // Create event object in your system's format
+    const cheerEvent = {
+        eventType: 'dono',
+        eventData: {
+            donoType: 'bits',
+            donoFrom: event.is_anonymous ? 'Anonymous' : event.user_name,
+            donoAmt: event.bits,
+            donoMessage: event.message
+        }
+    };
+
+    logger.log("Twitch", `Bits donation for ${userId}: ${event.bits} from ${cheerEvent.eventData.donoFrom}`);
+
+    // Forward to your event processing system
+}
+
+async function handleStreamStateChange(eventType, event, userId) {
+    const isOnline = eventType === 'stream.online';
+
+    // Update user's stream status
+    await updateUserParameter(userId, "stream_status", {
+        online: isOnline,
+        started_at: isOnline ? event.started_at : null,
+        type: isOnline ? event.type : null,
+        viewer_count: 0, // This will need to be updated separately via the API
+        updated_at: new Date().toISOString()
+    });
+
+    logger.log("Twitch", `Stream ${isOnline ? 'started' : 'ended'} for ${userId}`);
+}
+
+// Function to subscribe to EventSub events
+async function subscribeToEvent(userId, type, condition = {}) {
+    try {
+        const user = await returnAuthObject(userId);
+
+        if (!user) {
+            throw new Error('User not found');
+        }
+
+        // Generate a new secret if one doesn't exist
+        if (!user.twitch_tokens?.streamer?.webhook_secret) {
+            const newSecret = crypto.randomBytes(32).toString('hex');
+
+            // Ensure the path exists
+            await ensureParameterPath(userId, "twitch_tokens.streamer");
+
+            // Save the new secret
+            await updateUserParameter(userId, "twitch_tokens.streamer.webhook_secret", newSecret);
+        }
+
+        // Default condition uses the broadcaster's ID
+        if (Object.keys(condition).length === 0) {
+            if (!user.twitch_tokens?.streamer?.twitch_user_id) {
+                throw new Error('No broadcaster user ID available');
+            }
+            condition = { broadcaster_user_id: user.twitch_tokens.streamer.twitch_user_id };
+        }
+
+        // Import needed functions
+        const { getAppAccessToken } = await import('../twitch-eventsub-manager.js');
+        const appToken = await getAppAccessToken();
+
+        // Prepare the subscription payload
+        const callbackUrl = `${await retrieveConfigValue("server.endpoints.external")}/api/v1/twitch/eventsub/${userId}`;
+
+        // Get fresh user data to ensure we have the webhook secret
+        const freshUser = await returnAuthObject(userId);
+
+        const subscriptionBody = {
+            type,
+            version: '1',
+            condition,
+            transport: {
+                method: 'webhook',
+                callback: callbackUrl,
+                secret: freshUser.twitch_tokens.streamer.webhook_secret
+            }
+        };
+
+        // Make the API request to create the subscription
+        const axios = (await import('axios')).default;
+        const response = await axios.post(
+            'https://api.twitch.tv/helix/eventsub/subscriptions',
+            subscriptionBody,
+            {
+                headers: {
+                    'Client-ID': await retrieveConfigValue("twitch.clientId"),
+                    'Authorization': `Bearer ${appToken}`, // Use app token here
+                    'Content-Type': 'application/json'
+                }
+            }
+        );
+
+        // Save subscription ID in user's data
+        const subscriptionId = response.data.data[0].id;
+
+        // Update user's subscriptions list
+        const subscriptions = freshUser.twitch_tokens.streamer.subscriptions || [];
+        subscriptions.push({
+            id: subscriptionId,
+            type,
+            created_at: new Date().toISOString()
         });
 
-        logger.log("Twitch", `Updated game info for ${userId}: ${category_name}`);
-    }
+        await updateUserParameter(userId, "twitch_tokens.streamer.subscriptions", subscriptions);
 
-    async function handleChannelFollow(event, userId) {
-        // Process follow event
-        const followEvent = {
-            eventType: 'follow',
-            eventData: {
-                username: event.user_name,
-                user_id: event.user_id,
-                followed_at: event.followed_at
-            }
+        logger.log("Twitch", `Created EventSub subscription for ${userId}: ${type}`);
+
+        return {
+            success: true,
+            subscription: response.data.data[0]
         };
 
-        // Your existing twitch event processing code
-        // This would connect to your existing system for handling Twitch events
-
-        logger.log("Twitch", `New follower for ${userId}: ${event.user_name}`);
+    } catch (error) {
+        logger.error("Twitch", `Failed to create subscription: ${error.message}`);
+        throw error;
     }
+}
 
-    async function handleSubscriptionEvent(eventType, event, userId) {
-        // Map the EventSub event to your existing system's format
-        let subEvent = {
-            eventType: 'sub',
-            eventData: {
-                user: event.user_name,
-                user_id: event.user_id
-            }
-        };
+// Handle EventSub revocation
+async function handleEventSubRevocation(notification, userId) {
+    try {
+        const subscriptionId = notification.subscription.id;
 
-        // Different handling based on sub event type
-        switch (eventType) {
-            case 'channel.subscribe':
-                subEvent.eventData.subType = 'sub';
-                subEvent.eventData.subTier = mapTwitchTier(event.tier);
-                subEvent.eventData.isGift = event.is_gift || false;
-                break;
-
-            case 'channel.subscription.gift':
-                subEvent.eventData.subType = 'gift_sub';
-                subEvent.eventData.subTier = mapTwitchTier(event.tier);
-                subEvent.eventData.total = event.total;
-                subEvent.eventData.recipientUserName = event.recipient_user_name;
-                subEvent.eventData.anonymous = event.is_anonymous || false;
-                break;
-
-            case 'channel.subscription.message':
-                subEvent.eventData.subType = 'resub';
-                subEvent.eventData.subTier = mapTwitchTier(event.tier);
-                subEvent.eventData.streak = event.streak_months;
-                subEvent.eventData.tenure = event.cumulative_months;
-                subEvent.eventData.sharedChat = event.message.text;
-                break;
+        if (!userId || !subscriptionId) {
+            logger.error("Twitch", "Missing userId or subscriptionId for revocation");
+            return;
         }
 
-        logger.log("Twitch", `Subscription event for ${userId}: ${eventType}`);
+        const user = await returnAuthObject(userId);
 
-        // Forward to your existing event system
-        // This would connect to your event processing logic
-    }
-
-    // Helper function to map Twitch tier format to your system's format
-    function mapTwitchTier(tier) {
-        switch (tier) {
-            case '1000': return 'tier 1';
-            case '2000': return 'tier 2';
-            case '3000': return 'tier 3';
-            default: return 'prime';
+        if (!user || !user.twitch_tokens?.streamer?.subscriptions) {
+            logger.error("Twitch", `No subscriptions found for user ${userId}`);
+            return;
         }
-    }
 
-    async function handleHypeTrainEvent(eventType, event, userId) {
-        // Extract event suffix from full event type
-        const eventSuffix = eventType.split('.').pop();
+        // Filter out the revoked subscription
+        const subscriptions = user.twitch_tokens.streamer.subscriptions.filter(
+            sub => sub.id !== subscriptionId
+        );
 
-        // Create event object in your system's format
-        const hypeEvent = {
-            eventType: `hype_${eventSuffix}`,
-            eventData: {
-                level: event.level,
-                total: event.total,
-                progress: event.progress,
-                goal: event.goal,
-                started_at: event.started_at,
-                expires_at: event.expires_at,
-                percent: event.progress / event.goal,
-                contributors: event.total_users,
-                topBitsUser: event.top_contributions?.[0]?.user_name || "Unknown",
-                topBitsAmt: event.top_contributions?.[0]?.total || 0,
-                topSubUser: event.top_contributions?.[1]?.user_name || "Unknown",
-                topSubTotal: event.top_contributions?.[1]?.total || 0
-            }
-        };
+        // Update the subscriptions list
+        await updateUserParameter(userId, "twitch_tokens.streamer.subscriptions", subscriptions);
 
-        logger.log("Twitch", `Hype train ${eventSuffix} for ${userId}`);
-
-        // Forward to your event processing system
-    }
-
-    async function handleCheerEvent(event, userId) {
-        // Create event object in your system's format
-        const cheerEvent = {
-            eventType: 'dono',
-            eventData: {
-                donoType: 'bits',
-                donoFrom: event.is_anonymous ? 'Anonymous' : event.user_name,
-                donoAmt: event.bits,
-                donoMessage: event.message
-            }
-        };
-
-        logger.log("Twitch", `Bits donation for ${userId}: ${event.bits} from ${cheerEvent.eventData.donoFrom}`);
-
-        // Forward to your event processing system
-    }
-
-    async function handleStreamStateChange(eventType, event, userId) {
-        const isOnline = eventType === 'stream.online';
-
-        // Update user's stream status
-        await updateUserParameter(userId, "stream_status", {
-            online: isOnline,
-            started_at: isOnline ? event.started_at : null,
-            type: isOnline ? event.type : null,
-            viewer_count: 0, // This will need to be updated separately via the API
-            updated_at: new Date().toISOString()
-        });
-
-        logger.log("Twitch", `Stream ${isOnline ? 'started' : 'ended'} for ${userId}`);
-    }
-
-    // Function to subscribe to EventSub events
-    async function subscribeToEvent(userId, type, condition = {}) {
-        try {
-            const user = await returnAuthObject(userId);
-
-            if (!user) {
-                throw new Error('User not found');
-            }
-
-            // Generate a new secret if one doesn't exist
-            if (!user.twitch_tokens?.streamer?.webhook_secret) {
-                const newSecret = crypto.randomBytes(32).toString('hex');
-
-                // Ensure the path exists
-                await ensureParameterPath(userId, "twitch_tokens.streamer");
-
-                // Save the new secret
-                await updateUserParameter(userId, "twitch_tokens.streamer.webhook_secret", newSecret);
-            }
-
-            // Default condition uses the broadcaster's ID
-            if (Object.keys(condition).length === 0) {
-                if (!user.twitch_tokens?.streamer?.twitch_user_id) {
-                    throw new Error('No broadcaster user ID available');
-                }
-                condition = { broadcaster_user_id: user.twitch_tokens.streamer.twitch_user_id };
-            }
-
-            // Import needed functions
-            const { getAppAccessToken } = await import('../twitch-eventsub-manager.js');
-            const appToken = await getAppAccessToken();
-
-            // Prepare the subscription payload
-            const callbackUrl = `${await retrieveConfigValue("server.endpoints.external")}/api/v1/twitch/eventsub/${userId}`;
-
-            // Get fresh user data to ensure we have the webhook secret
-            const freshUser = await returnAuthObject(userId);
-
-            const subscriptionBody = {
-                type,
-                version: '1',
-                condition,
-                transport: {
-                    method: 'webhook',
-                    callback: callbackUrl,
-                    secret: freshUser.twitch_tokens.streamer.webhook_secret
-                }
-            };
-
-            // Make the API request to create the subscription
-            const axios = (await import('axios')).default;
-            const response = await axios.post(
-                'https://api.twitch.tv/helix/eventsub/subscriptions',
-                subscriptionBody,
-                {
-                    headers: {
-                        'Client-ID': await retrieveConfigValue("twitch.clientId"),
-                        'Authorization': `Bearer ${appToken}`, // Use app token here
-                        'Content-Type': 'application/json'
-                    }
-                }
-            );
-
-            // Save subscription ID in user's data
-            const subscriptionId = response.data.data[0].id;
-
-            // Update user's subscriptions list
-            const subscriptions = freshUser.twitch_tokens.streamer.subscriptions || [];
-            subscriptions.push({
-                id: subscriptionId,
-                type,
-                created_at: new Date().toISOString()
-            });
-
-            await updateUserParameter(userId, "twitch_tokens.streamer.subscriptions", subscriptions);
-
-            logger.log("Twitch", `Created EventSub subscription for ${userId}: ${type}`);
-
-            return {
-                success: true,
-                subscription: response.data.data[0]
-            };
-
-        } catch (error) {
-            logger.error("Twitch", `Failed to create subscription: ${error.message}`);
-            throw error;
-        }
-    }
-
-    // Handle EventSub revocation
-    async function handleEventSubRevocation(notification, userId) {
-        try {
-            const subscriptionId = notification.subscription.id;
-
-            if (!userId || !subscriptionId) {
-                logger.error("Twitch", "Missing userId or subscriptionId for revocation");
-                return;
-            }
-
-            const user = await returnAuthObject(userId);
-
-            if (!user || !user.twitch_tokens?.streamer?.subscriptions) {
-                logger.error("Twitch", `No subscriptions found for user ${userId}`);
-                return;
-            }
-
-            // Filter out the revoked subscription
-            const subscriptions = user.twitch_tokens.streamer.subscriptions.filter(
-                sub => sub.id !== subscriptionId
-            );
-
-            // Update the subscriptions list
-            await updateUserParameter(userId, "twitch_tokens.streamer.subscriptions", subscriptions);
-
-            logger.log("Twitch", `Removed revoked subscription ${subscriptionId} for user ${userId}`);
-        } catch (error) {
-            logger.error("Twitch", `Error handling revocation: ${error.message}`);
-        }
+        logger.log("Twitch", `Removed revoked subscription ${subscriptionId} for user ${userId}`);
+    } catch (error) {
+        logger.error("Twitch", `Error handling revocation: ${error.message}`);
     }
 }
 
 async function processEvent(notification, userId) {
     try {
         const eventType = notification.subscription.type;
-        const eventVersion = notification.subscription.version || '1'; // Default to v1 if not specified
+        const eventVersion = notification.subscription.version || '1';
         const event = notification.event;
 
         // Log the event
@@ -645,9 +664,77 @@ async function processEvent(notification, userId) {
         // Import the event processor from the manager
         const { processEventSubNotification } = await import('../twitch-eventsub-manager.js');
 
-        // Process the event with version information
-        await processEventSubNotification(eventType, event, userId, eventVersion);
+        // Map the event to our internal format
+        const mappedEvent = await processEventSubNotification(eventType, event, userId, eventVersion);
 
+        if (eventType === 'channel.hype_train.progress') {
+            // Check for level up by comparing with previous event data
+            const previousLevel = user.lastHypeTrainLevel || 0;
+            const currentLevel = event.level || 0;
+
+            if (currentLevel > previousLevel) {
+                // Create a level-up event
+                const levelUpEvent = {
+                    eventType: 'hype_up',
+                    eventData: mappedEvent.eventData // Use the same data
+                };
+
+                // Process level-up separately
+                await respondToEvent(levelUpEvent, userId);
+
+                // Store the new level
+                await updateUserParameter(userId, "lastHypeTrainLevel", currentLevel);
+            }
+        }
+
+        if (eventType === 'channel.raid' || eventType === 'channel.shoutout.create') {
+            // The mapped event is missing some fields - enrich with additional API calls
+            const targetUser = eventType === 'channel.raid' ?
+                event.from_broadcaster_user_id :
+                event.to_broadcaster_user_id;
+
+            try {
+                // Get additional data using Twitch API
+                const userData = await fetchBroadcasterInfo(targetUser, userId);
+
+                // Update the mapped event with additional data
+                if (mappedEvent.eventType === 'raid') {
+                    mappedEvent.eventData.accountAge = userData.accountAge || 'Unknown';
+                    mappedEvent.eventData.isFollowing = userData.isFollowing || false;
+                    mappedEvent.eventData.lastGame = userData.lastGame || 'Unknown';
+                } else if (mappedEvent.eventType === 'shoutout') {
+                    mappedEvent.eventData.lastActive = userData.lastActive || 'Unknown';
+                    mappedEvent.eventData.streamTitle = userData.streamTitle || 'Unknown';
+                    mappedEvent.eventData.isAffiliate = userData.isAffiliate || false;
+                    mappedEvent.eventData.isPartner = userData.isPartner || false;
+                }
+            } catch (error) {
+                logger.error("Twitch", `Error enriching event data: ${error.message}`);
+            }
+        }
+
+        // Process based on the mapped event type
+        if (eventType === 'channel.chat.message') {
+            // Handle chat with our unified function
+            const { processChatMessage } = await import('../twitch-helper.js');
+            const chatResult = await processChatMessage(event, userId);
+
+            // If the message requires a response, generate and send it
+            if (chatResult.requiresResponse) {
+                const { respondToChat } = await import('../ai-logic.js');
+                const responseResult = await respondToChat(chatResult.messageData, userId);
+
+                // If we have a response and a bot account, send to chat
+                if (responseResult && responseResult.text) {
+                    const { sendChatMessage } = await import('../twitch-eventsub-manager.js');
+                    await sendChatMessage(responseResult.text, userId);
+                }
+            }
+        } else {
+            // For other events, use the existing AI response system
+            const { respondToEvent } = await import('./ai-logic.js');
+            await respondToEvent(mappedEvent, userId);
+        }
         // Handle specific event types that need additional processing
         switch (eventType) {
             case 'channel.update':
@@ -670,7 +757,25 @@ async function processEvent(notification, userId) {
             case 'channel.hype_train.begin':
             case 'channel.hype_train.progress':
             case 'channel.hype_train.end':
-                // Handle hype train events
+                if (eventType === 'channel.hype_train.progress') {
+                    // Check for level up by comparing with previous event data
+                    const previousLevel = user.lastHypeTrainLevel || 0;
+                    const currentLevel = event.level || 0;
+
+                    if (currentLevel > previousLevel) {
+                        // Create a level-up event
+                        const levelUpEvent = {
+                            eventType: 'hype_up',
+                            eventData: mappedEvent.eventData // Use the same data
+                        };
+
+                        // Process level-up separately
+                        await respondToEvent(levelUpEvent, userId);
+
+                        // Store the new level
+                        await updateUserParameter(userId, "lastHypeTrainLevel", currentLevel);
+                    }
+                }
                 await handleHypeTrainEvent(eventType, event, userId);
                 break;
 
@@ -683,7 +788,7 @@ async function processEvent(notification, userId) {
             case 'stream.offline':
                 // Handle stream state changes
                 await handleStreamStateChange(eventType, event, userId);
-                
+
                 // For stream.online, also fetch viewer count
                 if (eventType === 'stream.online') {
                     // Import the fetchViewerCount function
@@ -707,6 +812,7 @@ async function processEvent(notification, userId) {
 
         // Store event data for debugging/analytics
         await storeEventData(eventType, event, userId, eventVersion);
+        return await processEventSubNotification(eventType, event, userId, version);
     } catch (error) {
         logger.error("Twitch", `Error processing event: ${error.message}`);
     }
@@ -717,14 +823,14 @@ async function storeEventData(eventType, event, userId, version = '1') {
         // Create directory for events if it doesn't exist
         const userDir = `./data/events/${userId}`;
         await fs.promises.mkdir(userDir, { recursive: true });
-        
+
         // Create a unique filename with timestamp and version
         const timestamp = new Date().toISOString().replace(/:/g, '-');
         const filename = `${userDir}/${eventType}_v${version}_${timestamp}.json`;
-        
+
         // Store the event data
         await fs.promises.writeFile(
-            filename, 
+            filename,
             JSON.stringify({
                 type: eventType,
                 version: version,
@@ -732,7 +838,7 @@ async function storeEventData(eventType, event, userId, version = '1') {
                 timestamp: new Date().toISOString()
             }, null, 2)
         );
-        
+
         logger.log("Twitch", `Stored ${eventType} (v${version}) event data for user ${userId}`);
     } catch (error) {
         logger.error("Twitch", `Error storing event data: ${error.message}`);
