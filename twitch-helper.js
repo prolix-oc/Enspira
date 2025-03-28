@@ -1,11 +1,8 @@
 import fs from "fs-extra";
-import { join } from "path";
-import { funFact, returnAuthObject, updateUserParameter } from "./api-helper.js";
+import { funFact, returnAuthObject } from "./api-helper.js";
 import { sendChatCompletionRequest, moderatorPrompt } from "./prompt-helper.js";
 import moment from "moment";
 import { retrieveConfigValue } from './config-helper.js'
-
-let cachedChatContexts = {};
 
 /**
  * Returns a formatted string for a Twitch event based on its type.
@@ -36,8 +33,6 @@ async function returnTwitchEvent(eventThing, userId) {
     ad: adMessage,
     summary: summaryMessage,
     shoutout: shoutoutMessage,
-    ban: banMessage,
-    strike: strikeMessage,
   };
 
   const handler = eventTypeHandlers[event.eventType];
@@ -501,31 +496,7 @@ const triviaMessage = async (event) => {
   return `You're about to receive a fun fact to tell all of the viewers of ${event.playerName}'s channel. Share the entirety of this fact, and your thoughts about it, to all of the viewers. Here is the fun fact:\n${await funFact()}`;
 };
 
-/**
- * Generates a formatted string for a strike message event.
- *
- * @param {object} event - The strike message event data.
- * @returns {Promise<string>} - A formatted string describing the strike event.
- */
-const strikeMessage = async (event) => {
-  let subString = `The user ${event.user} was just given a strike on ${event.playerName}'s Twitch channel! The System Moderator adds: ${event.user} ${event.strikeReason}\n'`;
-  subString += `This was the message that ${event.user} sent to trigger the System Moderator's strike system: ${event.userMessage}\n`;
-  subString += `Don't read ${event.user}'s message to the chat. Warn ${event.user} that getting ${3 - parseInt(event.strikeCount)} more strikes will result in a ban from ${event.playerName}'s Twitch channel. The System Moderator's policy allows for 3 strikes before banning someone.`;
-  return subString;
-};
 
-/**
- * Generates a formatted string for a ban message event.
- *
- * @param {object} event - The ban message event data.
- * @returns {Promise<string>} - A formatted string describing the ban event.
- */
-const banMessage = async (event) => {
-  let subString = `The user ${event.user} was just permanently banned from ${event.playerName}'s Twitch channel! The System Moderator adds: ${event.user} ${event.banReason}\n'`;
-  subString += `This was the message that ${event.user} sent to trigger the System Moderator's ban system: ${event.userMessage}\n`;
-  subString += `Don't read ${event.user}'s message to the chat. You should shame the user for being so distasteful and trashy in ${event.playerName}'s chat, and wish them good riddance.`;
-  return subString;
-};
 
 /**
  * Generates a formatted string for a shoutout message event.

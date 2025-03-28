@@ -182,34 +182,6 @@ async function ensureCollectionLoaded(collectionName, userId) {
   }
 }
 
-function getOptimalIndexParams(collectionType, estimatedSize) {
-  // Base configuration
-  const params = {
-    field_name: "embedding",
-    index_type: IndexType.BIN_IVF_FLAT,
-    metric_type: MetricType.JACCARD,
-  };
-
-  // Adjust nlist based on collection type and estimated size
-  if (estimatedSize < 1000) {
-    // For small collections, smaller nlist reduces preprocessing time
-    params.params = { nlist: 128 };
-  } else if (estimatedSize < 10000) {
-    params.params = { nlist: 512 };
-  } else if (estimatedSize < 100000) {
-    params.params = { nlist: 2048 };
-  } else {
-    params.params = { nlist: 4096 };
-  }
-
-  // For very small collections where performance is critical
-  if (collectionType === 'users' && estimatedSize < 100) {
-    params.index_type = IndexType.BIN_FLAT; // Exact search for tiny collections
-  }
-
-  return params;
-}
-
 async function scheduleVectorInsertion(collectionType, userId, vector) {
   const key = `${collectionType}_${userId}`;
 
@@ -1049,42 +1021,6 @@ async function findUserInMilvus(username, userId) {
 }
 
 /**
- * Inserts vectors into a Milvus collection.
- * @param {object[]} data - The data to insert, containing embedding, relation, and content.
- * @param {string} collection - The name of the collection.
- * @param {string} userId - The user ID.
- * @returns {Promise<void>}
- */
-async function insertVectorsToMilvus(data, collection, userId) {
-  const fieldsData = data.map((item) => ({
-    embedding: item.embedding,
-    relation: item.relation,
-    text_content: item.content,
-  }));
-
-  try {
-    const insertResponse = await client.insert({
-      collection_name: `${collection}_${userId}`,
-      fields_data: fieldsData,
-    });
-
-    if (insertResponse.status.error_code === "Success") {
-      logger.log(
-        "Milvus",
-        `Inserted ${data.length} new items into ${collection}_${userId}`,
-      );
-    } else {
-      logger.log(
-        "Milvus",
-        `Failed to insert data into ${collection}_${userId}. Reason: ${insertResponse.status.reason}`,
-      );
-    }
-  } catch (error) {
-    logger.log("Milvus", `Error inserting vectors: ${error}`);
-  }
-}
-
-/**
  * Upserts intelligence vectors into a Milvus collection.
  *
  * @param {object[]} data - An array of objects, where each object represents a document to upsert.
@@ -1607,91 +1543,6 @@ export async function inferSearchParam(query, userId) {
 }
 
 /**
- * Inserts chat vectors into a Milvus collection.
- * @param {number[]} vectors - The vector embeddings for the chat.
- * @param {string} message - The raw chat message.
- * @param {string} sumText - The summarized chat text.
- * @param {string} response - The AI's response to the chat.
- * @param {string} user - The username associated with the chat.
- * @param {string} date - The timestamp of the chat.
- * @param {string} userId - The user ID.
- * @returns {Promise<boolean>} - True if the operation was successful, false otherwise.
- */
-async function insertChatVectorsToMilvus(
-  vectors,
-  message,
-  sumText,
-  response,
-  user,
-  date,
-  userId,
-) {
-  try {
-    const collectionName = `${await retrieveConfigValue("milvus.collections.chat")}_${userId}`;
-
-    const exists = await client.hasCollection({
-      collection_name: collectionName,
-    });
-    if (!exists.value) {
-      logger.log("Milvus Chat", `Collection ${collectionName} does not exist.`);
-      const created = await checkAndCreateCollection(
-        await retrieveConfigValue("milvus.collections.chat"),
-        userId,
-      );
-      if (!created) {
-        logger.log(
-          "Milvus Chat",
-          `Could not spawn collection '${collectionName}'`,
-        );
-        return false;
-      }
-    }
-
-    const isLoaded = await loadCollectionIfNeeded(
-      await retrieveConfigValue("milvus.collections.chat"),
-      userId,
-    );
-    if (!isLoaded) {
-      logger.log(
-        "Milvus Chat",
-        `Failed to load collection '${collectionName}'`,
-      );
-      return false;
-    }
-    const currentTime = Date.now();
-    const fieldsData = [
-      {
-        embedding: vectors,
-        username: user,
-        text_content: sumText,
-        raw_msg: message,
-        ai_message: response,
-        time_stamp: currentTime,
-      },
-    ];
-
-    const insertResponse = await client.insert({
-      collection_name: collectionName,
-      fields_data: fieldsData,
-    });
-
-    if (insertResponse.status.error_code === "Success") {
-      logger.log("Milvus Chat", `Inserted chat vectors into ${collectionName}`);
-      return true;
-    } else {
-      logger.log(
-        "Milvus Chat",
-        `Failed to insert chat vectors into ${collectionName}. Reason: ${insertResponse.status.reason}`,
-      );
-      return false;
-    }
-  } catch (error) {
-    logger.log("Milvus Chat", `Error inserting chat vectors: ${error}`);
-    return false;
-  }
-}
-
-/**
  * Inserts voice interaction vectors into a Milvus collection.
  * @param {number[]} vectors - The vector embeddings for the voice interaction.
  * @param {string} summary - A summary of the voice interaction.
@@ -2146,9 +1997,7 @@ async function rerankString(message, userId) {
 }
 
 async function respondWithoutContext(message, userId) {
-  try {
-    const userObj = await returnAuthObject(userId);
-    
+  try {    
     // Build the prompt data with minimal context
     const promptData = {
       relChats: "- No relevant chat context available.",

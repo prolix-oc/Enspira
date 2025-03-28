@@ -1,12 +1,9 @@
 // main.js - Main application file without using cluster
 import blessed from "neo-blessed";
-import fs from "fs-extra";
-import path from "path";
 import { createLogger } from "./logger.js";
 import * as aiHelper from "./ai-logic.js";
 import { saveAuthToDisk, updateUserParameter } from "./api-helper.js";
 import { saveConfigToDisk, retrieveConfigValue, saveConfigValue } from "./config-helper.js";
-import { fileURLToPath } from "url";
 import { fork } from "child_process";
 
 // Capture original console methods

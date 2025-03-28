@@ -11,7 +11,6 @@ import { jsonrepair } from 'jsonrepair'
 import OpenAI from "openai";
 import { performance } from "node:perf_hooks";
 import { logger } from './create-global-logger.js';
-import { request } from "node:http";
 const templateCache = {};
 
 async function getTemplate(filePath) {

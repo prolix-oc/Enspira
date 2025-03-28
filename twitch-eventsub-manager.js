@@ -972,45 +972,6 @@ async function fetchViewerCount(userId) {
 }
 
 /**
- * Handle chat message events from EventSub
- * @param {object} event - The chat message event data
- * @param {string} userId - The user ID
- * @returns {Promise<void>}
- */
-async function handleChatMessage(event, userId) {
-    try {
-        logger.log("Twitch", `Received chat message from ${event.chatter.user_name} in ${userId}'s channel`);
-
-        // Process the chat message - you might want to add more logic here
-        // to determine how to handle different message types or commands
-
-        // Example structure of a chat message event that we can handle:
-        const chatEvent = {
-            eventType: 'chat',
-            user: event.chatter.user_name,
-            message: event.message.text,
-            firstMessage: event.message.is_first, // If this is the user's first message
-            badges: event.chatter.badges?.map(badge => badge.set_id) || [],
-            emotes: event.message.fragments?.filter(frag => frag.type === 'emote').map(emote => emote.id) || []
-        };
-
-        // Process this chat event as needed
-        // For example, you might want to trigger an AI response for certain messages
-        // We can add a call to your existing chat handling system here
-
-        // Example of how you might handle this, adapt to your actual implementation:
-        if (chatEvent.message.startsWith('!')) {
-            // This is a command, handle it accordingly
-        } else {
-            // This is a regular chat message
-            // You could add logic to determine if the AI should respond
-        }
-    } catch (error) {
-        logger.error("Twitch", `Error handling chat message: ${error.message}`);
-    }
-}
-
-/**
  * Processes real-time chat messages from Twitch EventSub
  * @param {object} chatEvent - The chat event data from EventSub
  * @param {string} userId - The user ID

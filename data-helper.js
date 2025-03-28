@@ -1,7 +1,6 @@
 import axios from "axios";
 import {
   inferSearchParam,
-  searchBraveAPI,
   searchSearXNG,
   retrieveWebContext,
   rerankString,
@@ -12,7 +11,6 @@ import { join } from "path";
 import * as cheerio from 'cheerio';
 import { JSDOM } from "jsdom";
 import { retrieveConfigValue } from './config-helper.js'
-import { Models } from "openai/resources/models.mjs";
 
 const userAgentStrings = [
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.2227.0 Safari/537.36",

@@ -5,6 +5,7 @@ import * as crypto from "crypto";
 import path from "path";
 import { retrieveConfigValue } from "./config-helper.js";
 let cachedAuthKeys = null;
+
 const authFilePath = await retrieveConfigValue("server.authFilePath");
 
 /**
