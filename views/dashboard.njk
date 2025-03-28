@@ -8,7 +8,7 @@
     <div class="card-header">
       <h1>Welcome to Enspira, {{ user.display_name }}</h1>
     </div>
-    <p>Manage your Enspira AI assistant for your Twitch channel.</p>
+    <p>Manage your Enspira Co-Star for your Twitch channel.</p>
     <!-- AI Assistant Settings -->
     <div class="two-column">
       <div class="card">
@@ -24,109 +24,70 @@
     </div>
   </div>
   <!-- Stream Status Card -->
-  <div class="card">
+  <div class="card stream-card">
+    <div class="stream-status-indicator {% if streamStatus.online %}online{% else %}offline{% endif %}">
+      <span class="status-indicator"></span>
+      <span>{% if streamStatus.online %}Live{% else %}Offline{% endif %}</span>
+    </div>
+    
     <h2>Stream Status</h2>
+    
     {% if streamStatus.online %}
-      <div class="stream-info">
-        <div class="stream-header">
-          <div class="stream-status online">
-            <span class="status-indicator"></span>
-            <span>Live</span>
+      <div class="stream-content">
+        {% if streamStatus.thumbnail %}
+          <div class="stream-thumbnail">
+            <img src="{{ streamStatus.thumbnail }}" alt="Stream Thumbnail" class="fade-in-image">
+          </div>
+        {% endif %}
+        <div class="stream-details">
+          <h3 class="stream-title">{{ streamStatus.title }}</h3>
+          <div class="stream-game">
+            <span>Playing:</span> {{ streamStatus.game }}
           </div>
           <div class="stream-time">
-            <svg xmlns="http://www.w3.org/2000/svg"
-                 width="16"
-                 height="16"
-                 viewBox="0 0 24 24"
-                 fill="none"
-                 stroke="currentColor"
-                 stroke-width="2"
-                 stroke-linecap="round"
-                 stroke-linejoin="round">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <circle cx="12" cy="12" r="10"></circle>
               <polyline points="12 6 12 12 16 14"></polyline>
             </svg>
             <span>{{ streamStatus.duration }}</span>
           </div>
-        </div>
-        <div class="stream-content">
-          {% if streamStatus.thumbnail %}
-            <div class="stream-thumbnail">
-              <img height="100%"
-                   width="100%"
-                   src="{{ streamStatus.thumbnail }}"
-                   alt="Stream Thumbnail"
-                   class="fade-in-image">
+          <div class="stream-metrics">
+            <div class="metric">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                <circle cx="9" cy="7" r="4"></circle>
+                <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+              </svg>
+              <span>{{ streamStatus.viewers }} viewers</span>
             </div>
-          {% endif %}
-          <div class="stream-details">
-            <h3 class="stream-title">{{ streamStatus.title }}</h3>
-            <div class="stream-game">
-              <span>Playing:</span> {{ streamStatus.game }}
-            </div>
-            <div class="stream-metrics">
-              <div class="metric">
-                <svg xmlns="http://www.w3.org/2000/svg"
-                     width="16"
-                     height="16"
-                     viewBox="0 0 24 24"
-                     fill="none"
-                     stroke="currentColor"
-                     stroke-width="2"
-                     stroke-linecap="round"
-                     stroke-linejoin="round">
-                  <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
-                  <circle cx="9" cy="7" r="4"></circle>
-                  <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
-                  <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
-                </svg>
-                <span>{{ streamStatus.viewers }} viewers</span>
-              </div>
-              <div class="metric">
-                <svg xmlns="http://www.w3.org/2000/svg"
-                     width="16"
-                     height="16"
-                     viewBox="0 0 24 24"
-                     fill="none"
-                     stroke="currentColor"
-                     stroke-width="2"
-                     stroke-linecap="round"
-                     stroke-linejoin="round">
-                  <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z">
-                  </path>
-                </svg>
-                <span>{{ followerCount }} followers</span>
-              </div>
+            <div class="metric">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path>
+              </svg>
+              <span>{{ followerCount }} followers</span>
             </div>
           </div>
         </div>
       </div>
     {% else %}
       <div class="stream-info offline">
-        <div class="stream-status offline">
-          <span class="status-indicator"></span>
-          <span>Offline</span>
-        </div>
         <div class="offline-details">
           <div class="metric">
-            <svg xmlns="http://www.w3.org/2000/svg"
-                 width="16"
-                 height="16"
-                 viewBox="0 0 24 24"
-                 fill="none"
-                 stroke="currentColor"
-                 stroke-width="2"
-                 stroke-linecap="round"
-                 stroke-linejoin="round">
-              <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z">
-              </path>
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path>
             </svg>
             <span>{{ followerCount }} followers</span>
           </div>
-          {% if lastGame %}
+          {% if lastGame and lastGame != 'None' %}
             <div class="last-game">
               <span>Last played:</span> {{ lastGame }}
             </div>
+            {% if user.current_game.thumbnail_url %}
+              <div class="offline-thumbnail">
+                <img src="{{ user.current_game.thumbnail_url }}" alt="Last Stream Thumbnail" class="fade-in-image">
+              </div>
+            {% endif %}
           {% endif %}
         </div>
       </div>
@@ -145,8 +106,7 @@
           <p class="alert alert-error">Not connected</p>
         {% endif %}
         <!-- Direct link to connect streamer account -->
-        <a href="/api/v1/auth/twitch/connect?type=streamer"
-           class="btn btn-secondary">
+        <a href="/api/v1/auth/twitch/connect?type=streamer" class="btn btn-secondary">
           {% if streamerConnected %}
             Reconnect Streamer Account
           {% else %}
@@ -184,42 +144,68 @@
   </div>
   <!-- Help Card -->
   <div class="card">
-    <h2>Still Confused?</h2>
-    <p>Learn how to create your character and world in our help section.</p>
-    <a href="/web/help" class="btn btn-primary">Get Help</a>
+    <div class="card-header">
+      <h1>Resources, Tips and Tricks</h1>
+    </div>
+    <p>Find more help to enhance your AI co-star's character here.</p>
+    <!-- AI Assistant Settings -->
+    <div class="four-column">
+      <div class="card">
+        <h2>Want to read up?</h2>
+        <p>Check out our source code over at Github!</p>
+        <a href="https://github.com/prolix-oc/Refyne" class="btn btn-primary">GitHub</a>
+      </div>
+      <div class="card">
+        <h2>Want more ideas?</h2>
+        <p>Join the Discord community for tips.</p>
+        <a href="https://discord.com/invite/pMnZ7DaUK3" class="btn btn-primary">Join Up</a>
+      </div>
+      <div class="card">
+        <h2>Visual learner?</h2>
+        <p>Drop by my YouTube for videos soon!</p>
+        <a href="https://youtube.com/@prolix_gg" class="btn btn-primary">Tune In</a>
+      </div>
+      <div class="card">
+        <h2>Still Confused?</h2>
+        <p>Check out our dedicated help section.</p>
+        <a href="/web/help" class="btn btn-primary">Get Help</a>
+      </div>
+    </div>
   </div>
+  
 {% endblock content %}
 {% block extraStyles %}
   <style>
-  .stream-info {
-    border-radius: 6px;
-    overflow: hidden;
+  .stream-card {
+    position: relative;
+    padding-top: 30px;
   }
 
-  .alert {
-    padding: 4px 8px
-  }
-
-  .stream-header {
+  .stream-card-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 10px 15px;
-    background-color: var(--card-bg);
-    border-bottom: 1px solid var(--border);
+    margin-bottom: 15px;
   }
 
-  .stream-status {
+  .stream-status-indicator {
+    position: absolute;
+    top: 15px;
+    right: 15px;
     display: flex;
     align-items: center;
     font-weight: bold;
+    padding: 5px 10px;
+    border-radius: 16px;
+    background-color: rgba(40, 40, 40, 0.6);
+    z-index: 1;
   }
 
-  .stream-status.online {
+  .stream-status-indicator.online {
     color: #56d364;
   }
 
-  .stream-status.offline {
+  .stream-status-indicator.offline {
     color: #f85149;
   }
 
@@ -231,29 +217,18 @@
     margin-right: 6px;
   }
 
-  .stream-status.online .status-indicator {
+  .stream-status-indicator.online .status-indicator {
     background-color: #56d364;
     box-shadow: 0 0 0 2px rgba(86, 211, 100, 0.3);
     animation: pulse 2s infinite;
   }
 
-  .stream-status.offline .status-indicator {
+  .stream-status-indicator.offline .status-indicator {
     background-color: #f85149;
-  }
-
-  .stream-time {
-    display: flex;
-    align-items: center;
-    color: var(--secondary-text);
-  }
-
-  .stream-time svg {
-    margin-right: 5px;
   }
 
   .stream-content {
     display: flex;
-    padding: 15px;
     gap: 15px;
   }
 
@@ -273,7 +248,7 @@
     opacity: 0;
     transition: opacity 0.4s ease-in;
   }
-  
+
   .stream-thumbnail img.loaded {
     opacity: 1;
   }
@@ -291,6 +266,17 @@
   .stream-game {
     margin-bottom: 15px;
     color: var(--accent);
+  }
+
+  .stream-time {
+    display: flex;
+    align-items: center;
+    color: var(--secondary-text);
+    margin-bottom: 15px;
+  }
+
+  .stream-time svg {
+    margin-right: 5px;
   }
 
   .stream-metrics {
@@ -319,6 +305,28 @@
     color: var(--secondary-text);
   }
 
+  .offline-thumbnail {
+    margin-top: 15px;
+    width: 100%;
+    max-width: 320px;
+    height: auto;
+    aspect-ratio: 16/9;
+    overflow: hidden;
+    border-radius: 4px;
+  }
+
+  .offline-thumbnail img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    opacity: 0;
+    transition: opacity 0.4s ease-in;
+  }
+
+  .offline-thumbnail img.loaded {
+    opacity: 1;
+  }
+
   @keyframes pulse {
     0% {
       box-shadow: 0 0 0 0 rgba(86, 211, 100, 0.7);
@@ -332,6 +340,16 @@
   }
 
   @media (max-width: 768px) {
+    .stream-card-header {
+      flex-direction: column;
+      align-items: flex-start;
+    }
+    
+    .stream-status-indicator {
+      top: 50px; /* Position below the title on mobile */
+      right: 15px;
+    }
+
     .stream-content {
       flex-direction: column;
     }
