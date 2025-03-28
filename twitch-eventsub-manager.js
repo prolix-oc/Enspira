@@ -3,7 +3,6 @@ import axios from 'axios';
 import { returnAPIKeys, returnAuthObject, updateUserParameter, ensureParameterPath } from './api-helper.js';
 import { retrieveConfigValue } from './config-helper.js';
 import { logger } from './create-global-logger.js';
-import { refreshTwitchToken } from './routes/v1.js';
 import cron from "node-cron";
 
 class TwitchAPIManager {
@@ -1751,7 +1750,7 @@ export async function enrichEventData(eventType, eventData, userId) {
 
         // Check for affiliate/partner status (based on badges)
         if (userData.data.data[0]?.broadcaster_type === 'affiliate') {
-            enriched.isAffiliate = true;
+            enriched.isAffiliate = true;  // enriched is undefined here
             enriched.isPartner = false;
         } else if (userData.data.data[0]?.broadcaster_type === 'partner') {
             enriched.isAffiliate = false;
@@ -2135,6 +2134,61 @@ export function setupTwitchCronJobs() {
     });
 
     logger.log("System", "Twitch cron jobs initialized");
+}
+
+async function refreshTwitchToken(userId, tokenType = 'streamer') {
+    try {
+        const user = await returnAuthObject(userId);
+
+        // Validate token type
+        if (tokenType !== 'bot' && tokenType !== 'streamer') {
+            logger.log("Twitch", `Invalid token type: ${tokenType}`);
+            return false;
+        }
+
+        // Get the tokens for the specified type
+        const tokens = user.twitch_tokens?.[tokenType];
+
+        if (!tokens || !tokens.refresh_token) {
+            logger.log("Twitch", `No refresh token found for ${tokenType} account of user ${userId}`);
+            return false;
+        }
+
+        // Check if token is expired or close to expiring (within 10 minutes)
+        const isExpired = !tokens.expires_at ||
+            Date.now() > (tokens.expires_at - (10 * 60 * 1000));
+
+        if (!isExpired) {
+            return tokens.access_token; // Return existing token if still valid
+        }
+
+        // Import axios if needed
+        const axios = (await import('axios')).default;
+
+        // Refresh the token
+        const response = await axios.post('https://id.twitch.tv/oauth2/token', {
+            client_id: await retrieveConfigValue("twitch.clientId"),
+            client_secret: await retrieveConfigValue("twitch.clientSecret"),
+            grant_type: 'refresh_token',
+            refresh_token: tokens.refresh_token
+        });
+
+        const { access_token, refresh_token, expires_in } = response.data;
+
+        // Update token in user record
+        await updateUserParameter(userId, `twitch_tokens.${tokenType}`, {
+            ...tokens, // Keep existing data like user_id
+            access_token,
+            refresh_token,
+            expires_at: Date.now() + (expires_in * 1000)
+        });
+
+        logger.log("Twitch", `Refreshed ${tokenType} token for user ${userId}`);
+        return access_token;
+    } catch (error) {
+        logger.log("Twitch", `Failed to refresh ${tokenType} token: ${error.message}`);
+        return false;
+    }
 }
 
 /**

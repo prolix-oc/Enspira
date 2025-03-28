@@ -320,77 +320,77 @@ async function twitchEventSubRoutes(fastify, options) {
     });
 }
 
-// Helper functions for processing events
-async function processEvent(notification, userId) {
-    try {
-        const eventType = notification.subscription.type;
-        const eventVersion = notification.subscription.version || '1';
-        const event = notification.event;
+// // Helper functions for processing events
+// async function processEvent(notification, userId) {
+//     try {
+//         const eventType = notification.subscription.type;
+//         const eventVersion = notification.subscription.version || '1';
+//         const event = notification.event;
 
-        // Log the event
-        logger.log("Twitch", `Processing ${eventType} (v${eventVersion}) event for user ${userId}`);
+//         // Log the event
+//         logger.log("Twitch", `Processing ${eventType} (v${eventVersion}) event for user ${userId}`);
 
-        // Import the event processor from the manager
-        const { enrichEventData } = await import('../twitch-eventsub-manager.js');
+//         // Import the event processor from the manager
+//         const { enrichEventData } = await import('../twitch-eventsub-manager.js');
 
-        // Map the event to our internal format
-        const mappedEvent = mapEventSubToInternalFormat(eventType, event, eventVersion);
+//         // Map the event to our internal format
+//         const mappedEvent = mapEventSubToInternalFormat(eventType, event, eventVersion);
 
-        // For events needing enrichment, add the extra data
-        if (eventType === 'channel.raid' || eventType === 'channel.shoutout.create') {
-            const enrichedData = await enrichEventData(eventType, event, userId);
+//         // For events needing enrichment, add the extra data
+//         if (eventType === 'channel.raid' || eventType === 'channel.shoutout.create') {
+//             const enrichedData = await enrichEventData(eventType, event, userId);
 
-            // Merge the enriched data with the mapped event
-            mappedEvent.eventData = {
-                ...mappedEvent.eventData,
-                ...enrichedData
-            };
-        }
+//             // Merge the enriched data with the mapped event
+//             mappedEvent.eventData = {
+//                 ...mappedEvent.eventData,
+//                 ...enrichedData
+//             };
+//         }
 
-        // Process based on the mapped event type
-        if (eventType === 'channel.chat.message') {
-            // Handle chat with our unified function
-            const { processChatMessage } = await import('../twitch-helper.js');
-            const chatResult = await processChatMessage(event, userId);
+//         // Process based on the mapped event type
+//         if (eventType === 'channel.chat.message') {
+//             // Handle chat with our unified function
+//             const { processChatMessage } = await import('../twitch-helper.js');
+//             const chatResult = await processChatMessage(event, userId);
 
-            // If the message requires a response, generate and send it
-            if (chatResult.requiresResponse) {
-                const { respondToChat } = await import('../ai-logic.js');
-                const responseResult = await respondToChat(chatResult.messageData, userId);
+//             // If the message requires a response, generate and send it
+//             if (chatResult.requiresResponse) {
+//                 const { respondToChat } = await import('../ai-logic.js');
+//                 const responseResult = await respondToChat(chatResult.messageData, userId);
 
-                // If we have a response and a bot account, send to chat
-                if (responseResult && responseResult.text) {
-                    const { sendChatMessage } = await import('../twitch-eventsub-manager.js');
-                    await sendChatMessage(responseResult.text, userId);
-                }
-            }
-        } else {
-            // For other events, use the existing AI response system
-            const { respondToEvent } = await import('./ai-logic.js');
-            await respondToEvent(mappedEvent, userId);
-        }
+//                 // If we have a response and a bot account, send to chat
+//                 if (responseResult && responseResult.text) {
+//                     const { sendChatMessage } = await import('../twitch-eventsub-manager.js');
+//                     await sendChatMessage(responseResult.text, userId);
+//                 }
+//             }
+//         } else {
+//             // For other events, use the existing AI response system
+//             const { respondToEvent } = await import('./ai-logic.js');
+//             await respondToEvent(mappedEvent, userId);
+//         }
 
-        // Continue with specific event handling for database updates
-        switch (eventType) {
-            case 'channel.update':
-                await handleChannelUpdate(event, userId);
-                break;
-            case 'stream.online':
-            case 'stream.offline':
-                await handleStreamStateChange(eventType, event, userId);
-                break;
-            // Other handlers as needed
-        }
+//         // Continue with specific event handling for database updates
+//         switch (eventType) {
+//             case 'channel.update':
+//                 await handleChannelUpdate(event, userId);
+//                 break;
+//             case 'stream.online':
+//             case 'stream.offline':
+//                 await handleStreamStateChange(eventType, event, userId);
+//                 break;
+//             // Other handlers as needed
+//         }
 
-        // Store event data for analytics
-        await storeEventData(eventType, event, userId, eventVersion);
-        
-        const { processEventSubNotification } = await import('../twitch-eventsub-manager.js');
-        await processEventSubNotification(eventType, event, userId, eventVersion, mappedEvent);
-    } catch (error) {
-        logger.error("Twitch", `Error processing event: ${error.message}`);
-    }
-}
+//         // Store event data for analytics
+//         await storeEventData(eventType, event, userId, eventVersion);
+
+//         const { processEventSubNotification } = await import('../twitch-eventsub-manager.js');
+//         await processEventSubNotification(eventType, event, userId, eventVersion, mappedEvent);
+//     } catch (error) {
+//         logger.error("Twitch", `Error processing event: ${error.message}`);
+//     }
+// }
 
 // Implementation of specific event handlers
 async function handleChannelUpdate(event, userId) {
@@ -664,157 +664,11 @@ async function processEvent(notification, userId) {
         // Import the event processor from the manager
         const { processEventSubNotification } = await import('../twitch-eventsub-manager.js');
 
-        // Map the event to our internal format
-        const mappedEvent = await processEventSubNotification(eventType, event, userId, eventVersion);
-
-        if (eventType === 'channel.hype_train.progress') {
-            // Check for level up by comparing with previous event data
-            const previousLevel = user.lastHypeTrainLevel || 0;
-            const currentLevel = event.level || 0;
-
-            if (currentLevel > previousLevel) {
-                // Create a level-up event
-                const levelUpEvent = {
-                    eventType: 'hype_up',
-                    eventData: mappedEvent.eventData // Use the same data
-                };
-
-                // Process level-up separately
-                await respondToEvent(levelUpEvent, userId);
-
-                // Store the new level
-                await updateUserParameter(userId, "lastHypeTrainLevel", currentLevel);
-            }
-        }
-
-        if (eventType === 'channel.raid' || eventType === 'channel.shoutout.create') {
-            // The mapped event is missing some fields - enrich with additional API calls
-            const targetUser = eventType === 'channel.raid' ?
-                event.from_broadcaster_user_id :
-                event.to_broadcaster_user_id;
-
-            try {
-                // Get additional data using Twitch API
-                const userData = await fetchBroadcasterInfo(targetUser, userId);
-
-                // Update the mapped event with additional data
-                if (mappedEvent.eventType === 'raid') {
-                    mappedEvent.eventData.accountAge = userData.accountAge || 'Unknown';
-                    mappedEvent.eventData.isFollowing = userData.isFollowing || false;
-                    mappedEvent.eventData.lastGame = userData.lastGame || 'Unknown';
-                } else if (mappedEvent.eventType === 'shoutout') {
-                    mappedEvent.eventData.lastActive = userData.lastActive || 'Unknown';
-                    mappedEvent.eventData.streamTitle = userData.streamTitle || 'Unknown';
-                    mappedEvent.eventData.isAffiliate = userData.isAffiliate || false;
-                    mappedEvent.eventData.isPartner = userData.isPartner || false;
-                }
-            } catch (error) {
-                logger.error("Twitch", `Error enriching event data: ${error.message}`);
-            }
-        }
-
-        // Process based on the mapped event type
-        if (eventType === 'channel.chat.message') {
-            // Handle chat with our unified function
-            const { processChatMessage } = await import('../twitch-helper.js');
-            const chatResult = await processChatMessage(event, userId);
-
-            // If the message requires a response, generate and send it
-            if (chatResult.requiresResponse) {
-                const { respondToChat } = await import('../ai-logic.js');
-                const responseResult = await respondToChat(chatResult.messageData, userId);
-
-                // If we have a response and a bot account, send to chat
-                if (responseResult && responseResult.text) {
-                    const { sendChatMessage } = await import('../twitch-eventsub-manager.js');
-                    await sendChatMessage(responseResult.text, userId);
-                }
-            }
-        } else {
-            // For other events, use the existing AI response system
-            const { respondToEvent } = await import('./ai-logic.js');
-            await respondToEvent(mappedEvent, userId);
-        }
-        // Handle specific event types that need additional processing
-        switch (eventType) {
-            case 'channel.update':
-                // Handle game/title updates
-                await handleChannelUpdate(event, userId);
-                break;
-
-            case 'channel.follow':
-                // Handle new follower
-                await handleChannelFollow(event, userId);
-                break;
-
-            case 'channel.subscribe':
-            case 'channel.subscription.gift':
-            case 'channel.subscription.message':
-                // Handle subscription events
-                await handleSubscriptionEvent(eventType, event, userId);
-                break;
-
-            case 'channel.hype_train.begin':
-            case 'channel.hype_train.progress':
-            case 'channel.hype_train.end':
-                if (eventType === 'channel.hype_train.progress') {
-                    // Check for level up by comparing with previous event data
-                    const previousLevel = user.lastHypeTrainLevel || 0;
-                    const currentLevel = event.level || 0;
-
-                    if (currentLevel > previousLevel) {
-                        // Create a level-up event
-                        const levelUpEvent = {
-                            eventType: 'hype_up',
-                            eventData: mappedEvent.eventData // Use the same data
-                        };
-
-                        // Process level-up separately
-                        await respondToEvent(levelUpEvent, userId);
-
-                        // Store the new level
-                        await updateUserParameter(userId, "lastHypeTrainLevel", currentLevel);
-                    }
-                }
-                await handleHypeTrainEvent(eventType, event, userId);
-                break;
-
-            case 'channel.cheer':
-                // Handle bits donation
-                await handleCheerEvent(event, userId);
-                break;
-
-            case 'stream.online':
-            case 'stream.offline':
-                // Handle stream state changes
-                await handleStreamStateChange(eventType, event, userId);
-
-                // For stream.online, also fetch viewer count
-                if (eventType === 'stream.online') {
-                    // Import the fetchViewerCount function
-                    const { fetchViewerCount } = await import('../twitch-eventsub-manager.js');
-                    // Wait a bit for Twitch to update viewer count, then fetch it
-                    setTimeout(async () => {
-                        await fetchViewerCount(userId);
-                    }, 30000); // 30 seconds delay
-                }
-                break;
-
-            case 'channel.chat.message':
-                // Handle chat messages
-                const { processChatMessage } = await import('../twitch-eventsub-manager.js');
-                await processChatMessage(event, userId);
-                break;
-
-            default:
-                logger.log("Twitch", `Unhandled event type: ${eventType}`);
-        }
-
-        // Store event data for debugging/analytics
-        await storeEventData(eventType, event, userId, eventVersion);
-        return await processEventSubNotification(eventType, event, userId, version);
+        // Process based on the event type
+        return await processEventSubNotification(eventType, event, userId, eventVersion);
     } catch (error) {
         logger.error("Twitch", `Error processing event: ${error.message}`);
+        return { success: false, error: error.message };
     }
 }
 
