@@ -110,15 +110,41 @@ const userSchema = new mongoose.Schema(
   }
 );
 
+const chatMessageSchema = new mongoose.Schema(
+  {
+    user_id: { type: String, required: true, index: true },
+    username: { type: String, required: true },
+    message: { type: String, required: true },
+    message_id: { type: String, required: true, unique: true },
+    timestamp: { type: Date, default: Date.now, index: true },
+    ai_response: String,
+    embedding_id: String, // Reference to Milvus if message has embedding
+    is_important: { type: Boolean, default: false },
+    metadata: mongoose.Schema.Types.Mixed,
+  },
+  {
+    strict: false,
+    timestamps: true,
+  }
+);
+
+chatMessageSchema.index({ user_id: 1, timestamp: -1 });
+chatMessageSchema.index({ username: 1, user_id: 1 });
+chatMessageSchema.index({ message: "text", ai_response: "text" });
+
 // Create indexes for performance
 userSchema.index({ "twitch_tokens.streamer.twitch_user_id": 1 });
 userSchema.index({ "twitch_tokens.bot.twitch_user_id": 1 });
 userSchema.index({ user_id: 1 });
 
 const User = mongoose.model("User", userSchema, "user_data");
+const ChatMessage = mongoose.model(
+  "ChatMessage",
+  chatMessageSchema,
+  "chat_messages"
+);
 
 // Connect to MongoDB
-
 export async function connectToMongoDB() {
   try {
     if (connectionEstablished) return true;
@@ -196,57 +222,68 @@ function handleConnectionError(err) {
 
 // Migrate data from auth_keys.json if collection is empty
 async function migrateFromFileIfNeeded() {
-    try {
-      const count = await User.countDocuments({});
-      if (count === 0) {
-        logger.log("MongoDB", "Collection is empty, migrating from file...");
-        
-        const authFilePath = await retrieveConfigValue("server.authFilePath");
-        if (fs.existsSync(authFilePath)) {
-          const fileData = await fs.readJSON(authFilePath);
-          
-          if (Array.isArray(fileData) && fileData.length > 0) {
-            // Transform the data before inserting
-            const transformedData = fileData.map(user => {
-              // Create a clean copy of the user object
-              const transformedUser = { ...user };
-              
-              // Fix stream_status if it exists but isn't in the right format
-              if (transformedUser.stream_status && typeof transformedUser.stream_status !== 'object') {
-                transformedUser.stream_status = { 
-                  online: false, 
-                  updated_at: new Date().toISOString() 
-                };
-              } else if (transformedUser.stream_status) {
-                // Ensure it has the expected structure
-                transformedUser.stream_status = {
-                  online: transformedUser.stream_status.online || false,
-                  started_at: transformedUser.stream_status.started_at || null,
-                  type: transformedUser.stream_status.type || null,
-                  title: transformedUser.stream_status.title || null,
-                  viewer_count: transformedUser.stream_status.viewer_count || 0,
-                  updated_at: transformedUser.stream_status.updated_at || new Date().toISOString()
-                };
-              }
-              
-              return transformedUser;
-            });
-            
-            // Insert transformed data
-            await User.insertMany(transformedData, { validateBeforeSave: false });
-            logger.log("MongoDB", `Migrated ${transformedData.length} users from file to MongoDB`);
-            
-            // Create backup of original file
-            const backupPath = `${authFilePath}.bak.${Date.now()}`;
-            await fs.copy(authFilePath, backupPath);
-            logger.log("MongoDB", `Created backup of original auth file at ${backupPath}`);
-          }
+  try {
+    const count = await User.countDocuments({});
+    if (count === 0) {
+      logger.log("MongoDB", "Collection is empty, migrating from file...");
+
+      const authFilePath = await retrieveConfigValue("server.authFilePath");
+      if (fs.existsSync(authFilePath)) {
+        const fileData = await fs.readJSON(authFilePath);
+
+        if (Array.isArray(fileData) && fileData.length > 0) {
+          // Transform the data before inserting
+          const transformedData = fileData.map((user) => {
+            // Create a clean copy of the user object
+            const transformedUser = { ...user };
+
+            // Fix stream_status if it exists but isn't in the right format
+            if (
+              transformedUser.stream_status &&
+              typeof transformedUser.stream_status !== "object"
+            ) {
+              transformedUser.stream_status = {
+                online: false,
+                updated_at: new Date().toISOString(),
+              };
+            } else if (transformedUser.stream_status) {
+              // Ensure it has the expected structure
+              transformedUser.stream_status = {
+                online: transformedUser.stream_status.online || false,
+                started_at: transformedUser.stream_status.started_at || null,
+                type: transformedUser.stream_status.type || null,
+                title: transformedUser.stream_status.title || null,
+                viewer_count: transformedUser.stream_status.viewer_count || 0,
+                updated_at:
+                  transformedUser.stream_status.updated_at ||
+                  new Date().toISOString(),
+              };
+            }
+
+            return transformedUser;
+          });
+
+          // Insert transformed data
+          await User.insertMany(transformedData, { validateBeforeSave: false });
+          logger.log(
+            "MongoDB",
+            `Migrated ${transformedData.length} users from file to MongoDB`
+          );
+
+          // Create backup of original file
+          const backupPath = `${authFilePath}.bak.${Date.now()}`;
+          await fs.copy(authFilePath, backupPath);
+          logger.log(
+            "MongoDB",
+            `Created backup of original auth file at ${backupPath}`
+          );
         }
       }
-    } catch (error) {
-      logger.error("MongoDB", `Migration error: ${error.message}`);
     }
+  } catch (error) {
+    logger.error("MongoDB", `Migration error: ${error.message}`);
   }
+}
 
 // Get user by ID with caching
 export async function getUserById(userId) {
@@ -594,6 +631,202 @@ export async function flushAllChanges() {
   }
 
   return true;
+}
+
+export async function storeChatMessage(
+  userId,
+  messageData,
+  generateEmbedding = false
+) {
+  try {
+    const messageId = crypto.randomBytes(16).toString("hex");
+
+    // Check if this is an important message that needs semantic search
+    const isImportant =
+      generateEmbedding ||
+      messageData.firstMessage ||
+      messageData.mentionsCharacter;
+
+    // Create the message document
+    const chatMessage = new ChatMessage({
+      user_id: userId,
+      username: messageData.username,
+      message: messageData.message,
+      message_id: messageId,
+      timestamp: new Date(),
+      ai_response: messageData.aiResponse || null,
+      is_important: isImportant,
+      metadata: {
+        firstMessage: messageData.firstMessage || false,
+        mentionsCharacter: messageData.mentionsCharacter || false,
+        emoteCount: messageData.emoteCount || 0,
+      },
+    });
+
+    // Save to MongoDB first
+    await chatMessage.save();
+
+    // If important, also store in Milvus for semantic search
+    if (isImportant) {
+      try {
+        // Create the summary text for embedding
+        const formattedDate = new Date().toLocaleString();
+        const summaryString = `On ${formattedDate}, ${messageData.username} said in ${userId}'s Twitch chat: "${messageData.message}". ${messageData.aiResponse ? `You responded by saying: ${messageData.aiResponse}` : ""}`;
+
+        // Store in Milvus
+        const embeddingId = await storeInMilvus(
+          userId,
+          summaryString,
+          messageData
+        );
+
+        // Update MongoDB with reference to Milvus entry
+        if (embeddingId) {
+          await ChatMessage.updateOne(
+            { message_id: messageId },
+            { $set: { embedding_id: embeddingId } }
+          );
+        }
+      } catch (milvusError) {
+        logger.error(
+          "Milvus",
+          `Error storing embedding: ${milvusError.message}`
+        );
+        // Continue anyway - we still have the message in MongoDB
+      }
+    }
+
+    return { success: true, message_id: messageId };
+  } catch (error) {
+    logger.error("MongoDB", `Error storing chat message: ${error.message}`);
+    return { success: false, error: error.message };
+  }
+}
+
+// Chat count - Get total number of messages without retrieving documents
+export async function getChatCount(userId) {
+  try {
+    const numChats = await ChatMessage.countDocuments({ user_id: userId });
+    logger.log("Mongo", `Getting ${numChats} for ${userId}`)
+  } catch (error) {
+    logger.error("MongoDB", `Error counting chats: ${error.message}`);
+    return 0;
+  }
+}
+
+// Get recent chats with pagination
+export async function getRecentChats(userId, limit = 25, skip = 0) {
+  try {
+    const messages = await ChatMessage.find({ user_id: userId })
+      .sort({ timestamp: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+
+    // Format for compatibility with existing code
+    return messages.map((msg) => ({
+      username: msg.username,
+      raw_msg: msg.message,
+      text_content: `${msg.username} sent the following message: ${msg.message}`,
+      ai_message: msg.ai_response || "",
+      time_stamp: new Date(msg.timestamp).getTime(),
+    }));
+  } catch (error) {
+    logger.error("MongoDB", `Error fetching recent chats: ${error.message}`);
+    return [];
+  }
+}
+
+// Find relevant chat context (our hybrid implementation)
+export async function findRelevantChatContext(
+  userId,
+  message,
+  username,
+  limit = 10,
+  options = {}
+) {
+  const { useVectors = true, simpleTextSearch = true } = options;
+
+  try {
+    // Start with MongoDB text search (fast)
+    let relevantMessages = [];
+
+    if (simpleTextSearch) {
+      // Use MongoDB text search for keyword matching
+      relevantMessages = await ChatMessage.find(
+        {
+          user_id: userId,
+          $text: { $search: message },
+        },
+        {
+          score: { $meta: "textScore" },
+        }
+      )
+        .sort({ score: { $meta: "textScore" } })
+        .limit(limit)
+        .lean();
+
+      // Format for compatibility with existing code
+      relevantMessages = relevantMessages.map((msg) => ({
+        username: msg.username,
+        raw_msg: msg.message,
+        text_content: `${msg.username} sent the following message: ${msg.message}`,
+        ai_message: msg.ai_response || "",
+        time_stamp: new Date(msg.timestamp).getTime(),
+      }));
+    }
+
+    // If we didn't find enough with text search and vectors are enabled, try Milvus
+    if (useVectors && relevantMessages.length < Math.ceil(limit / 2)) {
+      try {
+        // Import the vector search function
+        const { findRelevantChats } = await import("./ai-logic.js");
+
+        // Use Milvus for semantic search
+        const milvusResults = await findRelevantChats(
+          message,
+          username,
+          userId,
+          limit
+        );
+
+        // If we got Milvus results, either use them exclusively or merge
+        if (milvusResults && milvusResults.length > 0) {
+          if (relevantMessages.length === 0) {
+            // Just use Milvus results if MongoDB found nothing
+            return milvusResults;
+          } else {
+            // Merge results, prioritizing Milvus for semantic richness
+            // Use a Map to deduplicate by filtering on raw_msg
+            const messageMap = new Map();
+
+            // Add Milvus results first (priority)
+            milvusResults.forEach((msg) => {
+              messageMap.set(msg.raw_msg, msg);
+            });
+
+            // Add MongoDB results if not already present
+            relevantMessages.forEach((msg) => {
+              if (!messageMap.has(msg.raw_msg)) {
+                messageMap.set(msg.raw_msg, msg);
+              }
+            });
+
+            // Convert back to array and limit to requested size
+            return Array.from(messageMap.values()).slice(0, limit);
+          }
+        }
+      } catch (milvusError) {
+        logger.error("Chat", `Milvus search error: ${milvusError.message}`);
+        // Continue with MongoDB results if Milvus fails
+      }
+    }
+
+    return relevantMessages;
+  } catch (error) {
+    logger.error("Chat", `Error finding relevant context: ${error.message}`);
+    return [];
+  }
 }
 
 export async function checkDatabaseHealth() {

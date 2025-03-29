@@ -6,6 +6,7 @@ import { logger } from "../create-global-logger.js";
 import { fileURLToPath } from "url";
 import { dirname } from "path";
 import { returnRecentChats } from "../ai-logic.js";
+import { getChatCount } from "../mongodb-client.js";
 import {
   loadPreset,
   loadAllPresets,
@@ -445,12 +446,8 @@ async function webRoutes(fastify, options) {
 
         // Try to get actual chat count
         try {
-          const recentChats = await returnRecentChats(
-            user.user_id,
-            false,
-            true
-          );
-          stats.chatMessages = recentChats?.length || 0;
+          const recentChats = await getChatCount(user.user_id);
+          stats.chatMessages = recentChats || 0;
         } catch (error) {
           logger.error("Web", `Error fetching chat stats: ${error.message}`);
         }

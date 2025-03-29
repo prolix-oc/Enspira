@@ -4,7 +4,7 @@ import path from "path";
 import fetch from "node-fetch";
 import https from "https";
 import { performance } from "node:perf_hooks";
-import { processAudio } from './audio-processor.js';
+import { processAudio } from "./audio-processor.js";
 import {
   MilvusClient,
   DataType,
@@ -12,7 +12,7 @@ import {
   IndexType,
   ConsistencyLevelEnum,
   LoadState,
-  buildSearchParams
+  buildSearchParams,
 } from "@zilliz/milvus2-sdk-node";
 import OpenAI from "openai";
 import FormData from "form-data";
@@ -24,14 +24,18 @@ import {
   rerankPrompt,
   fixTTSString,
   sendChatCompletionRequest,
-  sendToolCompletionRequest
+  sendToolCompletionRequest,
 } from "./prompt-helper.js";
-import { SummaryRequestBody } from "./oai-requests.js"
+import { SummaryRequestBody } from "./oai-requests.js";
 import { returnTwitchEvent } from "./twitch-helper.js";
-import { resultsReranked, createRagError, pullFromWebScraper } from "./data-helper.js";
+import {
+  resultsReranked,
+  createRagError,
+  pullFromWebScraper,
+} from "./data-helper.js";
 import { returnAuthObject } from "./api-helper.js";
 import { retrieveConfigValue } from "./config-helper.js";
-import { fileURLToPath } from 'url';
+import { fileURLToPath } from "url";
 
 const queryCache = new Map();
 const collectionLoadStatus = new Map();
@@ -88,7 +92,7 @@ function setCachedResult(key, result, ttl = DEFAULT_TTL) {
   // Add new entry to cache
   queryCache.set(key, {
     result,
-    expiry: Date.now() + ttl
+    expiry: Date.now() + ttl,
   });
 }
 
@@ -113,7 +117,11 @@ function clearQueryCache(pattern = null) {
   logger.log("Milvus", `Query cache entries matching '${pattern}' cleared`);
 }
 
-async function retryMilvusOperation(operation, maxRetries = 3, initialDelay = 100) {
+async function retryMilvusOperation(
+  operation,
+  maxRetries = 3,
+  initialDelay = 100
+) {
   let lastError;
   let delay = initialDelay;
 
@@ -125,15 +133,18 @@ async function retryMilvusOperation(operation, maxRetries = 3, initialDelay = 10
 
       // Determine if error is retryable
       const isRetryable =
-        error.message?.includes('connection') ||
-        error.message?.includes('timeout') ||
-        error.message?.includes('busy') ||
-        error.code === 'NetworkError' ||
-        error.status?.code === 'Unavailable';
+        error.message?.includes("connection") ||
+        error.message?.includes("timeout") ||
+        error.message?.includes("busy") ||
+        error.code === "NetworkError" ||
+        error.status?.code === "Unavailable";
 
       if (isRetryable && attempt < maxRetries) {
-        logger.log("Milvus", `Retrying operation, attempt ${attempt}/${maxRetries} after ${delay}ms delay. Error: ${error.message}`);
-        await new Promise(resolve => setTimeout(resolve, delay));
+        logger.log(
+          "Milvus",
+          `Retrying operation, attempt ${attempt}/${maxRetries} after ${delay}ms delay. Error: ${error.message}`
+        );
+        await new Promise((resolve) => setTimeout(resolve, delay));
         delay *= 2; // Exponential backoff
       } else {
         // Non-retryable error or max retries reached
@@ -150,7 +161,7 @@ async function ensureCollectionLoaded(collectionName, userId) {
 
   // Check cache first
   const cached = collectionLoadStatus.get(key);
-  if (cached && cached.loaded && (Date.now() - cached.timestamp) < cacheExpiry) {
+  if (cached && cached.loaded && Date.now() - cached.timestamp < cacheExpiry) {
     return true;
   }
 
@@ -214,20 +225,30 @@ async function processVectorBatch(collectionType, userId) {
     // Perform batch insertion
     await client.insert({
       collection_name: `${await retrieveConfigValue(`milvus.collections.${collectionType}`)}_${userId}`,
-      fields_data: vectors
+      fields_data: vectors,
     });
 
-    logger.log("Milvus", `Batch inserted ${vectors.length} vectors into ${collectionType}_${userId}`);
+    logger.log(
+      "Milvus",
+      `Batch inserted ${vectors.length} vectors into ${collectionType}_${userId}`
+    );
   } catch (error) {
     logger.log("Milvus", `Error batch inserting vectors: ${error}`);
     // Implement retry logic here
   }
 }
 
-async function getOptimizedSearchParams(collectionName, userId, queryEmbedding, limit, textParam, options = {}) {
+async function getOptimizedSearchParams(
+  collectionName,
+  userId,
+  queryEmbedding,
+  limit,
+  textParam,
+  options = {}
+) {
   // Get collection info to determine appropriate parameters
   const collStats = await client.getCollectionStatistics({
-    collection_name: `${collectionName}_${userId}`
+    collection_name: `${collectionName}_${userId}`,
   });
 
   const rowCount = parseInt(collStats.stats.row_count);
@@ -364,8 +385,8 @@ const chatSchema = async (userId) => {
       {
         field_name: "time_stamp",
         index_name: "idx_time_stamp",
-        index_type: IndexType.RANGE
-      }
+        index_type: IndexType.RANGE,
+      },
     ],
   };
 };
@@ -482,7 +503,7 @@ const userSchema = async (userId) => {
   };
 };
 
-const milvusDatabaseUrl = await retrieveConfigValue("milvus.endpoint")
+const milvusDatabaseUrl = await retrieveConfigValue("milvus.endpoint");
 const client = new MilvusClient({
   address: milvusDatabaseUrl,
 });
@@ -530,7 +551,7 @@ async function createCollection(collection, userId) {
     if (!schema) {
       logger.log(
         "Milvus",
-        `Error: No schema found for collection ${collection}.`,
+        `Error: No schema found for collection ${collection}.`
       );
       return; // Exit if no schema is found
     }
@@ -545,18 +566,18 @@ async function createCollection(collection, userId) {
       if (response.error_code === "Success") {
         logger.log(
           "Milvus",
-          `Collection '${collection}_${userId}' created successfully.`,
+          `Collection '${collection}_${userId}' created successfully.`
         );
       } else {
         logger.log(
           "Milvus",
-          `Failed to create collection '${collection}_${userId}'. Reason: ${response.reason}`,
+          `Failed to create collection '${collection}_${userId}'. Reason: ${response.reason}`
         );
       }
     } else {
       logger.log(
         "Milvus",
-        `Collection '${collection}_${userId}' already exists.`,
+        `Collection '${collection}_${userId}' already exists.`
       );
     }
   } catch (error) {
@@ -595,7 +616,7 @@ async function loadCollectionIfNeeded(collectionName, userId) {
     if (collectionStatus.state === LoadState.LoadStateNotExist) {
       logger.log(
         "Milvus",
-        `Collection ${collectionName}_${userId} does not exist`,
+        `Collection ${collectionName}_${userId} does not exist`
       );
       return false;
     } else if (collectionStatus.state === LoadState.LoadStateNotLoad) {
@@ -604,7 +625,7 @@ async function loadCollectionIfNeeded(collectionName, userId) {
       });
       logger.log(
         "Milvus",
-        `Collection ${collectionName}_${userId} loaded successfully.`,
+        `Collection ${collectionName}_${userId} loaded successfully.`
       );
       return true;
     } else {
@@ -624,7 +645,11 @@ export function validateEmbeddingDimension(embedding, expectedDim) {
   }
 }
 
-export async function axiosRequestWithRetry(config, attempts = 3, initialDelay = 1000) {
+export async function axiosRequestWithRetry(
+  config,
+  attempts = 3,
+  initialDelay = 1000
+) {
   let delay = initialDelay;
   for (let i = 0; i < attempts; i++) {
     try {
@@ -632,7 +657,7 @@ export async function axiosRequestWithRetry(config, attempts = 3, initialDelay =
     } catch (error) {
       if (i === attempts - 1) {
       }
-      await new Promise(resolve => setTimeout(resolve, delay));
+      await new Promise((resolve) => setTimeout(resolve, delay));
       delay *= 2; // Exponential backoff
     }
   }
@@ -657,14 +682,21 @@ export async function getMessageEmbedding(message) {
     const response = await axiosRequestWithRetry(config, 3, 1000);
     const embeddingResp = response.data.data;
     return embeddingResp.length > 1
-      ? embeddingResp.map(item => item.embedding)
+      ? embeddingResp.map((item) => item.embedding)
       : embeddingResp[0].embedding;
   } catch (error) {
     logger.log("System", `Error generating embedding: ${error}`);
   }
 }
 
-async function searchDocumentsInMilvus(queryEmbedding, collectionName, textParam, limit, userId, options = {}) {
+async function searchDocumentsInMilvus(
+  queryEmbedding,
+  collectionName,
+  textParam,
+  limit,
+  userId,
+  options = {}
+) {
   if (!queryEmbedding || queryEmbedding.length === 0) {
     logger.log("Milvus", "Query embedding is empty.");
     return { results: [] };
@@ -674,7 +706,10 @@ async function searchDocumentsInMilvus(queryEmbedding, collectionName, textParam
     // Ensure collection is loaded using our new cache system
     const isLoaded = await ensureCollectionLoaded(collectionName, userId);
     if (!isLoaded) {
-      logger.log("Milvus", `Collection ${collectionName}_${userId} not available for search.`);
+      logger.log(
+        "Milvus",
+        `Collection ${collectionName}_${userId} not available for search.`
+      );
       return { results: [] };
     }
 
@@ -698,7 +733,7 @@ async function searchDocumentsInMilvus(queryEmbedding, collectionName, textParam
     const timeElapsed = (performance.now() - startTime) / 1000;
     logger.log(
       "DB Metrics",
-      `Vector search took ${timeElapsed.toFixed(3)} seconds for query in collection "${collectionName}".`,
+      `Vector search took ${timeElapsed.toFixed(3)} seconds for query in collection "${collectionName}".`
     );
 
     return searchResponse;
@@ -723,91 +758,154 @@ async function findRelevantChats(message, user, userId, topK = 10) {
   if (cachedResult) return cachedResult;
 
   try {
-    // Verify collection exists (using our optimized collection check)
-    const created = await checkAndCreateCollection(
-      await retrieveConfigValue("milvus.collections.chat"),
-      userId,
-    );
-    if (!created) {
-      return false;
-    }
+    // Import MongoDB search function
+    const { findRelevantChatContext } = await import("./mongodb-client.js");
 
-    // Get embedding
-    const messageEmbedding = await getMessageEmbedding(message);
-    const binaryEmbedding = Buffer.from(messageEmbedding);
-
-    // Get collection schema to validate embedding dimensions
-    const collectionSchema = await getCollectionSchema(
-      await retrieveConfigValue("milvus.collections.chat"),
-      userId,
-    );
-
-    const embeddingField = collectionSchema.fields.find(
-      (field) => field.name === "embedding",
-    );
-    const expectedDim = parseInt(embeddingField?.type_params.find(param => param.key === "dim")?.value);
-    validateEmbeddingDimension(binaryEmbedding, expectedDim);
-
-    // Use optimized search
-    const chatSearchResponse = await searchDocumentsInMilvus(
-      binaryEmbedding,
-      await retrieveConfigValue("milvus.collections.chat"),
-      ["text_content", "username", "raw_msg", "ai_message"], // Get more fields in one query
-      topK,
-      userId,
-      { requireStrongConsistency: false } // Use session consistency for chat queries
-    );
+    // Use the hybrid search function
+    const results = await findRelevantChatContext(userId, message, user, topK, {
+      useVectors: true,
+      simpleTextSearch: true,
+    });
 
     // Cache the results
-    setCachedResult(cacheKey, chatSearchResponse.results, 30000); // 30 second TTL
-    return chatSearchResponse.results;
+    setCachedResult(cacheKey, results, 30000); // 30 second TTL
+    return results;
   } catch (error) {
-    logger.log("Milvus", `Error in findRelevantChats: ${error}`);
-    return []; // Return empty array on error
+    logger.log("Chat", `Error in findRelevantChats: ${error.message}`);
+
+    try {
+      // Verify collection exists (using our optimized collection check)
+      const created = await checkAndCreateCollection(
+        await retrieveConfigValue("milvus.collections.chat"),
+        userId
+      );
+      if (!created) {
+        return false;
+      }
+
+      // Get embedding
+      const messageEmbedding = await getMessageEmbedding(message);
+      const binaryEmbedding = Buffer.from(messageEmbedding);
+
+      // Get collection schema to validate embedding dimensions
+      const collectionSchema = await getCollectionSchema(
+        await retrieveConfigValue("milvus.collections.chat"),
+        userId
+      );
+
+      const embeddingField = collectionSchema.fields.find(
+        (field) => field.name === "embedding"
+      );
+      const expectedDim = parseInt(
+        embeddingField?.type_params.find((param) => param.key === "dim")?.value
+      );
+      validateEmbeddingDimension(binaryEmbedding, expectedDim);
+
+      // Use optimized search
+      const chatSearchResponse = await searchDocumentsInMilvus(
+        binaryEmbedding,
+        await retrieveConfigValue("milvus.collections.chat"),
+        ["text_content", "username", "raw_msg", "ai_message"], // Get more fields in one query
+        topK,
+        userId,
+        { requireStrongConsistency: false } // Use session consistency for chat queries
+      );
+
+      // Cache the results
+      setCachedResult(cacheKey, chatSearchResponse.results, 30000); // 30 second TTL
+      return chatSearchResponse.results;
+    } catch (error) {
+      logger.log("Milvus", `Error in Milvus fallback: ${error.message}`);
+      return []; // Return empty array on error
+    }
   }
 }
 
-async function returnRecentChats(userId, fromConsole = false, allChats = false) {
-  const userObj = await returnAuthObject(userId);
-  const collection = `${await retrieveConfigValue("milvus.collections.chat")}_${userId}`;
+async function returnRecentChats(
+  userId,
+  fromConsole = false,
+  allChats = false
+) {
   try {
-    const startTime = performance.now();
-    let queryResult;
-    if (allChats) {
-      queryResult = await client.query({
-        collection_name: collection,
-        output_fields: ["raw_msg", "username", "time_stamp"],
-        limit: 1001,
-        consistency_level: "Strong",
-      });
-    } else {
-      queryResult = await client.query({
-        collection_name: collection,
-        output_fields: ["raw_msg", "username", "time_stamp"],
-        limit: userObj.max_chats,
-        consistency_level: "Strong",
-      });
-    }
+    const userObj = await returnAuthObject(userId);
 
-    const sortedResults = queryResult.data.sort(
-      (a, b) => a.time_stamp - b.time_stamp,
-    );
+    // Import MongoDB functions
+    const { getRecentChats } = await import("./mongodb-client.js");
+
+    const startTime = performance.now();
+
+    // Get chat limit from user settings
+    const limit = allChats ? 1000 : userObj.max_chats || 25;
+
+    // Get messages from MongoDB
+    const messages = await getRecentChats(userId, limit);
+
+    // Sort messages by timestamp
+    const sortedResults = messages.sort((a, b) => a.time_stamp - b.time_stamp);
+
+    // Format results as before
     const formattedResults = sortedResults
       .map(
         (item) =>
-          `- ${item.username} sent the following message in ${userObj.user_name}'s Twitch channel: ${item.raw_msg}`,
+          `- ${item.username} sent the following message in ${userObj.user_name}'s Twitch channel: ${item.raw_msg}`
       )
       .join("\n");
+
     const timeElapsed = (performance.now() - startTime) / 1000;
-    logger.log("DB Metrics", `Recent chats took ${timeElapsed.toFixed(3)} seconds for query.`);
+    logger.log(
+      "DB Metrics",
+      `Recent chats took ${timeElapsed.toFixed(3)} seconds for query.`
+    );
+
     if (fromConsole) {
       return { chatList: formattedResults, executionTime: timeElapsed };
     } else {
       return formattedResults;
     }
   } catch (error) {
-    logger.log("Milvus", `Error in findRecentChats: ${error}`);
-    return [];
+    logger.log("MongoDB", `Error in findRecentChats: ${error.message}`);
+    try {
+      const startTime = performance.now();
+      let queryResult;
+      if (allChats) {
+        queryResult = await client.query({
+          collection_name: collection,
+          output_fields: ["raw_msg", "username", "time_stamp"],
+          limit: 1001,
+          consistency_level: "Strong",
+        });
+      } else {
+        queryResult = await client.query({
+          collection_name: collection,
+          output_fields: ["raw_msg", "username", "time_stamp"],
+          limit: userObj.max_chats,
+          consistency_level: "Strong",
+        });
+      }
+
+      const sortedResults = queryResult.data.sort(
+        (a, b) => a.time_stamp - b.time_stamp
+      );
+      const formattedResults = sortedResults
+        .map(
+          (item) =>
+            `- ${item.username} sent the following message in ${userObj.user_name}'s Twitch channel: ${item.raw_msg}`
+        )
+        .join("\n");
+      const timeElapsed = (performance.now() - startTime) / 1000;
+      logger.log(
+        "DB Metrics",
+        `Recent chats took ${timeElapsed.toFixed(3)} seconds for query.`
+      );
+      if (fromConsole) {
+        return { chatList: formattedResults, executionTime: timeElapsed };
+      } else {
+        return formattedResults;
+      }
+    } catch (error) {
+      logger.log("Milvus", `Error in findRecentChats: ${error}`);
+      return [];
+    }
   }
 }
 
@@ -828,7 +926,7 @@ async function findRelevantDocuments(message, userId, topK = 10) {
     // Ensure collection exists and is loaded
     const collExists = await checkAndCreateCollection(
       await retrieveConfigValue("milvus.collections.intelligence"),
-      userId,
+      userId
     );
 
     if (!collExists) {
@@ -840,13 +938,15 @@ async function findRelevantDocuments(message, userId, topK = 10) {
     const binaryEmbedding = Buffer.from(messageEmbedding);
     const collectionSchema = await getCollectionSchema(
       await retrieveConfigValue("milvus.collections.intelligence"),
-      userId,
+      userId
     );
 
     const embeddingField = collectionSchema.fields.find(
-      (field) => field.name === "embedding",
+      (field) => field.name === "embedding"
     );
-    const expectedDim = parseInt(embeddingField?.type_params.find(param => param.key === "dim")?.value);
+    const expectedDim = parseInt(
+      embeddingField?.type_params.find((param) => param.key === "dim")?.value
+    );
     validateEmbeddingDimension(binaryEmbedding, expectedDim);
 
     // Use optimized search with higher nprobe for documents (more accurate)
@@ -858,7 +958,7 @@ async function findRelevantDocuments(message, userId, topK = 10) {
       userId,
       {
         criticalSearch: true, // Higher importance search
-        maxRetries: 3
+        maxRetries: 3,
       }
     );
 
@@ -888,7 +988,7 @@ async function findRelevantVoiceInMilvus(message, userId, topK = 5) {
     // Ensure collection exists and is loaded
     const created = await checkAndCreateCollection(
       await retrieveConfigValue("milvus.collections.voice"),
-      userId,
+      userId
     );
 
     if (!created) {
@@ -900,13 +1000,15 @@ async function findRelevantVoiceInMilvus(message, userId, topK = 5) {
     const binaryEmbedding = Buffer.from(messageEmbedding);
     const collectionSchema = await getCollectionSchema(
       await retrieveConfigValue("milvus.collections.voice"),
-      userId,
+      userId
     );
 
     const embeddingField = collectionSchema.fields.find(
-      (field) => field.name === "embedding",
+      (field) => field.name === "embedding"
     );
-    const expectedDim = parseInt(embeddingField?.type_params.find(param => param.key === "dim")?.value);
+    const expectedDim = parseInt(
+      embeddingField?.type_params.find((param) => param.key === "dim")?.value
+    );
     validateEmbeddingDimension(binaryEmbedding, expectedDim);
 
     // Use optimized search
@@ -957,7 +1059,7 @@ async function upsertUserInfo(userId, userInfo) {
 
     logger.log(
       "Milvus",
-      `User info for ${userInfo.username} upserted in collection ${collectionName}.`,
+      `User info for ${userInfo.username} upserted in collection ${collectionName}.`
     );
   } catch (error) {
     logger.log("Milvus", `Error upserting user info: ${error}`);
@@ -1010,7 +1112,7 @@ async function findUserInMilvus(username, userId) {
     } else {
       logger.log(
         "Milvus",
-        `User ${username} not found in collection ${collectionName}.`,
+        `User ${username} not found in collection ${collectionName}.`
       );
       return null;
     }
@@ -1043,15 +1145,15 @@ async function upsertIntelligenceToMilvus(data, collection, userId) {
     if (upsertResponse.status.error_code === "Success") {
       logger.log(
         "Milvus",
-        `Upserted ${data.length} items into ${collection}_${userId}`,
+        `Upserted ${data.length} items into ${collection}_${userId}`
       );
-      return true
+      return true;
     } else {
       logger.log(
         "Milvus",
-        `Failed to upsert data into ${collection}_${userId}. Reason: ${upsertResponse.status.reason}`,
+        `Failed to upsert data into ${collection}_${userId}. Reason: ${upsertResponse.status.reason}`
       );
-      return false
+      return false;
     }
   } catch (error) {
     logger.log("Milvus", `Error upserting data: ${error}`);
@@ -1070,12 +1172,12 @@ async function deleteVectorsFromMilvus(relations, collection, userId) {
       if (deleteResponse.status.error_code === "Success") {
         logger.log(
           "Milvus",
-          `Deleted vector with relation '${relation}' from ${collection}_${userId}`,
+          `Deleted vector with relation '${relation}' from ${collection}_${userId}`
         );
       } else {
         logger.log(
           "Milvus",
-          `Failed to delete vector with relation '${relation}' from ${collection}_${userId}. Reason: ${deleteResponse.status.reason}`,
+          `Failed to delete vector with relation '${relation}' from ${collection}_${userId}. Reason: ${deleteResponse.status.reason}`
         );
       }
     }
@@ -1096,7 +1198,7 @@ async function insertAugmentVectorsToMilvus(
   vectors,
   content,
   relational,
-  userId,
+  userId
 ) {
   try {
     const collectionName = `${await retrieveConfigValue("milvus.collections.intelligence")}_${userId}`;
@@ -1108,7 +1210,7 @@ async function insertAugmentVectorsToMilvus(
       logger.log("Milvus", `Collection ${collectionName} does not exist.`);
       const created = await checkAndCreateCollection(
         await retrieveConfigValue("milvus.collections.intelligence"),
-        userId,
+        userId
       );
       if (!created) {
         logger.log("Milvus", `Failed to create collection ${collectionName}.`);
@@ -1118,7 +1220,7 @@ async function insertAugmentVectorsToMilvus(
 
     const isLoaded = await loadCollectionIfNeeded(
       await retrieveConfigValue("milvus.collections.intelligence"),
-      userId,
+      userId
     );
     if (!isLoaded) {
       logger.log("Milvus", `Failed to load collection ${collectionName}.`);
@@ -1142,13 +1244,13 @@ async function insertAugmentVectorsToMilvus(
     if (insertResponse.status.error_code === "Success") {
       logger.log(
         "Augment",
-        `Inserted/updated data in collection ${collectionName}`,
+        `Inserted/updated data in collection ${collectionName}`
       );
       return true;
     } else {
       logger.log(
         "Augment",
-        `Failed to insert/update data in collection ${collectionName}. Reason: ${insertResponse.status.reason}`,
+        `Failed to insert/update data in collection ${collectionName}. Reason: ${insertResponse.status.reason}`
       );
       return false;
     }
@@ -1169,61 +1271,75 @@ async function insertAugmentVectorsToMilvus(
 export async function retrieveWebContext(urls, query, subject, userId) {
   if (!urls || urls.length === 0) {
     return createRagError(
-      'context-retrieval', 
-      'No URLs provided for context extraction',
+      "context-retrieval",
+      "No URLs provided for context extraction",
       { query: query }
     );
   }
 
   try {
-    logger.log("LLM", `Starting optimized web context retrieval for '${query}'`);
+    logger.log(
+      "LLM",
+      `Starting optimized web context retrieval for '${query}'`
+    );
 
     // Step 1: Scrape each URL in parallel.
-    const scrapePromises = urls.map(urlObj =>
+    const scrapePromises = urls.map((urlObj) =>
       pullFromWebScraper([urlObj], subject)
     );
     const pageContentsArray = await Promise.all(scrapePromises);
-    const validContents = pageContentsArray.filter(content => 
-      content && typeof content === 'string' && content.trim() !== ""
+    const validContents = pageContentsArray.filter(
+      (content) =>
+        content && typeof content === "string" && content.trim() !== ""
     );
 
     if (validContents.length === 0) {
       return createRagError(
-        'content-scraping', 
-        'No valid content found from scraped URLs',
+        "content-scraping",
+        "No valid content found from scraped URLs",
         { urlCount: urls.length }
       );
     }
 
     // Step 2: Summarize each page individually.
-    const summaryPromises = validContents.map(content => summarizePage(content, subject));
-    const individualSummaries = await Promise.all(summaryPromises);
-    
-    // Filter out failed summaries
-    const validSummaries = individualSummaries.filter(summary => 
-      summary && !summary.error && summary.vectorString && summary.summaryContents
+    const summaryPromises = validContents.map((content) =>
+      summarizePage(content, subject)
     );
-    
+    const individualSummaries = await Promise.all(summaryPromises);
+
+    // Filter out failed summaries
+    const validSummaries = individualSummaries.filter(
+      (summary) =>
+        summary &&
+        !summary.error &&
+        summary.vectorString &&
+        summary.summaryContents
+    );
+
     if (validSummaries.length === 0) {
       return createRagError(
-        'summarization', 
-        'Failed to generate valid summaries from content',
+        "summarization",
+        "Failed to generate valid summaries from content",
         { contentCount: validContents.length }
       );
     }
 
     // Step 3: Generate a final combined summary.
     const finalSummary = await finalCombinedSummary(validSummaries, subject);
-    
+
     // Check if we got an error object back
     if (finalSummary && finalSummary.error) {
       return finalSummary; // Already a properly formatted error
     }
-    
-    if (!finalSummary || !finalSummary.vectorString || !finalSummary.summaryContents) {
+
+    if (
+      !finalSummary ||
+      !finalSummary.vectorString ||
+      !finalSummary.summaryContents
+    ) {
       return createRagError(
-        'final-summary', 
-        'Failed to generate final combined summary',
+        "final-summary",
+        "Failed to generate final combined summary",
         { summaryCount: validSummaries.length }
       );
     }
@@ -1231,20 +1347,22 @@ export async function retrieveWebContext(urls, query, subject, userId) {
     // Step 4: Upsert the final summary into the vector DB.
     const finalText = `### Final Summary for ${subject}:\n${finalSummary.summaryContents}`;
     const embeddingArray = await getMessageEmbedding(finalSummary.vectorString);
-    
+
     if (!embeddingArray) {
       return createRagError(
-        'embedding-generation', 
-        'Failed to generate embedding for summary',
-        { vectorString: finalSummary.vectorString.substring(0, 100) + '...' }
+        "embedding-generation",
+        "Failed to generate embedding for summary",
+        { vectorString: finalSummary.vectorString.substring(0, 100) + "..." }
       );
     }
-    
-    const upsertData = [{
-      relation: finalSummary.vectorString.slice(0, 512),
-      text_content: finalText,
-      embedding: embeddingArray,
-    }];
+
+    const upsertData = [
+      {
+        relation: finalSummary.vectorString.slice(0, 512),
+        text_content: finalText,
+        embedding: embeddingArray,
+      },
+    ];
 
     const upsertResult = await upsertIntelligenceToMilvus(
       upsertData,
@@ -1254,8 +1372,8 @@ export async function retrieveWebContext(urls, query, subject, userId) {
 
     if (!upsertResult) {
       return createRagError(
-        'vector-storage', 
-        'Failed to store summary in vector database',
+        "vector-storage",
+        "Failed to store summary in vector database",
         { subject: subject }
       );
     }
@@ -1263,8 +1381,15 @@ export async function retrieveWebContext(urls, query, subject, userId) {
     logger.log("Augment", `Final combined summary stored for '${subject}'`);
     return finalText;
   } catch (error) {
-    logger.log("Augment", `Error in web context retrieval for '${query}': ${error.message}`, "err");
-    return createRagError('web-context', error.message, { query: query, subject: subject });
+    logger.log(
+      "Augment",
+      `Error in web context retrieval for '${query}': ${error.message}`,
+      "err"
+    );
+    return createRagError("web-context", error.message, {
+      query: query,
+      subject: subject,
+    });
   }
 }
 
@@ -1276,33 +1401,39 @@ async function summarizePage(pageContent, subject) {
       await retrieveConfigValue("models.summary.model"),
       pageContent
     );
-    
-    const chatTask = await sendToolCompletionRequest(instruct, await retrieveConfigValue("models.summary"));
-    
+
+    const chatTask = await sendToolCompletionRequest(
+      instruct,
+      await retrieveConfigValue("models.summary")
+    );
+
     // Handle the response based on its type
     if (!chatTask) {
       logger.log("Augment", "Empty response from summary request");
       return null;
     }
-    
+
     if (chatTask.error) {
       logger.log("Augment", `Error in summary request: ${chatTask.error}`);
       return { error: chatTask.error };
     }
-    
+
     // If response is already an object (from the guided format), use it directly
-    if (typeof chatTask.response === 'object' && chatTask.response !== null) {
+    if (typeof chatTask.response === "object" && chatTask.response !== null) {
       return chatTask.response;
     }
-    
+
     // Otherwise try parsing it as JSON
     try {
       return JSON.parse(chatTask.response);
     } catch (parseError) {
-      logger.log("Augment", `Failed to parse summary response as JSON: ${parseError.message}`);
-      return { 
+      logger.log(
+        "Augment",
+        `Failed to parse summary response as JSON: ${parseError.message}`
+      );
+      return {
         error: "JSON parsing failed",
-        details: parseError.message
+        details: parseError.message,
       };
     }
   } catch (error) {
@@ -1315,7 +1446,9 @@ async function finalCombinedSummary(summaries, subject) {
   try {
     // Combine the individual summaries into one text block
     const combinedText = summaries
-      .map(s => `Vector hint: ${s.vectorString}\nDetailed: ${s.summaryContents}`)
+      .map(
+        (s) => `Vector hint: ${s.vectorString}\nDetailed: ${s.summaryContents}`
+      )
       .join("\n\n");
 
     // Create a final summary prompt that instructs the model to produce a unified summary
@@ -1326,58 +1459,87 @@ async function finalCombinedSummary(summaries, subject) {
       await retrieveConfigValue("models.summary.model"),
       combinedText
     );
-    
-    const chatTask = await sendToolCompletionRequest(instruct, await retrieveConfigValue("models.summary"));
-    
+
+    const chatTask = await sendToolCompletionRequest(
+      instruct,
+      await retrieveConfigValue("models.summary")
+    );
+
     // Handle the response based on its type
     if (!chatTask) {
       logger.log("Augment", "Empty response from final summary request");
-      return createRagError('summary-generation', 'Empty response from summary tool');
+      return createRagError(
+        "summary-generation",
+        "Empty response from summary tool"
+      );
     }
-    
+
     if (chatTask.error) {
-      logger.log("Augment", `Error in final summary request: ${chatTask.error}`);
-      return createRagError('summary-generation', chatTask.error);
+      logger.log(
+        "Augment",
+        `Error in final summary request: ${chatTask.error}`
+      );
+      return createRagError("summary-generation", chatTask.error);
     }
-    
+
     // If response is already an object (from the guided format), use it directly
-    if (typeof chatTask.response === 'object' && chatTask.response !== null) {
+    if (typeof chatTask.response === "object" && chatTask.response !== null) {
       // Validate that the object has the expected properties
-      if (!chatTask.response.vectorString || !chatTask.response.summaryContents) {
-        logger.log("Augment", "Final summary response missing required properties");
+      if (
+        !chatTask.response.vectorString ||
+        !chatTask.response.summaryContents
+      ) {
+        logger.log(
+          "Augment",
+          "Final summary response missing required properties"
+        );
         return createRagError(
-          'summary-format',
-          'Summary response missing required properties',
-          { response: JSON.stringify(chatTask.response).substring(0, 100) + '...' }
+          "summary-format",
+          "Summary response missing required properties",
+          {
+            response:
+              JSON.stringify(chatTask.response).substring(0, 100) + "...",
+          }
         );
       }
       return chatTask.response;
     }
-    
+
     // Otherwise try parsing it as JSON
     try {
       const parsedResponse = JSON.parse(chatTask.response);
       // Validate parsed response
       if (!parsedResponse.vectorString || !parsedResponse.summaryContents) {
-        logger.log("Augment", "Parsed final summary response missing required properties");
+        logger.log(
+          "Augment",
+          "Parsed final summary response missing required properties"
+        );
         return createRagError(
-          'summary-format',
-          'Parsed summary response missing required properties',
-          { response: JSON.stringify(parsedResponse).substring(0, 100) + '...' }
+          "summary-format",
+          "Parsed summary response missing required properties",
+          { response: JSON.stringify(parsedResponse).substring(0, 100) + "..." }
         );
       }
       return parsedResponse;
     } catch (parseError) {
-      logger.log("Augment", `Failed to parse final summary response as JSON: ${parseError.message}`);
+      logger.log(
+        "Augment",
+        `Failed to parse final summary response as JSON: ${parseError.message}`
+      );
       return createRagError(
-        'summary-parsing',
-        'Failed to parse summary as JSON',
-        { error: parseError.message, rawResponse: chatTask.response.substring(0, 100) + '...' }
+        "summary-parsing",
+        "Failed to parse summary as JSON",
+        {
+          error: parseError.message,
+          rawResponse: chatTask.response.substring(0, 100) + "...",
+        }
       );
     }
   } catch (error) {
     logger.log("Augment", `Error in finalCombinedSummary: ${error.message}`);
-    return createRagError('summary-execution', error.message, { stack: error.stack });
+    return createRagError("summary-execution", error.message, {
+      stack: error.stack,
+    });
   }
 }
 
@@ -1417,15 +1579,19 @@ async function searchBraveAPI(query, freshness) {
       const chosenResults = data.web.results.slice(0, 4);
       let resultStuff = [];
       for await (const item of chosenResults) {
-        const relevantItems = { url: item.url, title: item.title, source: item.meta_url.hostname }
-        resultStuff.push(relevantItems)
+        const relevantItems = {
+          url: item.url,
+          title: item.title,
+          source: item.meta_url.hostname,
+        };
+        resultStuff.push(relevantItems);
       }
       return resultStuff;
     } else {
       logger.log(
         "Brave Search",
         `No web results found from Brave for '${query}' using freshness '${freshness}'`,
-        "err",
+        "err"
       );
       return [];
     }
@@ -1433,7 +1599,6 @@ async function searchBraveAPI(query, freshness) {
     console.error("Error:", error);
   }
 }
-
 
 /**
  * Searches SearXNG for web results
@@ -1453,37 +1618,35 @@ export async function searchSearXNG(query, freshness) {
     const response = await axios.get(url.toString());
 
     if (!response.data || !Array.isArray(response.data.results)) {
-      return createRagError(
-        'search-api', 
-        'Invalid response from search API',
-        { query: query, responseStatus: response.status }
-      );
+      return createRagError("search-api", "Invalid response from search API", {
+        query: query,
+        responseStatus: response.status,
+      });
     }
 
     if (response.data.results.length === 0) {
-      return createRagError(
-        'search-results', 
-        'No results found for query',
-        { query: query, freshness: freshness }
-      );
+      return createRagError("search-results", "No results found for query", {
+        query: query,
+        freshness: freshness,
+      });
     }
 
     const chosenResults = response.data.results.slice(0, 4);
     let resultStuff = [];
-    
+
     for await (const item of chosenResults) {
-      const relevantItems = { 
-        url: item.url, 
-        title: item.title, 
-        source: item.parsed_url[1] 
+      const relevantItems = {
+        url: item.url,
+        title: item.title,
+        source: item.parsed_url[1],
       };
       resultStuff.push(relevantItems);
     }
-    
+
     return resultStuff;
   } catch (error) {
     logger.log("SearXNG Search", `Error searching: ${error.message}`);
-    return createRagError('search-execution', error.message, { query: query });
+    return createRagError("search-execution", error.message, { query: query });
   }
 }
 
@@ -1497,48 +1660,59 @@ export async function inferSearchParam(query, userId) {
   try {
     const instruct = await queryPrompt(query, userId);
 
-    const chatTask = await sendToolCompletionRequest(instruct, await retrieveConfigValue("models.query"));
+    const chatTask = await sendToolCompletionRequest(
+      instruct,
+      await retrieveConfigValue("models.query")
+    );
 
     if (!chatTask || chatTask.error) {
       return createRagError(
-        'query-generation', 
-        'Failed to generate search query',
-        { originalError: chatTask?.error || 'Unknown error' }
+        "query-generation",
+        "Failed to generate search query",
+        { originalError: chatTask?.error || "Unknown error" }
       );
     }
 
     // For tools using JSON response format, chatTask.response is already parsed
     const fullChat = chatTask.response;
-    
+
     // Validate that we have a properly structured response
-    if (!fullChat || typeof fullChat !== 'object') {
+    if (!fullChat || typeof fullChat !== "object") {
       return createRagError(
-        'query-parsing',
-        'Invalid response structure from query builder',
+        "query-parsing",
+        "Invalid response structure from query builder",
         { responseType: typeof fullChat }
       );
     }
 
     if (fullChat.valid === false) {
-      logger.log("LLM", `Query builder opted out of search for this query. Reason: ${fullChat.reason}`);
-      return { 
-        success: false, 
-        optedOut: true, 
-        reason: fullChat.reason 
+      logger.log(
+        "LLM",
+        `Query builder opted out of search for this query. Reason: ${fullChat.reason}`
+      );
+      return {
+        success: false,
+        optedOut: true,
+        reason: fullChat.reason,
       };
     } else {
-      logger.log("LLM", `Returned optimized search param: '${fullChat.searchTerm}'. Time to first token: ${chatTask.timeToFirstToken} seconds. Process speed: ${chatTask.tokensPerSecond}tps`);
+      logger.log(
+        "LLM",
+        `Returned optimized search param: '${fullChat.searchTerm}'. Time to first token: ${chatTask.timeToFirstToken} seconds. Process speed: ${chatTask.tokensPerSecond}tps`
+      );
       return {
         success: true,
         searchTerm: fullChat.searchTerm,
         subject: fullChat.subject,
         freshness: fullChat.freshness,
-        vectorString: fullChat.vectorString
+        vectorString: fullChat.vectorString,
       };
     }
   } catch (error) {
     logger.log("LLM", `Error inferring search parameter: ${error}`);
-    return createRagError('query-inference', error.message, { stack: error.stack });
+    return createRagError("query-inference", error.message, {
+      stack: error.stack,
+    });
   }
 }
 
@@ -1560,7 +1734,7 @@ async function insertVoiceVectorsIntoMilvus(
   response,
   user,
   date,
-  userId,
+  userId
 ) {
   try {
     const collectionName = `${await retrieveConfigValue("milvus.collections.voice")}_${userId}`;
@@ -1571,16 +1745,16 @@ async function insertVoiceVectorsIntoMilvus(
     if (!exists.value) {
       logger.log(
         "Milvus Voice",
-        `Collection ${collectionName} does not exist.`,
+        `Collection ${collectionName} does not exist.`
       );
       const created = await checkAndCreateCollection(
         await retrieveConfigValue("milvus.collections.voice"),
-        userId,
+        userId
       );
       if (!created) {
         logger.log(
           "Milvus Voice",
-          `Could not spawn collection '${collectionName}'`,
+          `Could not spawn collection '${collectionName}'`
         );
         return false;
       }
@@ -1588,12 +1762,12 @@ async function insertVoiceVectorsIntoMilvus(
 
     const isLoaded = await loadCollectionIfNeeded(
       await retrieveConfigValue("milvus.collections.voice"),
-      userId,
+      userId
     );
     if (!isLoaded) {
       logger.log(
         "Milvus Voice",
-        `Failed to load collection '${collectionName}'`,
+        `Failed to load collection '${collectionName}'`
       );
       return false;
     }
@@ -1617,20 +1791,20 @@ async function insertVoiceVectorsIntoMilvus(
     if (insertResponse.status.error_code === "Success") {
       logger.log(
         "Milvus Voice",
-        `Inserted voice interaction vectors into ${collectionName}`,
+        `Inserted voice interaction vectors into ${collectionName}`
       );
       return true;
     } else {
       logger.log(
         "Milvus Voice",
-        `Failed to insert voice interaction vectors into ${collectionName}. Reason: ${insertResponse.status.reason}`,
+        `Failed to insert voice interaction vectors into ${collectionName}. Reason: ${insertResponse.status.reason}`
       );
       return false;
     }
   } catch (error) {
     logger.log(
       "Milvus Voice",
-      `Error inserting voice interaction vectors: ${error}`,
+      `Error inserting voice interaction vectors: ${error}`
     );
     return false;
   }
@@ -1676,25 +1850,25 @@ async function checkAndCreateCollection(collection, userId) {
     if (!exists.value) {
       logger.log(
         "Milvus",
-        `Collection '${collection}_${userId}' does not exist. Attempting to create...`,
+        `Collection '${collection}_${userId}' does not exist. Attempting to create...`
       );
       await createCollection(collection, userId);
       logger.log(
         "Milvus",
-        `Collection '${collection}_${userId}' creation attempted.`,
+        `Collection '${collection}_${userId}' creation attempted.`
       );
       return true; // Collection was created or creation was attempted
     } else {
       logger.log(
         "Milvus",
-        `Collection '${collection}_${userId}' already exists.`,
+        `Collection '${collection}_${userId}' already exists.`
       );
       return true; // Collection already exists
     }
   } catch (error) {
     logger.log(
       "Milvus",
-      `Error checking or creating collection '${collection}_${userId}': ${error}`,
+      `Error checking or creating collection '${collection}_${userId}': ${error}`
     );
     return false; // Indicate failure
   }
@@ -1720,11 +1894,11 @@ async function compareDocuments(directory, userId, collectionName) {
         } catch (error) {
           logger.log(
             "File System",
-            `Error reading or parsing file ${filename}: ${error}`,
+            `Error reading or parsing file ${filename}: ${error}`
           );
           return null;
         }
-      }),
+      })
     )
   ).filter((content) => content !== null);
 
@@ -1737,11 +1911,11 @@ async function compareDocuments(directory, userId, collectionName) {
 
   logger.log(
     "Milvus",
-    `Retrieved ${existingDocsResponse.data.length} existing documents from Milvus for user ${userId}.`,
+    `Retrieved ${existingDocsResponse.data.length} existing documents from Milvus for user ${userId}.`
   );
 
   const existingDocsMap = new Map(
-    existingDocsResponse.data.map((doc) => [doc.relation, doc]),
+    existingDocsResponse.data.map((doc) => [doc.relation, doc])
   );
 
   // Prepare data for comparison
@@ -1753,7 +1927,7 @@ async function compareDocuments(directory, userId, collectionName) {
     if (!localDoc || !localDoc.relation || localDoc.content === undefined) {
       logger.log(
         "Milvus",
-        `Skipping invalid local document: ${JSON.stringify(localDoc)}`,
+        `Skipping invalid local document: ${JSON.stringify(localDoc)}`
       );
       continue;
     }
@@ -1811,19 +1985,19 @@ async function processFiles(directory, userId) {
     const collectionName = `${await retrieveConfigValue("milvus.collections.intelligence")}_${userId}`;
     const collectionCreated = await checkAndCreateCollection(
       await retrieveConfigValue("milvus.collections.intelligence"),
-      userId,
+      userId
     );
     if (!collectionCreated) {
       logger.log(
         "Milvus",
-        `Failed to create or verify collection for ${userId}.`,
+        `Failed to create or verify collection for ${userId}.`
       );
       return;
     }
 
     const loadedColl = await loadCollectionIfNeeded(
       await retrieveConfigValue("milvus.collections.intelligence"),
-      userId,
+      userId
     );
     if (!loadedColl) {
       logger.log("Milvus", `Failed to load collection for ${userId}.`);
@@ -1838,11 +2012,11 @@ async function processFiles(directory, userId) {
       await upsertIntelligenceToMilvus(
         [...actions.missing],
         await retrieveConfigValue("milvus.collections.intelligence"),
-        userId,
+        userId
       );
       logger.log(
         "Milvus",
-        `Adding ${actions.missing.length} documents to ${userId}'s intelligence collection...`,
+        `Adding ${actions.missing.length} documents to ${userId}'s intelligence collection...`
       );
     }
 
@@ -1850,11 +2024,11 @@ async function processFiles(directory, userId) {
       await upsertIntelligenceToMilvus(
         [...actions.update],
         await retrieveConfigValue("milvus.collections.intelligence"),
-        userId,
+        userId
       );
       logger.log(
         "Milvus",
-        `Updating ${actions.missing.length} documents from ${userId}'s intelligence collection...`,
+        `Updating ${actions.missing.length} documents from ${userId}'s intelligence collection...`
       );
     }
 
@@ -1863,11 +2037,11 @@ async function processFiles(directory, userId) {
       await deleteVectorsFromMilvus(
         actions.remove.map((doc) => doc.relation),
         await retrieveConfigValue("milvus.collections.intelligence"),
-        userId,
+        userId
       );
       logger.log(
         "Milvus",
-        `Removing ${actions.missing.length} documents from ${userId}'s intelligence collection...`,
+        `Removing ${actions.missing.length} documents from ${userId}'s intelligence collection...`
       );
     }
   } catch (error) {
@@ -1877,42 +2051,42 @@ async function processFiles(directory, userId) {
 
 /**
  * Responds to a chat message from any source
- * @param {object} messageData - The message data 
+ * @param {object} messageData - The message data
  * @param {string} userId - The user ID
  * @returns {Promise<object>} - The response
  */
 export async function respondToChat(messageData, userId) {
   try {
     const { message, user } = messageData;
-    
+
     // Format date for context
     const formattedDate = new Date().toLocaleString();
-    
+
     // Use existing response function
     const response = await respondWithContext(message, user, userId);
-    
+
     if (response && response.response) {
       // Add the conversation to vector storage
       const summaryString = `On ${formattedDate}, ${user} said: "${message}". You responded by saying: ${response.response}`;
-      
+
       addChatMessageAsVector(
-        summaryString, 
-        message, 
-        user, 
-        formattedDate, 
-        response.response, 
+        summaryString,
+        message,
+        user,
+        formattedDate,
+        response.response,
         userId
-      ).catch(err => {
+      ).catch((err) => {
         logger.log("API", "Error saving chat message vector:", err);
       });
-      
+
       return {
         success: true,
         text: response.response,
-        thoughtProcess: response.thoughtProcess || null
+        thoughtProcess: response.thoughtProcess || null,
       };
     }
-    
+
     return { success: false, error: "No response generated" };
   } catch (error) {
     logger.log("AI", `Error responding to chat: ${error.message}`);
@@ -1933,7 +2107,10 @@ async function respondWithContext(message, username, userID) {
     const responseCacheKey = `response_${userID}_${message}_${username}`;
     const cachedResponse = getCachedResult(responseCacheKey);
     if (cachedResponse) {
-      logger.log("System", "Using cached response from previous identical query");
+      logger.log(
+        "System",
+        "Using cached response from previous identical query"
+      );
       return cachedResponse;
     }
 
@@ -1964,13 +2141,23 @@ async function respondWithContext(message, username, userID) {
 
     // Use retryMilvusOperation to handle potential LLM request failures
     const chatTask = await retryMilvusOperation(
-      async () => sendChatCompletionRequest(body, await retrieveConfigValue("models.chat")),
-      2,  // Fewer retries for LLM since these can be slow
+      async () =>
+        sendChatCompletionRequest(
+          body,
+          await retrieveConfigValue("models.chat")
+        ),
+      2, // Fewer retries for LLM since these can be slow
       500 // Longer initial delay
     );
 
-    logger.log("LLM", `Processed thoughts: ${JSON.stringify(chatTask.thoughtProcess, null, 2)}`);
-    logger.log("System", `Generated textual character response. Time to first token: ${chatTask.timeToFirstToken} seconds. Process speed: ${chatTask.tokensPerSecond}tps`);
+    logger.log(
+      "LLM",
+      `Processed thoughts: ${JSON.stringify(chatTask.thoughtProcess, null, 2)}`
+    );
+    logger.log(
+      "System",
+      `Generated textual character response. Time to first token: ${chatTask.timeToFirstToken} seconds. Process speed: ${chatTask.tokensPerSecond}tps`
+    );
 
     // Cache the response for a short time (10 seconds)
     // Only cache if it was successful
@@ -1983,43 +2170,50 @@ async function respondWithContext(message, username, userID) {
   } catch (error) {
     logger.log("System", `Error calling respondWithContext: ${error}`);
     // Return a fallback response rather than throwing
-    return { 
-      response: "I'm sorry, I encountered an issue while processing your message. Could you please try again?",
-      thoughtProcess: `Error: ${error.message}`
+    return {
+      response:
+        "I'm sorry, I encountered an issue while processing your message. Could you please try again?",
+      thoughtProcess: `Error: ${error.message}`,
     };
   }
 }
 
 async function rerankString(message, userId) {
   const promptRerank = await rerankPrompt(message, userId);
-  const chatTask = await sendToolCompletionRequest(promptRerank, await retrieveConfigValue("models.rerankTransform"))
+  const chatTask = await sendToolCompletionRequest(
+    promptRerank,
+    await retrieveConfigValue("models.rerankTransform")
+  );
   return chatTask.response;
 }
 
 async function respondWithoutContext(message, userId) {
-  try {    
+  try {
     // Build the prompt data with minimal context
     const promptData = {
       relChats: "- No relevant chat context available.",
       relContext: "- No additional context to provide.",
       relVoice: "- No voice conversation history.",
-      chat_user: "User"
+      chat_user: "User",
     };
-    
+
     // Using updated contextPromptChat function with new message structure
     const body = await contextPromptChat(promptData, message, userId);
-    const chatTask = await sendChatCompletionRequest(body, await retrieveConfigValue("models.chat"));
-    
+    const chatTask = await sendChatCompletionRequest(
+      body,
+      await retrieveConfigValue("models.chat")
+    );
+
     const strippedResp = await replyStripped(chatTask.response, userId);
-    return { 
-      response: strippedResp, 
-      thoughtProcess: chatTask.thoughtProcess 
+    return {
+      response: strippedResp,
+      thoughtProcess: chatTask.thoughtProcess,
     };
   } catch (error) {
     logger.log("System", `Error in respondWithoutContext: ${error}`);
     return {
       response: "I'm sorry, I encountered an error processing your request.",
-      thoughtProcess: `Error: ${error.message}`
+      thoughtProcess: `Error: ${error.message}`,
     };
   }
 }
@@ -2030,7 +2224,7 @@ async function respondWithVoice(message, userId) {
   // Process acronyms in the message
   const fixedAcro = await fixTTSString(message);
   const userObj = await returnAuthObject(userId);
-  
+
   logger.log(
     "LLM",
     `Converted ${fixedAcro.acronymCount} acronyms in ${userObj.bot_name}'s TTS message.`
@@ -2038,46 +2232,45 @@ async function respondWithVoice(message, userId) {
 
   try {
     // Create temp directory
-    const tempDir = path.join(__dirname, 'temp');
+    const tempDir = path.join(__dirname, "temp");
     await fs.mkdir(tempDir, { recursive: true }).catch(() => {});
-    
+
     // Get the TTS preference from config
     const ttsPreference = await retrieveConfigValue("ttsPreference");
-    
+
     let audioFilePath;
     let outputFileName;
-    
+
     // Generate audio based on the preferred TTS engine
     if (ttsPreference === "fish") {
       // Fish TTS parameters
       const fishParameters = {
-        "text": fixedAcro.fixedString,
-        "chunk_length": 400,
-        "format": "wav",
-        "reference_id": userObj.fishTTSVoice,
-        "seed": null,
-        "normalize": false,
-        "streaming": false,
-        "max_new_tokens": 4096,
-        "top_p": 0.82,
-        "repetition_penalty": 1.2,
-        "temperature": 0.75
+        text: fixedAcro.fixedString,
+        chunk_length: 400,
+        format: "wav",
+        reference_id: userObj.fishTTSVoice,
+        seed: null,
+        normalize: false,
+        streaming: false,
+        max_new_tokens: 4096,
+        top_p: 0.82,
+        repetition_penalty: 1.2,
+        temperature: 0.75,
       };
-      
+
       // Make the API request, specifying responseType as arraybuffer for binary data
       const res = await axios.post(
         new URL(await retrieveConfigValue("fishTTS.ttsGenEndpoint.internal")),
         fishParameters,
-        { responseType: 'arraybuffer' }
+        { responseType: "arraybuffer" }
       );
-      
+
       // Generate a filename and save the audio data directly
       outputFileName = `fish_${userId}_${Date.now()}.wav`;
-      const tempFilePath = path.join('./final', outputFileName);
+      const tempFilePath = path.join("./final", outputFileName);
       await fs.writeFile(tempFilePath, Buffer.from(res.data));
-      
+
       audioFilePath = tempFilePath;
-      
     } else {
       // AllTalk implementation
       const voiceForm = new FormData();
@@ -2092,51 +2285,59 @@ async function respondWithVoice(message, userId) {
       voiceForm.append("autoplay", "false");
       voiceForm.append("temperature", "0.9");
       voiceForm.append("repetition_penalty", "1.5");
-      
+
       const res = await axios.post(
         new URL(await retrieveConfigValue("alltalk.ttsGenEndpoint.internal")),
         voiceForm
       );
-      
+
       // For AllTalk, download the file from the provided URL
       const fileRes = await axios({
-        method: 'GET',
+        method: "GET",
         url: `${await retrieveConfigValue("alltalk.ttsServeEndpoint.internal")}${res.data.output_file_url}`,
-        responseType: 'arraybuffer'
+        responseType: "arraybuffer",
       });
-      
+
       outputFileName = `alltalk_${userId}_${Date.now()}.wav`;
-      const tempFilePath = path.join('./final', outputFileName);
+      const tempFilePath = path.join("./final", outputFileName);
       await fs.writeFile(tempFilePath, Buffer.from(fileRes.data));
-      
+
       audioFilePath = tempFilePath;
     }
 
     const timeElapsed = (performance.now() - startTime) / 1000;
-    
+
     // Process the audio if user has upsampling preference enabled
     if (userObj.ttsUpsamplePref) {
       try {
         // Process the audio file with the specified preset
         const processedFilePath = processAudio(audioFilePath, {
-          preset: userObj.ttsEqPref || 'clarity',
-          userId: userObj.user_id
+          preset: userObj.ttsEqPref || "clarity",
+          userId: userObj.user_id,
         });
-        
+
         logger.log("API", `Processed audio file to ${processedFilePath}`);
 
         // Return the appropriate URL
-        const serviceEndpoint = ttsPreference === "fish" ? "fishTTS" : "alltalk";
+        const serviceEndpoint =
+          ttsPreference === "fish" ? "fishTTS" : "alltalk";
         const audioUrl = userObj.is_local
           ? `${await retrieveConfigValue(`${serviceEndpoint}.ttsServeEndpoint.internal`)}${processedFilePath}`
           : `${await retrieveConfigValue(`${serviceEndpoint}.ttsServeEndpoint.external`)}${processedFilePath}`;
-        
-        logger.log("LLM", `TTS request completed in ${timeElapsed.toFixed(2)} seconds.`);
+
+        logger.log(
+          "LLM",
+          `TTS request completed in ${timeElapsed.toFixed(2)} seconds.`
+        );
         return audioUrl;
       } catch (processingError) {
-        logger.error("API", `Error processing audio: ${processingError.message}`);
+        logger.error(
+          "API",
+          `Error processing audio: ${processingError.message}`
+        );
         // Return the original, unprocessed file path if processing fails
-        const serviceEndpoint = ttsPreference === "fish" ? "fishTTS" : "alltalk";
+        const serviceEndpoint =
+          ttsPreference === "fish" ? "fishTTS" : "alltalk";
         return userObj.is_local
           ? `${await retrieveConfigValue(`${serviceEndpoint}.ttsServeEndpoint.internal`)}/${path.basename(audioFilePath)}`
           : `${await retrieveConfigValue(`${serviceEndpoint}.ttsServeEndpoint.external`)}/${path.basename(audioFilePath)}`;
@@ -2147,8 +2348,11 @@ async function respondWithVoice(message, userId) {
       const audioUrl = userObj.is_local
         ? `${await retrieveConfigValue(`${serviceEndpoint}.ttsServeEndpoint.internal`)}/${path.basename(audioFilePath)}`
         : `${await retrieveConfigValue(`${serviceEndpoint}.ttsServeEndpoint.external`)}/${path.basename(audioFilePath)}`;
-      
-      logger.log("LLM", `TTS request completed in ${timeElapsed.toFixed(2)} seconds.`);
+
+      logger.log(
+        "LLM",
+        `TTS request completed in ${timeElapsed.toFixed(2)} seconds.`
+      );
       return audioUrl;
     }
   } catch (error) {
@@ -2184,9 +2388,15 @@ async function respondToDirectVoice(message, userId, withVoice = false) {
 
     // Using updated contextPromptChat function with new message structure
     const body = await contextPromptChat(promptData, message, userId);
-    const chatTask = await sendChatCompletionRequest(body, await retrieveConfigValue("models.chat"));
-    
-    logger.log("LLM", `Generated textual response to voice message. Time to first token: ${chatTask.timeToFirstToken} seconds. Process speed: ${chatTask.tokensPerSecond}tps`);
+    const chatTask = await sendChatCompletionRequest(
+      body,
+      await retrieveConfigValue("models.chat")
+    );
+
+    logger.log(
+      "LLM",
+      `Generated textual response to voice message. Time to first token: ${chatTask.timeToFirstToken} seconds. Process speed: ${chatTask.tokensPerSecond}tps`
+    );
     const strippedResp = await replyStripped(chatTask.response, userId);
 
     // If voice response requested, generate it
@@ -2195,23 +2405,30 @@ async function respondToDirectVoice(message, userId, withVoice = false) {
       return {
         response: strippedResp,
         audio_url: audioUrl,
-        thoughtProcess: chatTask.thoughtProcess
+        thoughtProcess: chatTask.thoughtProcess,
       };
     } else {
       return {
         response: strippedResp,
-        thoughtProcess: chatTask.thoughtProcess
+        thoughtProcess: chatTask.thoughtProcess,
       };
     }
   } catch (error) {
     logger.log("Voice", `Error in respondToDirectVoice: ${error}`);
     return {
       response: "Error processing voice response.",
-      error: error.message
+      error: error.message,
     };
   }
 }
-async function addChatMessageAsVector(sumText, message, username, date, response, userId) {
+async function addChatMessageAsVector(
+  sumText,
+  message,
+  username,
+  date,
+  response,
+  userId
+) {
   try {
     // Use our optimized collection loading
     const isLoaded = await ensureCollectionLoaded(
@@ -2238,7 +2455,7 @@ async function addChatMessageAsVector(sumText, message, username, date, response
     };
 
     // Schedule for batch insertion
-    scheduleVectorInsertion('chat', userId, vectorData);
+    scheduleVectorInsertion("chat", userId, vectorData);
     return true;
   } catch (error) {
     logger.log("Milvus", `Error processing chat text: ${error}`);
@@ -2252,11 +2469,11 @@ async function addVoiceMessageAsVector(
   username,
   date,
   response,
-  userId,
+  userId
 ) {
   const loadedColl = await loadCollectionIfNeeded(
     await retrieveConfigValue("milvus.collections.voice"),
-    userId,
+    userId
   );
   if (!loadedColl) {
     logger.log("Milvus", `Can't load collection for voice.`);
@@ -2272,7 +2489,7 @@ async function addVoiceMessageAsVector(
       response,
       username,
       date,
-      userId,
+      userId
     );
     if (success) {
       logger.log("Milvus", "Voice message successfully inserted into Milvus.");
@@ -2287,20 +2504,26 @@ async function addVoiceMessageAsVector(
 async function respondToEvent(event, userId) {
   try {
     const eventMessage = await returnTwitchEvent(event, userId);
-    
+
     // Using updated eventPromptChat function with the new message structure
     const instructPrompt = await eventPromptChat(eventMessage, userId);
 
-    const chatTask = await sendChatCompletionRequest(instructPrompt, await retrieveConfigValue("models.chat"));
-    logger.log("LLM", `Generated event response. Time to first token: ${chatTask.timeToFirstToken} seconds. Process speed: ${chatTask.tokensPerSecond}tps`);
-    
+    const chatTask = await sendChatCompletionRequest(
+      instructPrompt,
+      await retrieveConfigValue("models.chat")
+    );
+    logger.log(
+      "LLM",
+      `Generated event response. Time to first token: ${chatTask.timeToFirstToken} seconds. Process speed: ${chatTask.tokensPerSecond}tps`
+    );
+
     const strippedResp = await replyStripped(chatTask.response, userId);
     return { response: strippedResp, thoughtProcess: chatTask.thoughtProcess };
   } catch (error) {
     logger.log("System", `Error in respondToEvent: ${error}`);
-    return { 
+    return {
       response: "I'm sorry, I encountered an error processing this event.",
-      thoughtProcess: `Error: ${error.message}`
+      thoughtProcess: `Error: ${error.message}`,
     };
   }
 }
@@ -2310,7 +2533,7 @@ async function startIndexingVectors(userId) {
   logger.log("Milvus", `Beginning indexing for ${authObjects.user_id}`);
   await processFiles(
     `${await retrieveConfigValue("milvus.localTextDirectory")}`,
-    authObjects.user_id,
+    authObjects.user_id
   );
 }
 
@@ -2332,7 +2555,7 @@ async function checkMilvusHealthDetailed(userId = null) {
     const healthData = {
       isHealthy: isHealthy.isHealthy,
       timestamp: Date.now(),
-      metrics: {}
+      metrics: {},
     };
 
     if (!isHealthy.isHealthy) {
@@ -2346,7 +2569,7 @@ async function checkMilvusHealthDetailed(userId = null) {
         await retrieveConfigValue("milvus.collections.user"),
         await retrieveConfigValue("milvus.collections.intelligence"),
         await retrieveConfigValue("milvus.collections.chat"),
-        await retrieveConfigValue("milvus.collections.voice")
+        await retrieveConfigValue("milvus.collections.voice"),
       ];
 
       const collectionStats = {};
@@ -2355,34 +2578,34 @@ async function checkMilvusHealthDetailed(userId = null) {
         const collName = `${collection}_${userId}`;
         try {
           const exists = await client.hasCollection({
-            collection_name: collName
+            collection_name: collName,
           });
 
           if (exists.value) {
             // Get collection statistics
             const stats = await client.getCollectionStatistics({
-              collection_name: collName
+              collection_name: collName,
             });
 
             // Get load status
             const loadState = await client.getLoadState({
-              collection_name: collName
+              collection_name: collName,
             });
 
             collectionStats[collection] = {
               exists: true,
               rowCount: parseInt(stats.stats.row_count || 0),
-              loadState: loadState.state
+              loadState: loadState.state,
             };
           } else {
             collectionStats[collection] = {
-              exists: false
+              exists: false,
             };
           }
         } catch (err) {
           collectionStats[collection] = {
-            exists: 'error',
-            error: err.message
+            exists: "error",
+            error: err.message,
           };
         }
       }
@@ -2393,7 +2616,7 @@ async function checkMilvusHealthDetailed(userId = null) {
     // Get system info if available
     try {
       const sysInfo = await client.getMetric({
-        request: {}
+        request: {},
       });
 
       if (sysInfo && sysInfo.response) {
@@ -2407,11 +2630,11 @@ async function checkMilvusHealthDetailed(userId = null) {
     healthData.metrics.cache = {
       queryCache: {
         size: queryCache.size,
-        maxSize: MAX_CACHE_SIZE
+        maxSize: MAX_CACHE_SIZE,
       },
       collectionLoadStatus: {
-        size: collectionLoadStatus.size
-      }
+        size: collectionLoadStatus.size,
+      },
     };
 
     return healthData;
@@ -2420,7 +2643,7 @@ async function checkMilvusHealthDetailed(userId = null) {
     return {
       isHealthy: false,
       error: error.message,
-      timestamp: Date.now()
+      timestamp: Date.now(),
     };
   }
 }
@@ -2499,20 +2722,20 @@ async function dropCollection(collection, userId) {
     if (status.error_code === "Success") {
       logger.log(
         "Milvus",
-        `Collection '${collectionName}' dropped successfully.`,
+        `Collection '${collectionName}' dropped successfully.`
       );
       return true;
     } else {
       logger.log(
         "Milvus",
-        `Failed to drop collection '${collectionName}'. Reason: ${status.reason}`,
+        `Failed to drop collection '${collectionName}'. Reason: ${status.reason}`
       );
       return false;
     }
   } catch (error) {
     logger.log(
       "Milvus",
-      `Error dropping collection '${collectionName}': ${error}`,
+      `Error dropping collection '${collectionName}': ${error}`
     );
     return false;
   }
@@ -2553,31 +2776,36 @@ async function checkEndpoint(endpoint, key, modelName) {
           Array.isArray(response.data.data)
         ) {
           const modelFound = response.data.data.some(
-            (model) => model.id === modelName,
+            (model) => model.id === modelName
           );
           if (modelFound) {
             return true;
           } else {
             throw new Error(
-              `Model ${modelName} not found in the list of available models.`,
+              `Model ${modelName} not found in the list of available models.`
             );
           }
         } else {
           throw new Error(
-            `Invalid response from embedding endpoint: ${response.status}`,
+            `Invalid response from embedding endpoint: ${response.status}`
           );
         }
-      } else if (await retrieveConfigValue("models.embedding.apiKeyType") === "enspiraEmb"){
+      } else if (
+        (await retrieveConfigValue("models.embedding.apiKeyType")) ===
+        "enspiraEmb"
+      ) {
         const response = await axios.get(
-          `${await retrieveConfigValue("models.embedding.endpoint")}/health`, {
-          headers: {
-            Authorization: `Bearer ${await retrieveConfigValue("models.embedding.apiKey")}`
+          `${await retrieveConfigValue("models.embedding.endpoint")}/health`,
+          {
+            headers: {
+              Authorization: `Bearer ${await retrieveConfigValue("models.embedding.apiKey")}`,
+            },
           }
-        });
+        );
         if (response.status == 200) {
-          return true
+          return true;
         } else {
-          return false
+          return false;
         }
       }
     } else {
@@ -2630,5 +2858,5 @@ export {
   getCachedResult,
   setCachedResult,
   clearQueryCache,
-  checkMilvusHealthDetailed
+  checkMilvusHealthDetailed,
 };
