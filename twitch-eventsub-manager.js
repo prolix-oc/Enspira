@@ -2453,7 +2453,59 @@ export function setupTwitchCronJobs() {
       );
     }
   });
+  cron.schedule("* * * * *", async () => {
+    try {
+      const users = await returnAPIKeys();
 
+      for (const user of users) {
+        try {
+          // Skip users without Twitch integration or bot account
+          if (!user.twitch_tokens?.bot?.access_token) {
+            continue;
+          }
+
+          // Skip streams that aren't live (multiple checks for robustness)
+          const isStreamLive =
+            user.stream_status?.online === true ||
+            (user.current_viewers && user.current_viewers > 0);
+
+          if (!isStreamLive) {
+            continue;
+          }
+
+          // Check if it's time for a fun fact
+          const { shouldGenerateFunFact } = await import("./twitch-helper.js");
+          const shouldSendFunFact = await shouldGenerateFunFact(user.user_id);
+
+          if (shouldSendFunFact) {
+            // Get a random fun fact
+            const { funFact } = await import("./api-helper.js");
+            const fact = await funFact();
+
+            if (fact) {
+              // Send to Twitch chat
+              await sendChatMessage(`Fun Fact: ${fact}`, user.user_id);
+
+              logger.log(
+                "Twitch",
+                `Sent fun fact to ${user.twitch_name || user.user_name}'s channel (currently live with ${user.current_viewers || "unknown"} viewers)`
+              );
+            }
+          }
+        } catch (userError) {
+          logger.error(
+            "Twitch",
+            `Error sending fun fact for ${user.user_id}: ${userError.message}`
+          );
+        }
+
+        // Add a small delay between users
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    } catch (error) {
+      logger.error("Cron", `Error in fun fact job: ${error.message}`);
+    }
+  });
   logger.log("System", "Twitch cron jobs initialized");
 }
 
