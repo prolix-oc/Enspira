@@ -311,7 +311,7 @@ export async function initializeApp() {
     logger.log("System", "Enspira is fully initialized and ready!");
     return { server, status };
   } catch (error) {
-    logger.error("System", `Failed to initialize application: ${error.message}`);
+    logger.error("System", `Failed to initialize the application: ${error.message}`);
     throw error;
   }
 }
