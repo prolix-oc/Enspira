@@ -59,6 +59,7 @@
       "updated_at": ""
     },
     "webPasswordHash": "",
-    "webPasswordSalt": ""
+    "webPasswordSalt": "",
+    "useFishTTS": false
   }
 ]

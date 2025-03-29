@@ -16,46 +16,6 @@ import fs from "fs-extra";
 import * as crypto from "crypto";
 import path from "path";
 
-const chatResponseSchema = {
-  type: "object",
-  properties: {
-    response: { type: "string" },
-    thoughts: { type: "string" },
-    audio_url: { type: "string" },
-  },
-};
-
-const endPointDoc = {
-  chat: {
-    endpoint: "/v1/chats",
-    method: "POST",
-  },
-  voice: {
-    endpoint: "/v1/voice",
-    method: "POST",
-  },
-  event: {
-    endpoint: "/v1/events",
-    method: "POST",
-  },
-  tts: {
-    endpoint: "/v1/speak",
-    method: "POST",
-  },
-  healthcheck: {
-    endpoint: "/v1/healthcheck",
-    method: "GET",
-  },
-};
-
-const endPoints = {
-  chat: "/chats",
-  voice: "/voice",
-  events: "/events",
-  tts: "/speak",
-  healthcheck: "/healthcheck",
-};
-
 async function requireAuth(request, reply) {
   // First check if cookies object exists
   if (!request.cookies) {
@@ -186,209 +146,6 @@ async function routes(fastify, options) {
   });
   await fastify.register(fastifyFormbody);
 
-  /**
-   * Handles voice requests, processes them, and sends responses.
-   * @param {object} request - The request object.
-   * @param {object} reply - The reply object.
-   * @returns {Promise<void>} - A promise that resolves when the response is sent.
-   */
-  fastify.post(endPoints.voice, async (request, reply) => {
-    try {
-      const authObject = await checkForAuth(
-        request.headers.authorization.split(" ")[1]
-      );
-      if (!authObject.valid) {
-        logger.log("API", `Received unauthenticated voice request.`);
-        reply.code(401).send({
-          success: false,
-          message:
-            "Unauthorized. Please send your API token with this request.",
-        });
-        return;
-      }
-      if (!authObject.lastIp || authObject.lastIp !== request.ip) {
-        await updateUserParameter(authObject.user_id, "lastIp", request.ip);
-      }
-      const data = request.body;
-      const now = moment();
-      const formattedDate = now.format("MMMM Do [at] h:mmA");
-      const finalResp = await aiHelper.findRelevantVoiceInMilvus(
-        data.message,
-        authObject.user_name,
-        authObject.user_id
-      );
-      logger.log(
-        "API",
-        `${authObject.user_name} sent a voice message: ${data.message}`
-      );
-
-      if (finalResp.response !== "") {
-        const voiceData = await aiHelper.respondToDirectVoice(
-          data.message,
-          authObject.user_id
-        );
-        const summaryString = `On ${formattedDate} ${authObject.user_name} said to you: "${data.message}". You responded to them by saying: ${voiceData.response}`;
-        await maintainVoiceContext(summaryString);
-        await aiHelper.addVoiceMessageAsVector(
-          summaryString,
-          data.message,
-          authObject.user_name,
-          formattedDate,
-          voiceData.response
-        );
-        reply.send(voiceData);
-        return reply;
-      } else {
-        reply.sendSafe({ response: "error" });
-        return reply;
-      }
-    } catch (error) {
-      reply.code(400).sendSafe({ success: false, error: error.message });
-      return reply;
-    }
-  });
-  fastify.get("/testchat", async (request, response) => {
-    logger.log("API", "Received test endpoint req.");
-    const testChats = await aiHelper.findRecentChats(request.body.userId);
-    logger.log(
-      "Milvus",
-      `Returned the following results: ${JSON.stringify(testChats)}`
-    );
-    response.code(200).sendSafe({ ...testChats });
-    return response;
-  });
-  /**
-   * Handles chat requests, processes them, and sends responses.
-   * @param {object} request - The request object.
-   * @param {object} response - The response object.
-   * @returns {Promise<void>} - A promise that resolves when the response is sent.
-   */
-  fastify.post(endPoints.chat, async (request, response) => {
-    try {
-      const authObject = await checkForAuth(
-        request.headers.authorization.split(" ")[1]
-      );
-      if (!authObject.valid) {
-        logger.log("API", `Received unauthenticated chat request.`);
-        response.code(401).send({
-          success: false,
-          message:
-            "Unauthorized. Please send your API token with this request.",
-        });
-        return;
-      }
-
-      if (!authObject.lastIp || authObject.lastIp !== request.ip) {
-        await updateUserParameter(authObject.user_id, "lastIp", request.ip);
-      }
-
-      // Import the new chat handler
-      const { handleChatMessage, normalizeMessageFormat } = await import(
-        "./chat-handler.js"
-      );
-
-      // Normalize message format from API
-      const normalizedChat = normalizeMessageFormat(request.body);
-
-      // Process through the central handler (autoRespond=false since API caller handles responses)
-      const result = await handleChatMessage(
-        normalizedChat,
-        authObject.user_id,
-        false
-      );
-
-      // Return the result to the API caller
-      if (result.success) {
-        if (result.response) {
-          response.send({
-            response: result.response,
-            thoughts: result.thoughtProcess,
-          });
-        } else {
-          response.send({ response: "OK" });
-        }
-      } else {
-        response.code(500).send({
-          error:
-            result.error || "An error occurred processing the chat message",
-        });
-      }
-    } catch (error) {
-      response.code(500).send({ error: error.message });
-      return response;
-    }
-  });
-  fastify.post(endPoints.tts, async (request, response) => {
-    try {
-      const authObject = await checkForAuth(
-        request.headers.authorization.split(" ")[1]
-      );
-      if (!authObject.valid) {
-        logger.log("API", `Received unauthenticated chat request.`);
-        response.code(401).send({
-          success: false,
-          message:
-            "Unauthorized. Please send your API token with this request.",
-        });
-        return;
-      }
-      const data = request.body;
-      await handleVoiceConversion(data, authObject, response);
-    } catch (error) {
-      response.code(500).send({ error: error.message });
-      return response;
-    }
-  });
-  /**
-   * Handles event requests, processes them, and sends responses.
-   * @param {object} request - The request object.
-   * @param {object} response - The response object.
-   * @returns {Promise<void>} - A promise that resolves when the response is sent.
-   */
-  fastify.post(
-    endPoints.events,
-    { schema: { response: { 200: chatResponseSchema } } },
-    async (request, response) => {
-      try {
-        const authObject = await checkForAuth(
-          request.headers.authorization.split(" ")[1]
-        );
-        if (!authObject.valid) {
-          logger.log("API", `Received unauthenticated event request.`);
-          response.code(401).send({
-            success: false,
-            message:
-              "Unauthorized. Please send your API token with this request.",
-          });
-          return;
-        }
-        if (!authObject.lastIp || authObject.lastIp !== request.ip) {
-          await updateUserParameter(authObject.user_id, "lastIp", request.ip);
-        }
-        const data = request.body;
-        await handleEventMessage(data, authObject, response);
-      } catch (error) {
-        response.code(500).send({ error: error.message });
-        return response;
-      }
-    }
-  );
-
-  fastify.get(endPoints.healthcheck, async (request, response) => {
-    logger.log("API", `Received healthcheck request from ${request.ip}`);
-    response.code(200).send({ status: "up" });
-    return response;
-  });
-
-  fastify.get("/", async (request, response) => {
-    logger.log("API", `Request hit root (by accident?) from ${request.ip}`);
-    response
-      .code(200)
-      .send({
-        error: "Please specify an endpoint before sending a request.",
-        ...endPointDoc,
-      });
-  });
   fastify.setErrorHandler((error, request, reply) => {
     if (error && error.code === "FST_ERR_ROUTE_METHOD_NOT_SUPPORTED") {
       reply.code(405).send({
@@ -410,7 +167,7 @@ async function routes(fastify, options) {
 
       if (!user_id || !password) {
         return reply.redirect(
-          "/api/v1/auth/login?error=Missing+required+fields"
+          "/web/auth/auth/login?error=Missing+required+fields"
         );
       }
 
@@ -418,12 +175,12 @@ async function routes(fastify, options) {
       const user = await returnAuthObject(user_id);
 
       if (!user) {
-        return reply.redirect("/api/v1/auth/login?error=Invalid+credentials");
+        return reply.redirect("/web/auth/login?error=Invalid+credentials");
       }
 
       // Check password
       if (!user.webPasswordHash || !user.webPasswordSalt) {
-        return reply.redirect("/api/v1/auth/login?error=No+password+set");
+        return reply.redirect("/web/auth/login?error=No+password+set");
       }
 
       const passwordCorrect = await isPasswordCorrect(
@@ -434,7 +191,7 @@ async function routes(fastify, options) {
       );
 
       if (!passwordCorrect) {
-        return reply.redirect("/api/v1/auth/login?error=Invalid+credentials");
+        return reply.redirect("/web/auth/login?error=Invalid+credentials");
       }
 
       // Create session
@@ -453,7 +210,7 @@ async function routes(fastify, options) {
       return reply.redirect("/web/dashboard");
     } catch (error) {
       logger.error("Auth", `Login error: ${error.message}`);
-      return reply.redirect("/api/v1/auth/login?error=An+error+occurred");
+      return reply.redirect("/web/auth/auth/login?error=An+error+occurred");
     }
   });
 
@@ -837,12 +594,10 @@ async function routes(fastify, options) {
         }
       } catch (error) {
         logger.error("Web", `Error updating personality: ${error.message}`);
-        reply
-          .code(500)
-          .send({
-            success: false,
-            error: "An error occurred while updating personality",
-          });
+        reply.code(500).send({
+          success: false,
+          error: "An error occurred while updating personality",
+        });
       }
     }
   );
@@ -883,12 +638,10 @@ async function routes(fastify, options) {
         }
       } catch (error) {
         logger.error("Web", `Error updating description: ${error.message}`);
-        reply
-          .code(500)
-          .send({
-            success: false,
-            error: "An error occurred while updating description",
-          });
+        reply.code(500).send({
+          success: false,
+          error: "An error occurred while updating description",
+        });
       }
     }
   );
@@ -923,12 +676,10 @@ async function routes(fastify, options) {
         }
       } catch (error) {
         logger.error("Web", `Error updating examples: ${error.message}`);
-        reply
-          .code(500)
-          .send({
-            success: false,
-            error: "An error occurred while updating examples",
-          });
+        reply.code(500).send({
+          success: false,
+          error: "An error occurred while updating examples",
+        });
       }
     }
   );
@@ -965,21 +716,17 @@ async function routes(fastify, options) {
             message: "World information updated successfully",
           });
         } else {
-          reply
-            .code(500)
-            .send({
-              success: false,
-              error: "Failed to save world information",
-            });
+          reply.code(500).send({
+            success: false,
+            error: "Failed to save world information",
+          });
         }
       } catch (error) {
         logger.error("Web", `Error updating world info: ${error.message}`);
-        reply
-          .code(500)
-          .send({
-            success: false,
-            error: "An error occurred while updating world information",
-          });
+        reply.code(500).send({
+          success: false,
+          error: "An error occurred while updating world information",
+        });
       }
     }
   );
@@ -1022,21 +769,17 @@ async function routes(fastify, options) {
             message: "Player information updated successfully",
           });
         } else {
-          reply
-            .code(500)
-            .send({
-              success: false,
-              error: "Failed to save player information",
-            });
+          reply.code(500).send({
+            success: false,
+            error: "Failed to save player information",
+          });
         }
       } catch (error) {
         logger.error("Web", `Error updating player info: ${error.message}`);
-        reply
-          .code(500)
-          .send({
-            success: false,
-            error: "An error occurred while updating player information",
-          });
+        reply.code(500).send({
+          success: false,
+          error: "An error occurred while updating player information",
+        });
       }
     }
   );
@@ -1081,12 +824,10 @@ async function routes(fastify, options) {
         }
       } catch (error) {
         logger.error("Web", `Error updating scenario: ${error.message}`);
-        reply
-          .code(500)
-          .send({
-            success: false,
-            error: "An error occurred while updating scenario",
-          });
+        reply.code(500).send({
+          success: false,
+          error: "An error occurred while updating scenario",
+        });
       }
     }
   );
@@ -1128,16 +869,52 @@ async function routes(fastify, options) {
           "Web",
           `Error updating bot configuration: ${error.message}`
         );
-        reply
-          .code(500)
-          .send({
-            success: false,
-            error: "An error occurred while updating bot configuration",
-          });
+        reply.code(500).send({
+          success: false,
+          error: "An error occurred while updating bot configuration",
+        });
       }
     }
   );
+  // Preferences settings update endpoint
+  fastify.post(
+    "/settings/preferences",
+    { preHandler: requireAuth },
+    async (request, reply) => {
+      try {
+        const user = request.user;
 
+        // Extract values from form data
+        const storeAllChat =
+          getFieldValue(request.body.store_all_chat) === "true";
+        const ttsEnabled = getFieldValue(request.body.tts_enabled) === "true";
+        const ttsEqPref = getFieldValue(request.body.ttsEqPref);
+        const ttsUpsamplePref =
+          getFieldValue(request.body.ttsUpsamplePref) === "true";
+
+        // Update user parameters
+        await updateUserParameter(user.user_id, "store_all_chat", storeAllChat);
+        await updateUserParameter(user.user_id, "tts_enabled", ttsEnabled);
+        await updateUserParameter(user.user_id, "ttsEqPref", ttsEqPref);
+        await updateUserParameter(
+          user.user_id,
+          "ttsUpsamplePref",
+          ttsUpsamplePref
+        );
+
+        return reply.send({
+          success: true,
+          message: "Preferences updated successfully",
+        });
+      } catch (error) {
+        logger.error("Web", `Error updating preferences: ${error.message}`);
+        return reply.code(500).send({
+          success: false,
+          error: "An error occurred while updating preferences",
+        });
+      }
+    }
+  );
   fastify.post(
     "/gallery/:characterId/use",
     { preHandler: requireAuth },
@@ -1339,87 +1116,6 @@ export async function isPasswordCorrect(
   });
 }
 
-async function handleChatMessage(
-  data,
-  authObject,
-  message,
-  user,
-  formattedDate,
-  response
-) {
-  // Check if the message is a command or a jailbreak attempt
-  if (!(await twitchHelper.isCommandMatch(message, authObject.user_id))) {
-    if (containsJailbreakAttempt(message)) {
-      // Handle jailbreak attempts as before
-      const aiJBResp = await aiHelper.respondWithoutContext(
-        `Creatively be mean towards ${data.user} for trying to stop you from doing your job and ruin ${authObject.user_name}'s stream.`,
-        authObject.user_id
-      );
-      response.send({ response: aiJBResp.response });
-    } else {
-      try {
-        // Use the unified chat processing function
-        const messageData = {
-          message: message,
-          user: user,
-        };
-
-        const aiResponse = await aiHelper.respondToChat(
-          messageData,
-          authObject.user_id
-        );
-
-        if (!aiResponse || !aiResponse.text) {
-          response.send({
-            response:
-              "I'm sorry, I encountered an issue processing your request. Please try again.",
-            error: "Empty response from AI model",
-          });
-          return;
-        }
-
-        // Handle voice if needed
-        if (data.withVoice) {
-          try {
-            const audio_url = authObject.tts_enabled
-              ? await aiHelper.respondWithVoice(
-                  aiResponse.text,
-                  authObject.user_id
-                )
-              : null;
-            response.send({
-              response: aiResponse.text,
-              audio_url,
-              thoughts: aiResponse.thoughtProcess,
-            });
-          } catch (ttsError) {
-            logger.log("API", `TTS error: ${ttsError.message}`);
-            response.send({
-              response: aiResponse.text,
-              thoughts: aiResponse.thoughtProcess,
-              tts_error: "TTS failed but text response is available",
-            });
-          }
-        } else {
-          response.send({
-            response: aiResponse.text,
-            thoughts: aiResponse.thoughtProcess,
-          });
-        }
-      } catch (error) {
-        logger.log("API", `Error in AI response generation: ${error.message}`);
-        response.send({
-          response:
-            "I'm sorry, I encountered an error while processing your message.",
-          error: error.message,
-        });
-      }
-    }
-  } else {
-    response.send({ response: "OK" });
-  }
-}
-
 async function configureResponseHandling(fastify) {
   if (fastify.hasPlugin("fastify-compress")) {
     logger.log(
@@ -1504,222 +1200,6 @@ async function configureResponseHandling(fastify) {
   });
 
   logger.log("API", "Response handling configuration completed");
-}
-
-/**
- * Handles event messages, processes them, generates responses, and optionally triggers voice responses.
- * @param {object} data - The event data object.
- * @param {object} authObject - The authentication object.
- * @param {object} response - The Fastify response object.
- * @returns {Promise<void>} - A promise that resolves when the response is sent.
- */
-async function handleEventMessage(data, authObject, response) {
-  try {
-    logger.log(
-      "API",
-      `A Twitch event fired for ${authObject.user_id}, type: ${data.eventType}`
-    );
-
-    // Get the response from the AI
-    const aiResponse = await aiHelper.respondToEvent(data, authObject.user_id);
-
-    // Check if response is valid
-    if (!aiResponse) {
-      logger.log("API", "Empty AI response received");
-      response.code(500).send({
-        error: "Error generating response",
-        success: false,
-      });
-      return;
-    }
-
-    // Log the full response structure for debugging
-    logger.log(
-      "API",
-      `AI response structure: ${JSON.stringify(Object.keys(aiResponse))}`
-    );
-
-    // Make a new object with just what we need to return
-    const responseToSend = {
-      response: aiResponse.response || "",
-      thoughts: aiResponse.thoughtProcess || "",
-    };
-
-    // If TTS is enabled, add the audio URL
-    if (authObject.tts_enabled) {
-      try {
-        // Only send the text response to TTS, not the thought process
-        const textToVocalize = aiResponse.response || "";
-        const audio_url = await aiHelper.respondWithVoice(
-          textToVocalize,
-          authObject.user_id
-        );
-
-        if (audio_url) {
-          responseToSend.audio_url = audio_url;
-        }
-      } catch (ttsError) {
-        logger.log("API", `TTS error: ${ttsError.message}`);
-        // Continue without audio if TTS fails
-      }
-    }
-
-    // Set explicit content type and send response
-    response.type("application/json").send(responseToSend);
-    return response;
-  } catch (error) {
-    logger.log("API", `Error handling event message: ${error.message}`);
-    response.code(500).send({
-      error: "Server error",
-      message: error.message,
-      success: false,
-    });
-    return response;
-  }
-}
-
-/**
- * Handles chat messages not directed at the character.
- * @param {object} data - The data object containing message details.
- * @param {object} authObject - The authentication object.
- * @param {string} text - The text to process on the TTS server.
- * @param {object} response - The response object.
- * @returns {Promise<void>} - A promise that resolves when the response is sent.
- */
-async function handleVoiceConversion(data, authObject, response) {
-  const ttsResponse = authObject.tts_enabled
-    ? {
-        audio_url: await aiHelper.respondWithVoice(
-          data.text,
-          authObject.user_id
-        ),
-      }
-    : {
-        error: "TTS not enabled for user.",
-      };
-  response.send({ ...ttsResponse });
-}
-
-/**
- * Handles chat messages not directed at the character.
- * @param {object} data - The data object containing message details.
- * @param {object} authObject - The authentication object.
- * @param {string} message - The message to process.
- * @param {string} moderationResult - The result of the moderation check.
- * @param {string} user - The user who sent the message.
- * @param {string} formattedDate - The formatted date and time of the message.
- * @param {object} response - The response object.
- * @returns {Promise<object>} - The response object for chaining.
- */
-async function handleNonChatMessage(
-  data,
-  authObject,
-  message,
-  user,
-  formattedDate,
-  response
-) {
-  const fromBot = await containsAuxBotName(data.user, authObject.user_id);
-
-  try {
-    if (
-      (await twitchHelper.isCommandMatch(data.message, authObject.user_id)) ==
-      false
-    ) {
-      if (containsJailbreakAttempt(message)) {
-        logger.log("API", `Jailbreak attempt. Not saving.`);
-        response.send({ response: "OK" });
-        return response;
-      } else if (!fromBot) {
-        if (data.firstMessage) {
-          const aiResp = await aiHelper.respondToEvent(
-            data,
-            authObject.user_id
-          );
-          const summaryString = `On ${formattedDate}, ${user} said to you in ${
-            user === authObject.user_name
-              ? "their own"
-              : `${authObject.user_name}'s`
-          } chat: "${message}". You responded by saying: ${aiResp.response}`;
-          await aiHelper.addChatMessageAsVector(
-            summaryString,
-            message,
-            user,
-            formattedDate,
-            aiResp.response,
-            authObject.user_id
-          );
-          logger.log(
-            "API",
-            `Processing ${data.user}'s message '${message}' into vector memory.`
-          );
-
-          if (authObject.tts_enabled) {
-            try {
-              const audioUrl = await aiHelper.respondWithVoice(
-                aiResp.response,
-                authObject.user_id
-              );
-              response.send({
-                response: aiResp.response,
-                audio_url: audioUrl,
-                thoughtProcess: aiResp.thoughtProcess,
-              });
-            } catch (ttsError) {
-              logger.log("API", `TTS error: ${ttsError.message}`);
-              response.send({
-                response: aiResp.response,
-                thoughtProcess: aiResp.thoughtProcess,
-                tts_error: "TTS failed but text response is available",
-              });
-            }
-          } else {
-            response.send({
-              response: aiResp.response,
-              thoughtProcess: aiResp.thoughtProcess,
-            });
-          }
-          return response;
-        } else {
-          const summaryString = `On ${formattedDate} ${user} said in ${
-            user === authObject.user_name
-              ? "their own"
-              : `${authObject.user_name}'s`
-          } Twitch chat: "${message}"`;
-          const contextString = `On ${formattedDate}, ${user} said in ${
-            user === authObject.user_name
-              ? "their own"
-              : `${authObject.user_name}'s`
-          } chat: "${message}"`;
-          await aiHelper.addChatMessageAsVector(
-            summaryString,
-            message,
-            user,
-            formattedDate,
-            "None",
-            authObject.user_id
-          );
-          logger.log("API", `Processing memory request.`);
-          response.send({ response: "OK" });
-          return response;
-        }
-      } else {
-        response.send({ response: "OK" });
-        return response;
-      }
-    } else {
-      logger.log("API", `Known bot ${data.user}, ignoring.`);
-      response.send({ response: "OK" });
-      return response;
-    }
-  } catch (error) {
-    logger.log("API", `Error in handleNonChatMessage: ${error.message}`);
-    response.code(500).send({
-      error: "Internal server error",
-      message: error.message,
-    });
-    return response;
-  }
 }
 
 /**

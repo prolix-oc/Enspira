@@ -35,6 +35,7 @@
     "jsonrepair": "^3.11.2",
     "mediainfo.js": "^0.3.3",
     "moment": "^2.30.1",
+    "mongoose": "^8.13.1",
     "neo-blessed": "^0.2.0",
     "node-addon-api": "^8.2.1",
     "node-cron": "^3.0.3",

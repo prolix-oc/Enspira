@@ -3,86 +3,69 @@ import axios from "axios";
 import cron from "node-cron";
 import * as crypto from "crypto";
 import path from "path";
+import { 
+  connectToMongoDB, 
+  getUserById, 
+  getAllUsers, 
+  updateUserData,
+  ensureUserPath,
+  flushAllChanges
+} from './mongodb-client.js';
 import { retrieveConfigValue } from "./config-helper.js";
+import { logger } from './create-global-logger.js';
 let cachedAuthKeys = null;
 
 const authFilePath = await retrieveConfigValue("server.authFilePath");
 
 /**
- * Loads API keys from the auth_keys.json file into the cache.
- * If the file does not exist and AUTH_REQ is true, it generates a new auth file.
+ * Loads API keys from MongoDB
  * @returns {Promise<void>}
  */
 async function loadAPIKeys() {
-  // authFilePath declared outside of async function to reference in saveAuthToDisk
   try {
-    if (fs.existsSync(authFilePath)) {
-      logger.log("API", "Loading allowed users from disk.");
-      cachedAuthKeys = await fs.readJSON(authFilePath);
-      await updateEmptyTokens();
-    } else {
-      if ((await retrieveConfigValue("server.authRequired")) === "true") {
-        logger.log("API", "No authfile found, generating one.");
-        cachedAuthKeys = [];
-        await fs.outputJSON(authFilePath, cachedAuthKeys, { spaces: 2 });
-        logger.log("API", "Auth file successfully created!");
-      } else {
-        cachedAuthKeys = [];
-      }
+    // Connect to MongoDB
+    const connected = await connectToMongoDB();
+    
+    if (!connected) {
+      logger.error("API", "Could not connect to MongoDB, using empty user list");
+      cachedAuthKeys = [];
+      return;
     }
+    
+    // No need to cache here as getUserById handles caching
+    logger.log("API", "MongoDB connection established");
   } catch (err) {
-    logger.log("API", `Error handling auth file: ${err}`);
+    logger.error("API", `Error initializing MongoDB: ${err.message}`);
     cachedAuthKeys = [];
   }
 }
 
 /**
- * Returns a copy of the cached API keys.
- * @returns {Promise<object[]>} A promise that resolves to an array of API key objects.
+ * Returns a copy of all users
+ * @returns {Promise<object[]>} A promise that resolves to an array of user objects
  */
 const returnAPIKeys = async () => {
-  if (!cachedAuthKeys) {
-    await loadAPIKeys();
+  try {
+    return await getAllUsers();
+  } catch (error) {
+    logger.error("API", `Error fetching all users: ${error.message}`);
+    return [];
   }
-  return [...cachedAuthKeys];
 };
 
 /**
- * Returns the authentication object for a given user ID.
- * @param {string} userId - The ID of the user.
- * @returns {Promise<object|null>} A promise that resolves to the user's auth object or null if not found.
+ * Returns the authentication object for a given user ID
+ * @param {string} userId - The ID of the user
+ * @returns {Promise<object|null>} A promise that resolves to the user's auth object or null if not found
  */
 const returnAuthObject = async (userId) => {
-  if (!cachedAuthKeys) {
-    await loadAPIKeys(); // Ensure keys are loaded
+  try {
+    return await getUserById(userId);
+  } catch (error) {
+    logger.error("API", `Error fetching user ${userId}: ${error.message}`);
+    return null;
   }
-  return cachedAuthKeys.find((object) => object.user_id === userId) || null;
 };
-
-/**
- * Updates empty API tokens in the cached auth keys and writes the changes back to the file.
- * @returns {Promise<void>}
- */
-async function updateEmptyTokens() {
-  let updated = false;
-  for (const object of cachedAuthKeys) {
-    if (!object.api_token) {
-      object.api_token = crypto.randomBytes(24).toString("hex");
-      updated = true;
-      logger.log(
-        "System",
-        `Updated API key for API user ${object.display_name}`,
-      );
-    }
-  }
-  if (updated) {
-    try {
-      await fs.outputJSON(authFilePath, cachedAuthKeys, { spaces: 2 });
-    } catch (err) {
-      logger.log("System", `Error updating auth file on local disk: ${err}`);
-    }
-  }
-}
 
 /**
  * Ensures a nested parameter path exists in the user object
@@ -92,153 +75,23 @@ async function updateEmptyTokens() {
  */
 export async function ensureParameterPath(userId, parameterPath) {
   try {
-    // Get the user object
-    const user = await returnAuthObject(userId);
-    if (!user) {
-      logger.error("API", `User not found: ${userId}`);
-      return false;
-    }
-
-    // Split the path into segments
-    const pathParts = parameterPath.split(".");
-
-    // Start with the user object
-    let currentPath = "";
-    let current = user;
-
-    // For each path segment
-    for (let i = 0; i < pathParts.length; i++) {
-      const part = pathParts[i];
-
-      // Update the current path for logging
-      currentPath = currentPath ? `${currentPath}.${part}` : part;
-
-      // If we're at the last segment, we don't need to create anything
-      // We just verify it exists or will be created by the caller
-      if (i === pathParts.length - 1) {
-        break;
-      }
-
-      // If this segment doesn't exist in the user object
-      if (current[part] === undefined) {
-        logger.log("API", `Creating missing path segment: ${currentPath}`);
-
-        // Create a temporary clone of the user object to work with
-        const userClone = JSON.parse(JSON.stringify(user));
-
-        // Navigate to the right position in the clone
-        let pointer = userClone;
-        for (let j = 0; j < i; j++) {
-          pointer = pointer[pathParts[j]];
-        }
-
-        // Add the missing object
-        pointer[part] = {};
-
-        // Update the whole user object with this change
-        const updated = await updateUserParameter(userId, "", userClone);
-        if (!updated) {
-          logger.error("API", `Failed to update user with new path segment: ${currentPath}`);
-          return false;
-        }
-
-        // Get a fresh copy of the user object
-        const updatedUser = await returnAuthObject(userId);
-        if (!updatedUser) {
-          logger.error("API", `Failed to reload user after path update: ${userId}`);
-          return false;
-        }
-
-        // Update our working variables
-        current = updatedUser;
-        for (let j = 0; j <= i; j++) {
-          if (current[pathParts[j]] === undefined) {
-            logger.error("API", `Path segment still missing after update: ${pathParts.slice(0, j + 1).join('.')}`);
-            return false;
-          }
-          current = current[pathParts[j]];
-        }
-      } else {
-        // This segment exists, just advance to it
-        current = current[part];
-      }
-
-      // Verify the current position is an object
-      if (typeof current !== "object" || current === null) {
-        logger.error("API", `Path segment is not an object: ${currentPath}`);
-        return false;
-      }
-    }
-
-    return true;
+    return await ensureUserPath(userId, parameterPath);
   } catch (error) {
-    logger.error("API", `Error ensuring parameter path ${parameterPath}: ${error.message}`);
+    logger.error("API", `Error ensuring parameter path: ${error.message}`);
     return false;
   }
 }
 
-
 /**
- * Updates a specific parameter for a user in the cached auth keys and saves the changes to disk.
- *
- * @param {string} userId - The ID of the user to update.
- * @param {string} parameter - The name of the parameter to update (e.g., "player_name", "bot_name", "twitch_name").
- * @param {any} newValue - The new value for the parameter.
- * @returns {Promise<boolean>} - True if the update was successful, false otherwise.
- */
-/**
- * Updates a user parameter directly in the cached auth data and on disk
- * @param {string} userId - The user ID
- * @param {string} parameter - The parameter to update (empty string for entire user object)
- * @param {any} newValue - The new value
+ * Updates a specific parameter for a user
+ * @param {string} userId - The ID of the user to update
+ * @param {string} parameter - Path to the parameter to update
+ * @param {any} newValue - The new value for the parameter
  * @returns {Promise<boolean>} - True if successful, false otherwise
  */
 async function updateUserParameter(userId, parameter, newValue) {
   try {
-    if (!cachedAuthKeys) {
-      await loadAPIKeys();
-    }
-
-    const userIndex = cachedAuthKeys.findIndex((user) => user.user_id === userId);
-    if (userIndex === -1) {
-      logger.error("API", `User not found: ${userId}`);
-      return false;
-    }
-
-    // If parameter is empty, replace the entire user object
-    if (!parameter) {
-      cachedAuthKeys[userIndex] = newValue;
-      await saveAuthToDisk();
-      return true;
-    }
-
-    // Otherwise, navigate to and update the specified parameter
-    const pathParts = parameter.split(".");
-    let current = cachedAuthKeys[userIndex];
-
-    // Navigate to the container object
-    for (let i = 0; i < pathParts.length - 1; i++) {
-      const part = pathParts[i];
-
-      if (current[part] === undefined) {
-        // Create missing intermediate objects
-        current[part] = {};
-      } else if (typeof current[part] !== "object" || current[part] === null) {
-        logger.error("API", `Cannot update parameter: ${pathParts.slice(0, i + 1).join('.')} is not an object`);
-        return false;
-      }
-
-      current = current[part];
-    }
-
-    // Update the value
-    const lastPart = pathParts[pathParts.length - 1];
-    current[lastPart] = newValue;
-
-    // Save changes to disk
-    await saveAuthToDisk();
-    logger.log("API", `Updated parameter '${parameter}' for user ${userId}`);
-    return true;
+    return await updateUserData(userId, parameter, newValue);
   } catch (error) {
     logger.error("API", `Error updating user parameter: ${error.message}`);
     return false;
@@ -277,19 +130,15 @@ async function getAndStoreLatLong(ipAddr, userId) {
 }
 
 /**
- * Saves the current cached auth keys to disk.
+ * Saves all pending changes to disk
  * @returns {Promise<void>}
  */
 async function saveAuthToDisk() {
   try {
-    if (cachedAuthKeys) {
-      await fs.outputJSON(authFilePath, cachedAuthKeys, { spaces: 2 });
-      logger.log("API", "Successfully saved auth keys to disk.");
-    } else {
-      logger.log("API", "No auth keys to save.");
-    }
+    await flushAllChanges();
+    logger.log("API", "All pending changes saved to MongoDB");
   } catch (error) {
-    logger.log("API", `Error saving auth keys to disk: ${error}`);
+    logger.error("API", `Error saving changes to MongoDB: ${error.message}`);
   }
 }
 
@@ -553,6 +402,14 @@ async function initAllAPIs() {
     await fetchWeather();
   });
 }
+
+process.on('SIGTERM', async () => {
+  await flushAllChanges();
+});
+
+process.on('SIGINT', async () => {
+  await flushAllChanges();
+});
 
 export {
   initAllAPIs,

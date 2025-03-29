@@ -316,15 +316,13 @@ async function webRoutes(fastify, options) {
           "Web",
           `Error updating character features: ${error.message}`
         );
-        reply
-          .code(500)
-          .send({
-            success: false,
-            error: "An error occurred while updating character features",
-          });
+        reply.code(500).send({
+          success: false,
+          error: "An error occurred while updating character features",
+        });
       }
     }
-  );ß
+  );
 
   // Password update endpoint
   fastify.post(
@@ -418,46 +416,6 @@ async function webRoutes(fastify, options) {
         return reply.code(500).send({
           success: false,
           error: "An error occurred while updating password",
-        });
-      }
-    }
-  );
-
-  // Preferences settings update endpoint
-  fastify.post(
-    "/settings/preferences",
-    { preHandler: requireAuth },
-    async (request, reply) => {
-      try {
-        const user = request.user;
-
-        // Extract values from form data
-        const storeAllChat =
-          getFieldValue(request.body.store_all_chat) === "true";
-        const ttsEnabled = getFieldValue(request.body.tts_enabled) === "true";
-        const ttsEqPref = getFieldValue(request.body.ttsEqPref);
-        const ttsUpsamplePref =
-          getFieldValue(request.body.ttsUpsamplePref) === "true";
-
-        // Update user parameters
-        await updateUserParameter(user.user_id, "store_all_chat", storeAllChat);
-        await updateUserParameter(user.user_id, "tts_enabled", ttsEnabled);
-        await updateUserParameter(user.user_id, "ttsEqPref", ttsEqPref);
-        await updateUserParameter(
-          user.user_id,
-          "ttsUpsamplePref",
-          ttsUpsamplePref
-        );
-
-        return reply.send({
-          success: true,
-          message: "Preferences updated successfully",
-        });
-      } catch (error) {
-        logger.error("Web", `Error updating preferences: ${error.message}`);
-        return reply.code(500).send({
-          success: false,
-          error: "An error occurred while updating preferences",
         });
       }
     }
