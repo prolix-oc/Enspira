@@ -26,7 +26,7 @@ For purposes of this License, the following terms have the meanings given:
 
 Subject to your compliance with **all** terms and conditions of this License, the Licensor hereby grants You a worldwide, royalty-free, non-exclusive, non-transferable, and non-sublicensable license to use, reproduce, and modify the Software, **solely** for the following permitted purposes (collectively, "Permitted Uses"):
 
-a. **Personal Use** – You may use, run, and modify the Software for your own personal, non-commercial purposes.  
+ a. **Personal Use** – You may use, run, and modify the Software for your own personal, non-commercial purposes.  
  b. **Non-Profit Use** – If you are a Non-Profit Organization (or an individual using the Software for non-profit academic or research purposes), you may use, run, and modify the Software for your organization’s internal, non-commercial activities.  
  c. **Internal Use (Including Internal Corporate Use)** – You may use, run, and modify the Software within your organization for internal development, testing, and operations. This includes for-profit companies using the Software internally (for example, for internal research or to assist in internal business functions), **provided** such use is not a Public Use and not part of providing services or products to any third party.
 
@@ -46,8 +46,11 @@ a. **Personal Use** – You may use, run, and modify the Software for your own p
 
   e) **Limitations:**
     i) This right to publish does not override Your obligation to contribute back Improvements as outlined in Section 3.
+    
     ii) You may not publish the entire source code or substantial portions of it.
+    
     iii) Publications must not enable others to circumvent the licensing terms of the Software.
+    
     iv) You may not publish confidential information about the Software that is expressly marked as such.
 
   f) **Pre-Publication Review:** While not required, the Licensor welcomes the opportunity to review publications that substantially focus on the Software prior to submission, to ensure technical accuracy and appropriate attribution. The Licensor commits to a timely review (typically within 14 days) and will not unreasonably withhold approval.
@@ -118,7 +121,7 @@ _(In summary: if you improve Enspira, you must try to contribute those improveme
    
     iii) You do not attempt to circumvent the restrictions of this License through such integration.
 
-d) **Dual Licensing:** If you wish to combine the Software with code under incompatible licenses for distribution, or to use the Software in ways not permitted by this License, you must negotiate a separate commercial license with the Licensor as described in Section 5.2.
+  d) **Dual Licensing:** If you wish to combine the Software with code under incompatible licenses for distribution, or to use the Software in ways not permitted by this License, you must negotiate a separate commercial license with the Licensor as described in Section 5.2.
 
 The Licensor may, at its sole discretion, grant exceptions to these compatibility restrictions on a case-by-case basis, particularly for non-commercial or research purposes.
 
