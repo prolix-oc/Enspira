@@ -542,29 +542,128 @@ const adMessage = async (event) => {
 
 /**
  * Retrieves and formats social media information for a user.
+ * Enhanced to better support template variables and specific platform requests.
  *
  * @param {string} userId - The ID of the user.
- * @param {string} [specify] - If provided, returns specific social media information.
- * @returns {Promise<string|object>} - A formatted string or object containing social media information.
+ * @param {string} [platform] - If provided, returns information for a specific platform.
+ * @returns {Promise<string|object>} - A formatted string, specific platform value, or object containing social media information.
  */
-const socialMedias = async (userId, specify = "") => {
-  const currentUser = await returnAuthObject(userId);
-  const currentSocials = currentUser.socials;
+const socialMedias = async (userId, platform = "") => {
+  try {
+    const currentUser = await returnAuthObject(userId);
+    
+    // Handle missing social media data
+    if (!currentUser || !currentUser.socials) {
+      logger.log("System", `No social media data found for user ${userId}`);
+      return platform ? "" : ""; // Return empty string for specific platform or formatted output
+    }
+    
+    const currentSocials = currentUser.socials;
 
-  if (specify === "all") {
-    return currentSocials;
+    // Return all social media as an object if requested
+    if (platform === "all") {
+      return { ...currentSocials }; // Return a copy to prevent mutation
+    }
+
+    // Normalize the platform name to handle different formats
+    // e.g., "tt", "tiktok", "TikTok" should all map to the same key
+    const normalizedPlatform = normalizePlatformName(platform);
+    
+    // Return specific platform if requested
+    if (normalizedPlatform) {
+      return currentSocials[normalizedPlatform] || "";
+    }
+
+    // Format all available social media for template use
+    const formattedSocials = Object.entries(currentSocials)
+      .filter(([key, value]) => value && value.trim() !== "")
+      .map(([key, value]) => formatSocialMediaValue(key, value))
+      .filter(Boolean)
+      .join(", ");
+
+    return formattedSocials ? `(${formattedSocials})` : "";
+  } catch (error) {
+    logger.log("System", `Error retrieving social media for user ${userId}: ${error.message}`);
+    return platform ? "" : "";
   }
+};
 
-  if (specify) {
-    return currentSocials[specify] || "";
+/**
+ * Normalizes platform names to consistent keys.
+ * 
+ * @param {string} platform - The platform identifier to normalize.
+ * @returns {string} - The normalized platform key.
+ */
+function normalizePlatformName(platform) {
+  if (!platform) return "";
+  
+  const platformMap = {
+    // TikTok variations
+    "tt": "tiktok",
+    "tik": "tiktok",
+    "tiktok": "tiktok",
+    
+    // YouTube variations
+    "yt": "youtube",
+    "youtube": "youtube",
+    
+    // Twitter/X variations
+    "twitter": "twitter",
+    "x": "twitter",
+    "tweet": "twitter",
+    
+    // Twitch
+    "twitch": "twitch",
+    
+    // Instagram
+    "ig": "instagram",
+    "insta": "instagram",
+    "instagram": "instagram",
+    
+    // Discord
+    "discord": "discord",
+    
+    // Kick
+    "kick": "kick",
+    
+    // Facebook
+    "fb": "facebook",
+    "facebook": "facebook",
+    
+    // Other common platforms
+    "linkedin": "linkedin",
+    "github": "github",
+    "reddit": "reddit"
+  };
+  
+  return platformMap[platform.toLowerCase()] || platform.toLowerCase();
+}
+
+/**
+ * Formats a social media value for display.
+ * 
+ * @param {string} platform - The platform name.
+ * @param {string} value - The social media handle or URL.
+ * @returns {string} - Formatted social media value.
+ */
+function formatSocialMediaValue(platform, value) {
+  if (!value || value.trim() === "") return "";
+  
+  let formattedValue = value.trim();
+  
+  // Add @ prefix for handles if not present
+  const handlePlatforms = ["twitter", "tiktok", "instagram"];
+  if (handlePlatforms.includes(platform.toLowerCase()) && !formattedValue.startsWith("@")) {
+    formattedValue = `@${formattedValue}`;
   }
+  
+  return `${formattedValue}`;
+}
 
-  const formattedSocials = Object.entries(currentSocials)
-    .filter(([key, value]) => value)
-    .map(([key, value]) => `"${value}"`)
-    .join(", ");
-
-  return formattedSocials ? `(${formattedSocials})` : "";
+export { 
+  socialMedias,
+  normalizePlatformName, // Export for testing or direct use
+  formatSocialMediaValue // Export for testing or direct use
 };
 
 /**
@@ -845,6 +944,38 @@ const addBanToUser = async (userName, streamerName) => {
 };
 
 /**
+ * Checks if it's time to generate a fun fact based on the user's settings
+ * @param {string} userId - The user ID
+ * @returns {Promise<boolean>} - True if it's time for a fun fact, false otherwise
+ */
+export async function shouldGenerateFunFact(userId) {
+  try {
+    const user = await returnAuthObject(userId);
+    
+    // If fun facts are disabled, return false
+    if (!user.funFacts) {
+      return false;
+    }
+    
+    const now = Date.now();
+    const lastTime = lastFunFactTime.get(userId) || 0;
+    const interval = (user.funFactsInterval || 30) * 60 * 1000; // Convert minutes to milliseconds
+    
+    // Check if enough time has passed since the last fun fact
+    if (now - lastTime >= interval) {
+      // Update the last fun fact time
+      lastFunFactTime.set(userId, now);
+      return true;
+    }
+    
+    return false;
+  } catch (error) {
+    logger.error("Twitch", `Error checking fun fact timing: ${error.message}`);
+    return false;
+  }
+}
+
+/**
  * Removes a ban for a user in a specific streamer's context.
  *
  * @param {string} userName - The name of the user to unban.
@@ -925,7 +1056,6 @@ export {
   prepareModerationChatRequest,
   incrementStrikes,
   getStrikesByUserName,
-  socialMedias,
   checkForUser,
   containsAuxBotName,
   checkBanned,

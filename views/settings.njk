@@ -1,0 +1,211 @@
+{% extends "layout.njk" %}
+
+{% block title %}User Settings{% endblock %}
+
+{% block content %}
+<div class="card">
+  <div class="card-header">
+    <h1>User Settings</h1>
+  </div>
+  
+  <p>Customize your account settings and preferences for Enspira.</p>
+  
+  {% if success %}
+  <div class="alert alert-success">
+    {{ success }}
+  </div>
+  {% endif %}
+  
+  {% if error %}
+  <div class="alert alert-error">
+    {{ error }}
+  </div>
+  {% endif %}
+  
+  <div class="tabs">
+    <div class="tab active" data-target="profile-tab">Profile</div>
+    <div class="tab" data-target="socials-tab">Social Media</div>
+    <div class="tab" data-target="security-tab">Security</div>
+    <div class="tab" data-target="preferences-tab">Preferences</div>
+  </div>
+  
+  <!-- Profile Settings -->
+  <div id="profile-tab" class="tab-content active">
+    <form action="/api/v1/settings/profile" method="POST" data-async>
+      <div class="form-group">
+        <label for="display_name">Display Name</label>
+        <input type="text" id="display_name" name="display_name" value="{{ user.display_name }}" required>
+        <p>The name displayed in the Enspira interface.</p>
+      </div>
+      
+      <div class="form-group">
+        <label for="user_name">Character Reference Name</label>
+        <input type="text" id="user_name" name="user_name" value="{{ user.user_name }}" required>
+        <p>The name your AI assistant will use to refer to you.</p>
+      </div>
+      
+      <div class="form-group">
+        <label for="email">Email Address</label>
+        <input type="email" id="email" name="email" value="{{ user.email }}">
+        <p>Your email address for notifications and account recovery.</p>
+      </div>
+      
+      <div class="form-group">
+        <label for="timeZone">Time Zone</label>
+        <select id="timeZone" name="timeZone">
+          <option value="">Select Time Zone</option>
+          {% for tz in timeZones %}
+            <option value="{{ tz.value }}" {% if user.timeZone == tz.value %}selected{% endif %}>{{ tz.label }}</option>
+          {% endfor %}
+        </select>
+        <p>Your local time zone for scheduling and events.</p>
+      </div>
+      
+      <button type="submit" class="btn btn-primary">Save Profile</button>
+    </form>
+  </div>
+  
+  <!-- Social Media Settings -->
+  <div id="socials-tab" class="tab-content">
+    <form action="/api/v1/settings/socials" method="POST" data-async>
+      <div class="form-group">
+        <label for="twitter">X (Twitter)</label>
+        <input type="text" id="twitter" name="socials[twitter]" value="{{ user.socials.twitter }}">
+        <p>Your X/Twitter username (without @).</p>
+      </div>
+      
+      <div class="form-group">
+        <label for="tiktok">TikTok</label>
+        <input type="text" id="tiktok" name="socials[tiktok]" value="{{ user.socials.tiktok }}">
+        <p>Your TikTok username.</p>
+      </div>
+      
+      <div class="form-group">
+        <label for="youtube">YouTube</label>
+        <input type="text" id="youtube" name="socials[youtube]" value="{{ user.socials.youtube }}">
+        <p>Your YouTube channel name or ID.</p>
+      </div>
+      
+      <div class="form-group">
+        <label for="instagram">Instagram</label>
+        <input type="text" id="instagram" name="socials[instagram]" value="{{ user.socials.instagram }}">
+        <p>Your Instagram username.</p>
+      </div>
+      
+      <div class="form-group">
+        <label for="twitch">Twitch</label>
+        <input type="text" id="twitch" name="socials[twitch]" value="{{ user.socials.twitch }}">
+        <p>Your Twitch username.</p>
+      </div>
+      
+      <div class="form-group">
+        <label for="kick">Kick</label>
+        <input type="text" id="kick" name="socials[kick]" value="{{ user.socials.kick }}">
+        <p>Your Kick username.</p>
+      </div>
+      
+      <button type="submit" class="btn btn-primary">Save Social Media</button>
+    </form>
+  </div>
+  
+  <!-- Security Settings -->
+  <div id="security-tab" class="tab-content">
+    <form action="/api/v1/settings/password" method="POST" data-async>
+      <div class="form-group">
+        <label for="current_password">Current Password</label>
+        <input type="password" id="current_password" name="current_password" required>
+        <p>Your current password for verification.</p>
+      </div>
+      
+      <div class="form-group">
+        <label for="new_password">New Password</label>
+        <input type="password" id="new_password" name="new_password" required>
+        <p>Your new password. Use a strong, unique password.</p>
+      </div>
+      
+      <div class="form-group">
+        <label for="confirm_password">Confirm New Password</label>
+        <input type="password" id="confirm_password" name="confirm_password" required>
+        <p>Re-enter your new password to confirm.</p>
+      </div>
+      
+      <button type="submit" class="btn btn-primary">Change Password</button>
+    </form>
+  </div>
+  
+  <!-- Preferences Settings -->
+  <div id="preferences-tab" class="tab-content">
+    <form action="/api/v1/settings/preferences" method="POST" data-async>
+      <div class="form-group">
+        <label for="store_all_chat">Store All Chat Messages</label>
+        <select id="store_all_chat" name="store_all_chat">
+          <option value="true" {% if user.store_all_chat %}selected{% endif %}>Enabled</option>
+          <option value="false" {% if not user.store_all_chat %}selected{% endif %}>Disabled</option>
+        </select>
+        <p>When enabled, all chat messages will be stored for context, not just messages directed at your assistant.</p>
+      </div>
+      
+      <div class="form-group">
+        <label for="tts_enabled">Text-to-Speech</label>
+        <select id="tts_enabled" name="tts_enabled">
+          <option value="true" {% if user.tts_enabled %}selected{% endif %}>Enabled</option>
+          <option value="false" {% if not user.tts_enabled %}selected{% endif %}>Disabled</option>
+        </select>
+        <p>Enable or disable text-to-speech for your assistant.</p>
+      </div>
+      
+      <div class="form-group">
+        <label for="ttsEqPref">TTS Voice Quality Preset</label>
+        <select id="ttsEqPref" name="ttsEqPref">
+          <option value="clarity" {% if user.ttsEqPref == 'clarity' %}selected{% endif %}>Clarity</option>
+          <option value="warm" {% if user.ttsEqPref == 'warm' %}selected{% endif %}>Warm</option>
+          <option value="bright" {% if user.ttsEqPref == 'bright' %}selected{% endif %}>Bright</option>
+          <option value="broadcast" {% if user.ttsEqPref == 'broadcast' %}selected{% endif %}>Broadcast</option>
+        </select>
+        <p>Choose a preset for your assistant's voice quality.</p>
+      </div>
+      
+      <div class="form-group">
+        <label for="ttsUpsamplePref">TTS Audio Upsampling</label>
+        <select id="ttsUpsamplePref" name="ttsUpsamplePref">
+          <option value="true" {% if user.ttsUpsamplePref %}selected{% endif %}>Enabled</option>
+          <option value="false" {% if not user.ttsUpsamplePref %}selected{% endif %}>Disabled</option>
+        </select>
+        <p>Enable or disable audio upsampling for better voice quality (uses more CPU).</p>
+      </div>
+      
+      <button type="submit" class="btn btn-primary">Save Preferences</button>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block extraStyles %}
+<style>
+  .form-group {
+    margin-bottom: 24px;
+  }
+  
+  .form-group label {
+    display: block;
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+  
+  .form-group p {
+    margin-top: 4px;
+    font-size: 0.9em;
+    color: var(--secondary-text);
+  }
+  
+  .form-group input,
+  .form-group select {
+    width: 100%;
+    max-width: 500px;
+  }
+  
+  .tabs {
+    margin-bottom: 20px;
+  }
+</style>
+{% endblock %}

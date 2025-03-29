@@ -28,6 +28,47 @@ async function getTemplate(filePath) {
 }
 
 /**
+ * Helper function to extract all social media replacements for templates.
+ * Gets both the full socials string and individual platform entries.
+ *
+ * @param {string} userId - The user ID
+ * @returns {Promise<object>} - Object containing all social media replacements
+ */
+async function getSocialMediaReplacements(userId) {
+  try {
+    // Get the complete socials string for {{socials}} replacement
+    const allSocials = await socialMedias(userId);
+    
+    // Create the base replacements object
+    const replacements = {
+      "{{socials}}": allSocials || ""
+    };
+    
+    // Get all available platforms for the user
+    const socialPlatforms = await socialMedias(userId, "all");
+    
+    // Add individual platform replacements
+    for (const [platform, value] of Object.entries(socialPlatforms)) {
+      if (value && value.trim() !== "") {
+        replacements[`{{socials.${platform}}}`] = value;
+      }
+    }
+    
+    // Add specific commonly used platform shortcuts
+    // These are kept for backward compatibility
+    replacements["{{soc_tiktok}}"] = await socialMedias(userId, "tiktok") || "";
+    replacements["{{soc_youtube}}"] = await socialMedias(userId, "youtube") || "";
+    replacements["{{soc_twitter}}"] = await socialMedias(userId, "twitter") || "";
+    replacements["{{soc_instagram}}"] = await socialMedias(userId, "instagram") || "";
+    
+    return replacements;
+  } catch (error) {
+    logger.log("System", `Error getting social media replacements: ${error.message}`);
+    return { "{{socials}}": "" };
+  }
+}
+
+/**
  * Sends a chat completion request for tool tasks like query writing and reranking.
  * Simplified version without reasoning or chain-of-thought features.
  * 
@@ -417,13 +458,16 @@ const moderatorPrompt = async (message, userId) => {
   const userObject = await returnAuthObject(userId);
   const instructTemplate = await getTemplate("./instructs/helpers/moderation.prompt");
 
+  // Get social media replacements with enhanced platform-specific support
+  const socialReplacements = await getSocialMediaReplacements(userId);
+
   const replacements = {
     "{{user}}": userObject.user_name,
     "{{char}}": userObject.bot_name,
     "{{twitch}}": userObject.twitch_name,
-    "{{socials}}": await socialMedias(userId),
     "{{modlist}}": userObject.mod_list.join("\n- "),
     "{{sites}}": userObject.approved_sites.join("\n- "),
+    ...socialReplacements
   };
 
   const instructionTemplate = replacePlaceholders(instructTemplate, replacements);
@@ -431,7 +475,8 @@ const moderatorPrompt = async (message, userId) => {
     instructionTemplate,
     await retrieveConfigValue("models.moderator.model"),
     message
-  )
+  );
+  
   logger.log(
     "LLM",
     `Moderation prompt is using ${await promptTokenizedFromRemote(
@@ -443,6 +488,7 @@ const moderatorPrompt = async (message, userId) => {
 
 /**
  * Generates a chat completion body with context, instructions, and message.
+ * Enhanced with better support for social media templating.
  *
  * @param {object} promptData - Data containing relevant context, chats, and voice interactions.
  * @param {string} message - The user message.
@@ -470,16 +516,19 @@ const contextPromptChat = async (promptData, message, userID) => {
   logger.log("LLM", `Analysis of emotions: ${sentiment}`);
   const user = promptData.chat_user;
 
+  // Get social media replacements with enhanced platform-specific support
+  const socialReplacements = await getSocialMediaReplacements(userID);
+
   // Common replacements for preprocessing text
   const commonReplacements = {
     "{{user}}": currentAuthObject.user_name,
     "{{char}}": currentAuthObject.bot_name,
     "{{char_limit}}": await retrieveConfigValue("twitch.maxCharLimit"),
     "{{chat_user}}": user,
-    "{{socials}}": await socialMedias(userID),
-    "{{soc_tiktok}}": await socialMedias(userID, "tt"),
     "{{model_author}}": await retrieveConfigValue("models.chat.author"),
-    "{{model_org}}": await retrieveConfigValue("models.chat.organization")
+    "{{model_org}}": await retrieveConfigValue("models.chat.organization"),
+    // Add all social media replacements
+    ...socialReplacements
   };
 
   // Process system prompt
@@ -581,16 +630,19 @@ const contextPromptChatCoT = async (promptData, message, userID) => {
   const sentiment = await interpretEmotions(message);
   logger.log("LLM", `Analysis of emotions: ${sentiment}`);
 
+  // Get social media replacements with enhanced platform-specific support
+  const socialReplacements = await getSocialMediaReplacements(userID);
+
   // Common replacements for preprocessing text
   const commonReplacements = {
     "{{user}}": currentAuthObject.user_name,
     "{{char}}": currentAuthObject.bot_name,
     "{{char_limit}}": await retrieveConfigValue("twitch.maxCharLimit"),
     "{{chat_user}}": promptData.user,
-    "{{socials}}": await socialMedias(userID),
-    "{{soc_tiktok}}": await socialMedias(userID, "tt"),
     "{{model_author}}": await retrieveConfigValue("models.chat.author"),
-    "{{model_org}}": await retrieveConfigValue("models.chat.organization")
+    "{{model_org}}": await retrieveConfigValue("models.chat.organization"),
+    // Add all social media replacements
+    ...socialReplacements
   };
 
   // Process system prompt and add CoT instructions
@@ -676,6 +728,7 @@ const contextPromptChatCoT = async (promptData, message, userID) => {
 
 /**
  * Generates a chat completion body for event-based interactions.
+ * Enhanced with better support for social media templating.
  *
  * @param {string} message - The event message.
  * @param {string} userId - The user ID.
@@ -701,14 +754,18 @@ const eventPromptChat = async (message, userId) => {
     "player_info",
   ]);
 
+  // Get social media replacements with enhanced platform-specific support
+  const socialReplacements = await getSocialMediaReplacements(userId);
+
   // Common replacements for preprocessing text
   const commonReplacements = {
     "{{user}}": userObject.user_name,
     "{{char}}": userObject.bot_name,
     "{{char_limit}}": await retrieveConfigValue("twitch.maxCharLimit"),
-    "{{socials}}": await socialMedias(userId),
     "{{model_author}}": await retrieveConfigValue("models.chat.author"),
-    "{{model_org}}": await retrieveConfigValue("models.chat.organization")
+    "{{model_org}}": await retrieveConfigValue("models.chat.organization"),
+    // Add all social media replacements
+    ...socialReplacements
   };
 
   // Process system prompt
@@ -782,12 +839,15 @@ const queryPrompt = async (message, userId) => {
   const timeStamp = moment().format("MM/DD/YY [at] HH:mm");
   const [dateString, timeString] = timeStamp.split(" at ");
 
+  // Get social media replacements with enhanced platform-specific support
+  const socialReplacements = await getSocialMediaReplacements(userId);
+
   const replacements = {
     "{{datetime}}": `${dateString}. The current time is ${timeString}`,
     "{{query}}": message,
     "{{user}}": userObject.user_name,
-    "{{socials}}": await socialMedias(userId),
-    "{{char}}": userObject.bot_name
+    "{{char}}": userObject.bot_name,
+    ...socialReplacements
   };
 
   const instructionTemplate = replacePlaceholders(instructTemplate, replacements);
@@ -818,9 +878,12 @@ const rerankPrompt = async (message, userId) => {
   const userObject = await returnAuthObject(userId);
   const instructTemplate = await getTemplate("./instructs/helpers/rerank.prompt");
 
+  // Get social media replacements with enhanced platform-specific support
+  const socialReplacements = await getSocialMediaReplacements(userId);
+
   const replacements = {
-    "{{socials}}": await socialMedias(userId),
     "{{user}}": userObject.user_name,
+    ...socialReplacements
   };
 
   const instructionTemplate = replacePlaceholders(instructTemplate, replacements);

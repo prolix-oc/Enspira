@@ -14,6 +14,7 @@
     <div class="tab active" data-target="personality-tab">Personality</div>
     <div class="tab" data-target="description-tab">Description</div>
     <div class="tab" data-target="example-messages-tab">Example Messages</div>
+    <div class="tab" data-target="features-tab">Features</div>
   </div>
   
   <div id="personality-tab" class="tab-content active">
@@ -62,6 +63,57 @@
     </form>
   </div>
 </div>
+
+<div id="features-tab" class="tab-content">
+  <form action="/api/v1/character/features" method="POST" data-async>
+    <div class="form-group">
+      <label for="funFacts">Fun Facts</label>
+      <select id="funFacts" name="funFacts">
+        <option value="true" {% if character.funFacts %}selected{% endif %}>Enabled</option>
+        <option value="false" {% if not character.funFacts %}selected{% endif %}>Disabled</option>
+      </select>
+      <p>Enable your AI assistant to occasionally share interesting fun facts in chat.</p>
+    </div>
+    
+    <div class="form-group">
+      <label for="funFactsInterval">Fun Facts Interval (minutes)</label>
+      <input type="number" id="funFactsInterval" name="funFactsInterval" value="{{ character.funFactsInterval or '30' }}" min="5" max="240">
+      <p>How often should your assistant share fun facts? (5-240 minutes)</p>
+    </div>
+    
+    <div class="form-group">
+      <label for="tts_enabled">Text-to-Speech</label>
+      <select id="tts_enabled" name="tts_enabled">
+        <option value="true" {% if character.tts_enabled %}selected{% endif %}>Enabled</option>
+        <option value="false" {% if not character.tts_enabled %}selected{% endif %}>Disabled</option>
+      </select>
+      <p>Enable your AI assistant to use text-to-speech for voice responses.</p>
+    </div>
+    
+    <div class="form-group">
+      <label for="ttsEqPref">Voice Quality Preset</label>
+      <select id="ttsEqPref" name="ttsEqPref" {% if not character.tts_enabled %}disabled{% endif %}>
+        <option value="clarity" {% if character.ttsEqPref == 'clarity' %}selected{% endif %}>Clarity</option>
+        <option value="warm" {% if character.ttsEqPref == 'warm' %}selected{% endif %}>Warm</option>
+        <option value="bright" {% if character.ttsEqPref == 'bright' %}selected{% endif %}>Bright</option>
+        <option value="broadcast" {% if character.ttsEqPref == 'broadcast' %}selected{% endif %}>Broadcast</option>
+      </select>
+      <p>Choose a preset for your assistant's voice quality.</p>
+    </div>
+    
+    <div class="form-group">
+      <label for="ttsUpsamplePref">Audio Upsampling</label>
+      <select id="ttsUpsamplePref" name="ttsUpsamplePref" {% if not character.tts_enabled %}disabled{% endif %}>
+        <option value="true" {% if character.ttsUpsamplePref %}selected{% endif %}>Enabled</option>
+        <option value="false" {% if not character.ttsUpsamplePref %}selected{% endif %}>Disabled</option>
+      </select>
+      <p>Enable audio upsampling for better voice quality (uses more CPU).</p>
+    </div>
+    
+    <button type="submit" class="btn btn-primary">Save Features</button>
+  </form>
+</div>
+
 {% endblock %}
 
 {% block extraScripts %}
@@ -88,6 +140,27 @@
         });
       });
     });
+    
+    // Add toggle behavior for TTS fields
+    const ttsEnabledSelect = document.getElementById('tts_enabled');
+    const ttsRelatedFields = document.querySelectorAll('#ttsEqPref, #ttsUpsamplePref');
+    
+    if (ttsEnabledSelect) {
+      const updateTtsFields = () => {
+        const isEnabled = ttsEnabledSelect.value === 'true';
+        ttsRelatedFields.forEach(field => {
+          field.disabled = !isEnabled;
+          // Update styling based on disabled state
+          field.parentElement.style.opacity = isEnabled ? '1' : '0.5';
+        });
+      };
+      
+      // Initialize on page load
+      updateTtsFields();
+      
+      // Update when changed
+      ttsEnabledSelect.addEventListener('change', updateTtsFields);
+    }
   });
 </script>
 {% endblock %}
