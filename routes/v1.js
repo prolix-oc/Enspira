@@ -213,7 +213,108 @@ async function routes(fastify, options) {
       return reply.redirect("/web/auth/auth/login?error=An+error+occurred");
     }
   });
+  // Add this to routes/v1.js within the routes function
+  // Voice file upload endpoint
+  fastify.post('/character/voice-upload', { preHandler: requireAuth }, async (request, reply) => {
+    try {
+      const user = request.user;
 
+      // Check if files are present in the request
+      if (!request.isMultipart()) {
+        return reply.redirect('/web/character?error=Missing+files');
+      }
+
+      // Process uploaded files
+      const files = [];
+      const parts = await request.parts();
+
+      // Collect files from multipart request
+      for await (const part of parts) {
+        if (part.type === 'file' && part.filename) {
+          // File validation
+          if (!part.filename.toLowerCase().endsWith('.wav')) {
+            return reply.redirect('/web/character?error=Only+WAV+files+are+accepted');
+          }
+
+          if (part.file.bytesRead > 3 * 1024 * 1024) {
+            return reply.redirect('/web/character?error=File+exceeds+3MB+limit');
+          }
+
+          // Get file buffer
+          const buffer = await part.toBuffer();
+
+          // Add to files array for processing
+          files.push({
+            filename: part.filename,
+            buffer: buffer
+          });
+        }
+      }
+
+      // Check if we have any files
+      if (files.length === 0) {
+        return reply.redirect('/web/character?error=No+files+uploaded');
+      }
+
+      // Validate file count
+      if (files.length > 4) {
+        return reply.redirect('/web/character?error=Maximum+4+files+allowed');
+      }
+
+      // Validate each audio file using our helper function
+      for (const file of files) {
+        try {
+          const validationResult = await validateAudioBuffer(file.buffer);
+          if (!validationResult.valid) {
+            return reply.redirect(`/web/character?error=${encodeURIComponent(validationResult.reason)}`);
+          }
+        } catch (validationError) {
+          logger.error("Audio", `Error validating audio file: ${validationError.message}`);
+          return reply.redirect('/web/character?error=Audio+validation+failed');
+        }
+      }
+
+      // Send files to helper API server
+      const helperApiEndpoint = await retrieveConfigValue("voiceHelper.endpoint") || 'http://localhost:3500/voice/create';
+
+      // Create form data for the API request
+      const axios = (await import('axios')).default;
+      const FormData = (await import('form-data')).default;
+      const formData = new FormData();
+
+      // Add all files to form data
+      files.forEach((file, index) => {
+        formData.append('voice', file.buffer, file.filename);
+      });
+
+      // Send to helper API
+      const response = await axios.post(`${helperApiEndpoint}?userID=${user.user_id}&characterName=${user.bot_name || 'character'}`,
+        formData, {
+        headers: {
+          ...formData.getHeaders(),
+        },
+        timeout: 30000, // 30 second timeout
+      }
+      );
+
+      // Check response
+      if (response.data && response.data.success && response.data.filename) {
+        // Update user's speaker_file with the returned filename
+        await updateUserParameter(user.user_id, "speaker_file", response.data.filename);
+
+        // Redirect with success message
+        return reply.redirect('/web/character?success=Voice+files+uploaded+successfully');
+      } else {
+        // Something went wrong with the helper API
+        logger.error("Audio", `Helper API error: ${JSON.stringify(response.data)}`);
+        return reply.redirect('/web/character?error=Failed+to+process+voice+files');
+      }
+
+    } catch (error) {
+      logger.error("Audio", `Error uploading voice files: ${error.message}`);
+      return reply.redirect('/web/character?error=Upload+failed');
+    }
+  });
   // Logout route
   fastify.get("/auth/logout", async (request, reply) => {
     reply.clearCookie("enspira_session");
@@ -1003,6 +1104,63 @@ async function routes(fastify, options) {
       }
     }
   );
+}
+
+// Helper function to validate audio buffer properties
+async function validateAudioBuffer(buffer) {
+  try {
+    const AudioContext = (await import('node-web-audio-api')).AudioContext;
+    const context = new AudioContext();
+    
+    // Decode audio data
+    const audioBuffer = await new Promise((resolve, reject) => {
+      context.decodeAudioData(buffer, resolve, reject);
+    });
+    
+    const sampleRate = audioBuffer.sampleRate;
+    const numChannels = audioBuffer.numberOfChannels;
+    const duration = audioBuffer.duration;
+    
+    // Log audio properties for debugging
+    logger.log("Audio", `Validating audio: channels=${numChannels}, sampleRate=${sampleRate}, duration=${duration}`);
+    
+    // Validate against requirements
+    if (numChannels !== 1) {
+      return {
+        valid: false,
+        reason: `Audio must be mono (found ${numChannels} channels)`
+      };
+    }
+    
+    // Accept common sample rates
+    const acceptableSampleRates = [22050, 44100];
+    const closestRate = acceptableSampleRates.reduce((prev, curr) => 
+      (Math.abs(curr - sampleRate) < Math.abs(prev - sampleRate) ? curr : prev)
+    );
+    
+    // Allow some variance (within 5% of target rate)
+    if (Math.abs(sampleRate - closestRate) / closestRate > 0.05) {
+      return {
+        valid: false,
+        reason: `Sample rate should be 22050Hz or 44100Hz (found ${sampleRate}Hz)`
+      };
+    }
+    
+    if (duration > 20) {
+      return {
+        valid: false,
+        reason: `Duration exceeds 20 seconds (${duration.toFixed(1)}s)`
+      };
+    }
+    
+    return { valid: true };
+  } catch (error) {
+    logger.error("Audio", `Error validating audio: ${error.message}`);
+    return {
+      valid: false,
+      reason: "Failed to analyze audio file. Make sure it's a valid WAV file."
+    };
+  }
 }
 
 /**

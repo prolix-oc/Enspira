@@ -112,6 +112,28 @@
     
     <button type="submit" class="btn btn-primary">Save Features</button>
   </form>
+
+   <div class="card" style="margin-top: 20px;">
+    <h3>Custom Voice Upload</h3>
+    <p>Upload up to 4 WAV audio samples of your character's voice. Files must be mono, 16-bit, 22050Hz or 44100Hz, ≤20 seconds, and under 3MB each.</p>
+    
+    {% if character.speaker_file %}
+    <div class="alert alert-success">
+      <p>Voice samples configured: <strong>{{ character.speaker_file }}</strong></p>
+    </div>
+    {% endif %}
+    
+    <form id="voice-upload-form" action="/api/v1/character/voice-upload" method="POST" enctype="multipart/form-data">
+      <div class="form-group">
+        <label for="voice-files">Voice Samples (WAV files only)</label>
+        <input type="file" id="voice-files" name="voice-files" accept="audio/wav" multiple class="form-control">
+        <div id="file-list" class="mt-2"></div>
+        <div id="validation-message" class="alert alert-error" style="display: none; margin-top: 10px;"></div>
+      </div>
+      
+      <button type="submit" id="upload-btn" class="btn btn-primary" disabled>Upload Voice Samples</button>
+    </form>
+  </div>
 </div>
 
 {% endblock %}
@@ -160,6 +182,160 @@
       
       // Update when changed
       ttsEnabledSelect.addEventListener('change', updateTtsFields);
+    }
+    
+    // Voice file upload handling
+    const voiceFileInput = document.getElementById('voice-files');
+    const fileList = document.getElementById('file-list');
+    const validationMessage = document.getElementById('validation-message');
+    const uploadBtn = document.getElementById('upload-btn');
+    const uploadForm = document.getElementById('voice-upload-form');
+    
+    if (voiceFileInput) {
+      voiceFileInput.addEventListener('change', async (e) => {
+        // Clear previous validation messages
+        validationMessage.style.display = 'none';
+        validationMessage.textContent = '';
+        fileList.innerHTML = '';
+        uploadBtn.disabled = true;
+        
+        const files = Array.from(e.target.files);
+        
+        // Check number of files
+        if (files.length > 4) {
+          validationMessage.textContent = 'Please select a maximum of 4 files.';
+          validationMessage.style.display = 'block';
+          voiceFileInput.value = '';
+          return;
+        }
+        
+        if (files.length === 0) {
+          return;
+        }
+        
+        let validFiles = true;
+        const fileInfoPromises = files.map(file => validateAudioFile(file));
+        
+        // Wait for all validations to complete
+        const fileResults = await Promise.all(fileInfoPromises);
+        
+        // Process validation results
+        fileResults.forEach((result, index) => {
+          const file = files[index];
+          const fileItem = document.createElement('div');
+          fileItem.classList.add('file-item');
+          
+          if (result.valid) {
+            fileItem.innerHTML = `<span style="color: var(--success);">✓</span> ${file.name} (${(file.size / 1024).toFixed(1)} KB, ${result.duration.toFixed(1)}s)`;
+          } else {
+            validFiles = false;
+            fileItem.innerHTML = `<span style="color: var(--error);">✗</span> ${file.name}: ${result.reason}`;
+          }
+          
+          fileList.appendChild(fileItem);
+        });
+        
+        // Update upload button state
+        uploadBtn.disabled = !validFiles;
+        
+        // Show validation message if needed
+        if (!validFiles) {
+          validationMessage.textContent = 'One or more files do not meet the requirements. Please fix the issues above.';
+          validationMessage.style.display = 'block';
+        }
+      });
+      
+      // File upload form submission handler
+      uploadForm.addEventListener('submit', (e) => {
+        // Show loading state
+        uploadBtn.disabled = true;
+        uploadBtn.innerHTML = '<span class="loading"></span> Uploading...';
+        
+        // Form will be submitted normally, no need to prevent default
+      });
+    }
+    
+    // Audio file validation function
+    // Audio file validation function
+    async function validateAudioFile(file) {
+      // Check file size (3MB limit)
+      if (file.size > 3 * 1024 * 1024) {
+        return {
+          valid: false,
+          reason: 'File exceeds 3MB size limit'
+        };
+      }
+      
+      // Check file extension
+      if (!file.name.toLowerCase().endsWith('.wav')) {
+        return {
+          valid: false,
+          reason: 'Only WAV files are accepted'
+        };
+      }
+      
+      try {
+        // Read audio metadata from file
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const arrayBuffer = await file.arrayBuffer();
+        const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+        
+        const duration = audioBuffer.duration;
+        const numChannels = audioBuffer.numberOfChannels;
+        const sampleRate = audioBuffer.sampleRate;
+        
+        console.log(`Audio file ${file.name} properties:`, {
+          duration,
+          numChannels,
+          sampleRate,
+          size: file.size
+        });
+        
+        // Validate audio parameters
+        if (duration > 20) {
+          return {
+            valid: false,
+            reason: `Duration exceeds 20 seconds (${duration.toFixed(1)}s)`
+          };
+        }
+        
+        if (numChannels !== 1) {
+          return {
+            valid: false,
+            reason: `File must be mono (has ${numChannels} channels)`
+          };
+        }
+        
+        // Accept common sample rates - browsers sometimes report different rates
+        // 22050Hz and 44100Hz are both acceptable for XTTS
+        const acceptableSampleRates = [22050, 44100];
+        const closestRate = acceptableSampleRates.reduce((prev, curr) => 
+          (Math.abs(curr - sampleRate) < Math.abs(prev - sampleRate) ? curr : prev)
+        );
+        
+        // Allow some variance (within 5% of target rate)
+        if (Math.abs(sampleRate - closestRate) / closestRate > 0.05) {
+          return {
+            valid: false,
+            reason: `Sample rate should be 22050Hz or 44100Hz (found ${sampleRate}Hz)`
+          };
+        }
+        
+        // All checks passed
+        return {
+          valid: true,
+          duration: duration,
+          channels: numChannels,
+          sampleRate: sampleRate,
+          closestStandardRate: closestRate
+        };
+      } catch (error) {
+        console.error('Audio validation error:', error);
+        return {
+          valid: false,
+          reason: 'Failed to analyze audio file. Make sure it\'s a valid WAV file.'
+        };
+      }
     }
   });
 </script>
