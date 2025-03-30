@@ -213,113 +213,209 @@ async function routes(fastify, options) {
       return reply.redirect("/web/auth/auth/login?error=An+error+occurred");
     }
   });
-  // Add this to routes/v1.js within the routes function
+
   // Voice file upload endpoint
+  // Updated server route to use the new JSON endpoint on the helper API
   fastify.post('/character/voice-upload', { preHandler: requireAuth }, async (request, reply) => {
     try {
       const user = request.user;
 
-      // Check if files are present in the request
-      if (!request.isMultipart()) {
-        return reply.redirect('/web/character?error=Missing+files');
-      }
+      // Debug logging
+      logger.log("Audio", `Voice upload request received for user ${user.user_id}`);
 
-      // Process uploaded files
-      const files = [];
-      const parts = await request.parts();
+      // Extract file data from the request body
+      const fileData = request.body.files || [];
 
-      // Collect files from multipart request
-      for await (const part of parts) {
-        if (part.type === 'file' && part.filename) {
-          // File validation
-          if (!part.filename.toLowerCase().endsWith('.wav')) {
-            return reply.redirect('/web/character?error=Only+WAV+files+are+accepted');
-          }
+      logger.log("Audio", `Received ${fileData.length} files in Base64 format`);
 
-          if (part.file.bytesRead > 3 * 1024 * 1024) {
-            return reply.redirect('/web/character?error=File+exceeds+3MB+limit');
-          }
-
-          // Get file buffer
-          const buffer = await part.toBuffer();
-
-          // Add to files array for processing
-          files.push({
-            filename: part.filename,
-            buffer: buffer
-          });
-        }
-      }
-
-      // Check if we have any files
-      if (files.length === 0) {
+      if (fileData.length === 0) {
+        logger.error("Audio", "No files received in request");
         return reply.redirect('/web/character?error=No+files+uploaded');
       }
 
       // Validate file count
-      if (files.length > 4) {
+      if (fileData.length > 4) {
+        logger.error("Audio", `Too many files: ${fileData.length}`);
         return reply.redirect('/web/character?error=Maximum+4+files+allowed');
       }
 
-      // Validate each audio file using our helper function
-      for (const file of files) {
+      // Process each file
+      const processedFiles = [];
+
+      for (const file of fileData) {
         try {
-          const validationResult = await validateAudioBuffer(file.buffer);
+          // Validate the file data
+          if (!file.name || !file.data) {
+            logger.error("Audio", "Invalid file data: missing name or data");
+            continue;
+          }
+
+          // Check file name
+          if (!file.name.toLowerCase().endsWith('.wav')) {
+            logger.error("Audio", `File ${file.name} is not a WAV file`);
+            return reply.redirect('/web/character?error=Only+WAV+files+are+accepted');
+          }
+
+          // Decode Base64 data
+          const base64Data = file.data.split(';base64,').pop();
+          const buffer = Buffer.from(base64Data, 'base64');
+
+          // Check file size
+          if (buffer.length > 3 * 1024 * 1024) {
+            logger.error("Audio", `File ${file.name} exceeds 3MB limit (${buffer.length} bytes)`);
+            return reply.redirect('/web/character?error=File+exceeds+3MB+limit');
+          }
+
+          logger.log("Audio", `Decoded ${file.name}: ${buffer.length} bytes`);
+
+          // Validate audio file - now using our lightweight parser
+          const validationResult = await validateWavBuffer(buffer);
+
           if (!validationResult.valid) {
+            logger.error("Audio", `Audio validation failed for ${file.name}: ${validationResult.reason}`);
             return reply.redirect(`/web/character?error=${encodeURIComponent(validationResult.reason)}`);
           }
-        } catch (validationError) {
-          logger.error("Audio", `Error validating audio file: ${validationError.message}`);
-          return reply.redirect('/web/character?error=Audio+validation+failed');
+
+          // Add to processed files - we'll pass along the Base64 data directly
+          processedFiles.push({
+            name: file.name,
+            data: file.data
+          });
+
+          logger.log("Audio", `Validated ${file.name}: sampleRate=${validationResult.sampleRate}Hz, duration=${validationResult.duration.toFixed(1)}s`);
+        } catch (fileError) {
+          logger.error("Audio", `Error processing file ${file.name}: ${fileError.message}`);
+          return reply.redirect('/web/character?error=Error+processing+file');
         }
       }
 
-      // Send files to helper API server
-      const helperApiEndpoint = await retrieveConfigValue("voiceHelper.endpoint") || 'http://localhost:3500/voice/create';
-
-      // Create form data for the API request
-      const axios = (await import('axios')).default;
-      const FormData = (await import('form-data')).default;
-      const formData = new FormData();
-
-      // Add all files to form data
-      files.forEach((file, index) => {
-        formData.append('voice', file.buffer, file.filename);
-      });
-
-      // Send to helper API
-      const response = await axios.post(`${helperApiEndpoint}?userID=${user.user_id}&characterName=${user.bot_name || 'character'}`,
-        formData, {
-        headers: {
-          ...formData.getHeaders(),
-        },
-        timeout: 30000, // 30 second timeout
-      }
-      );
-
-      // Check response
-      if (response.data && response.data.success && response.data.filename) {
-        // Update user's speaker_file with the returned filename
-        await updateUserParameter(user.user_id, "speaker_file", response.data.filename);
-
-        // Redirect with success message
-        return reply.redirect('/web/character?success=Voice+files+uploaded+successfully');
-      } else {
-        // Something went wrong with the helper API
-        logger.error("Audio", `Helper API error: ${JSON.stringify(response.data)}`);
-        return reply.redirect('/web/character?error=Failed+to+process+voice+files');
+      // Check if we have any valid files
+      if (processedFiles.length === 0) {
+        logger.error("Audio", "No valid files found in request");
+        return reply.redirect('/web/character?error=No+valid+files+uploaded');
       }
 
+      // Get the base URL for the helper API
+      const helperApiBase = await retrieveConfigValue("voiceHelper.endpoint") || 'http://localhost:3500';
+
+      // Construct the JSON endpoint URL - now using the new create-json endpoint
+      const helperApiEndpoint = `${helperApiBase}/voice/create-json`;
+
+      // Log that we're sending files to the helper API
+      logger.log("Audio", `Sending ${processedFiles.length} files to voice helper API at ${helperApiEndpoint}`);
+
+      // Send to helper API using JSON
+      try {
+        const axios = (await import('axios')).default;
+
+        // Create the JSON payload
+        const jsonPayload = {
+          files: processedFiles
+        };
+
+        // Send the request with JSON payload
+        const response = await axios.post(
+          `${helperApiEndpoint}?userID=${user.user_id}&characterName=${encodeURIComponent(user.bot_name || 'character')}`,
+          jsonPayload,
+          {
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            timeout: 60000, // 60 second timeout
+            maxContentLength: Infinity,
+            maxBodyLength: Infinity
+          }
+        );
+
+        // Check response
+        if (response.data && response.data.success && response.data.filename) {
+          // Update user's speaker_file with the returned filename
+          await updateUserParameter(user.user_id, "speaker_file", response.data.filename);
+
+          logger.log("Audio", `Successfully processed voice files for user ${user.user_id}, saved as ${response.data.filename}`);
+
+          // Redirect with success message
+          return reply.redirect('/web/character?success=Voice+files+uploaded+successfully');
+        } else {
+          logger.error("Audio", `Helper API error: ${JSON.stringify(response.data)}`);
+          return reply.redirect('/web/character?error=Failed+to+process+voice+files');
+        }
+      } catch (apiError) {
+        logger.error("Audio", `Helper API request failed: ${apiError.message}`);
+
+        let errorMessage = 'Upload+failed';
+        if (apiError.code === 'ECONNREFUSED' || apiError.code === 'ECONNABORTED') {
+          errorMessage = 'Voice+processing+service+unavailable';
+        } else if (apiError.response && apiError.response.status) {
+          errorMessage = `Server+error+${apiError.response.status}`;
+        }
+
+        return reply.redirect(`/web/character?error=${errorMessage}`);
+      }
     } catch (error) {
-      logger.error("Audio", `Error uploading voice files: ${error.message}`);
-      return reply.redirect('/web/character?error=Upload+failed');
+      logger.error("Audio", `Error in voice upload route: ${error.message}`);
+      return reply.redirect('/web/character?error=Internal+server+error');
     }
   });
+
   // Logout route
   fastify.get("/auth/logout", async (request, reply) => {
     reply.clearCookie("enspira_session");
     return reply.redirect("/web/auth/login");
   });
+
+  fastify.post(
+    "/character/features",
+    { preHandler: requireAuth },
+    async (request, reply) => {
+      try {
+        const user = request.user;
+
+        // Extract values from form data
+        const funFacts = getFieldValue(request.body.funFacts) === "true";
+        const funFactsInterval = parseInt(
+          getFieldValue(request.body.funFactsInterval),
+          10
+        );
+        const ttsEnabled = getFieldValue(request.body.tts_enabled) === "true";
+        const ttsEqPref = getFieldValue(request.body.ttsEqPref);
+        const ttsUpsamplePref =
+          getFieldValue(request.body.ttsUpsamplePref) === "true";
+
+        // Validate funFactsInterval
+        const interval = Math.max(5, Math.min(240, funFactsInterval || 30));
+
+        // Update user parameters
+        await updateUserParameter(user.user_id, "funFacts", funFacts);
+        await updateUserParameter(user.user_id, "funFactsInterval", interval);
+        await updateUserParameter(user.user_id, "tts_enabled", ttsEnabled);
+
+        // Only update TTS-related settings if TTS is enabled
+        if (ttsEnabled) {
+          await updateUserParameter(user.user_id, "ttsEqPref", ttsEqPref);
+          await updateUserParameter(
+            user.user_id,
+            "ttsUpsamplePref",
+            ttsUpsamplePref
+          );
+        }
+
+        reply.send({
+          success: true,
+          message: "Character features updated successfully",
+        });
+      } catch (error) {
+        logger.error(
+          "Web",
+          `Error updating character features: ${error.message}`
+        );
+        reply.code(500).send({
+          success: false,
+          error: "An error occurred while updating character features",
+        });
+      }
+    }
+  );
 
   fastify.get(
     "/auth/twitch/connect",
@@ -1106,59 +1202,145 @@ async function routes(fastify, options) {
   );
 }
 
-// Helper function to validate audio buffer properties
-async function validateAudioBuffer(buffer) {
+/**
+ * Lightweight WAV file parser that doesn't require audio output devices
+ * @param {Buffer} buffer - The WAV file buffer to analyze
+ * @returns {Object} - Validation result with audio properties
+ */
+async function validateWavBuffer(buffer) {
   try {
-    const AudioContext = (await import('node-web-audio-api')).AudioContext;
-    const context = new AudioContext();
-    
-    // Decode audio data
-    const audioBuffer = await new Promise((resolve, reject) => {
-      context.decodeAudioData(buffer, resolve, reject);
-    });
-    
-    const sampleRate = audioBuffer.sampleRate;
-    const numChannels = audioBuffer.numberOfChannels;
-    const duration = audioBuffer.duration;
-    
-    // Log audio properties for debugging
-    logger.log("Audio", `Validating audio: channels=${numChannels}, sampleRate=${sampleRate}, duration=${duration}`);
-    
-    // Validate against requirements
+    // Log the buffer size for debugging
+    logger.log("Audio", `Analyzing WAV buffer of size: ${buffer.length} bytes`);
+
+    // Check if the buffer is valid and has enough bytes for a WAV header
+    if (!buffer || buffer.length < 44) {
+      return {
+        valid: false,
+        reason: "Invalid WAV file: too small or corrupted"
+      };
+    }
+
+    // Check WAV header magic bytes (RIFF....WAVE)
+    const isRiff = buffer.slice(0, 4).toString() === 'RIFF';
+    const isWave = buffer.slice(8, 12).toString() === 'WAVE';
+
+    if (!isRiff || !isWave) {
+      logger.error("Audio", `Invalid WAV header: RIFF=${isRiff}, WAVE=${isWave}`);
+      return {
+        valid: false,
+        reason: "Invalid WAV file: incorrect format"
+      };
+    }
+
+    // Find the 'fmt ' chunk
+    let offset = 12; // Start after "WAVE"
+    let fmtChunkFound = false;
+
+    // Parse all chunks until we find 'fmt '
+    while (offset < buffer.length - 8) {
+      const chunkId = buffer.slice(offset, offset + 4).toString();
+      const chunkSize = buffer.readUInt32LE(offset + 4);
+
+      if (chunkId === 'fmt ') {
+        fmtChunkFound = true;
+        break;
+      }
+
+      offset += 8 + chunkSize;
+    }
+
+    if (!fmtChunkFound) {
+      logger.error("Audio", "WAV file missing 'fmt ' chunk");
+      return {
+        valid: false,
+        reason: "Invalid WAV file: missing format information"
+      };
+    }
+
+    // Now parse the format chunk
+    offset += 8; // Skip chunk ID and size
+
+    // Audio format (PCM = 1)
+    const audioFormat = buffer.readUInt16LE(offset);
+
+    // Number of channels
+    const numChannels = buffer.readUInt16LE(offset + 2);
+
+    // Sample rate
+    const sampleRate = buffer.readUInt32LE(offset + 4);
+
+    // Bytes per second
+    const byteRate = buffer.readUInt32LE(offset + 8);
+
+    // Bits per sample
+    const bitsPerSample = buffer.readUInt16LE(offset + 14);
+
+    // Find data chunk to calculate duration
+    let dataSize = 0;
+    offset = 12; // Reset to start after "WAVE"
+
+    while (offset < buffer.length - 8) {
+      const chunkId = buffer.slice(offset, offset + 4).toString();
+      const chunkSize = buffer.readUInt32LE(offset + 4);
+
+      if (chunkId === 'data') {
+        dataSize = chunkSize;
+        break;
+      }
+
+      offset += 8 + chunkSize;
+    }
+
+    // Calculate duration
+    const bytesPerSample = bitsPerSample / 8;
+    const totalSamples = dataSize / (bytesPerSample * numChannels);
+    const duration = totalSamples / sampleRate;
+
+    // Log the results
+    logger.log("Audio", `WAV analysis: format=${audioFormat}, channels=${numChannels}, sampleRate=${sampleRate}Hz, bitsPerSample=${bitsPerSample}, duration=${duration.toFixed(2)}s`);
+
+    // Validate requirements
     if (numChannels !== 1) {
       return {
         valid: false,
         reason: `Audio must be mono (found ${numChannels} channels)`
       };
     }
-    
-    // Accept common sample rates
-    const acceptableSampleRates = [22050, 44100];
-    const closestRate = acceptableSampleRates.reduce((prev, curr) => 
+
+    // Accept common sample rates: 22050Hz, 44100Hz, 48000Hz
+    const acceptableSampleRates = [22050, 44100, 48000];
+    const closestRate = acceptableSampleRates.reduce((prev, curr) =>
       (Math.abs(curr - sampleRate) < Math.abs(prev - sampleRate) ? curr : prev)
     );
-    
-    // Allow some variance (within 5% of target rate)
-    if (Math.abs(sampleRate - closestRate) / closestRate > 0.05) {
-      return {
-        valid: false,
-        reason: `Sample rate should be 22050Hz or 44100Hz (found ${sampleRate}Hz)`
-      };
+
+    // Allow more variance (within 10% of target rate)
+    if (Math.abs(sampleRate - closestRate) / closestRate > 0.1) {
+      logger.warn("Audio", `Unusual sample rate detected: ${sampleRate}Hz, closest standard rate: ${closestRate}Hz`);
+      // We'll still accept it and let the voice API handle resampling
     }
-    
+
     if (duration > 20) {
       return {
         valid: false,
         reason: `Duration exceeds 20 seconds (${duration.toFixed(1)}s)`
       };
     }
-    
-    return { valid: true };
+
+    // Return all the parsed information
+    return {
+      valid: true,
+      sampleRate,
+      numChannels,
+      bitsPerSample,
+      duration,
+      format: audioFormat === 1 ? "PCM" : "Non-PCM",
+      closestStandardRate: closestRate
+    };
   } catch (error) {
-    logger.error("Audio", `Error validating audio: ${error.message}`);
+    logger.error("Audio", `Error analyzing WAV file: ${error.message}`);
     return {
       valid: false,
-      reason: "Failed to analyze audio file. Make sure it's a valid WAV file."
+      reason: `Failed to analyze WAV file: ${error.message}`
     };
   }
 }

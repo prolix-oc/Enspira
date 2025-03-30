@@ -1,342 +1,434 @@
 {% extends "layout.njk" %}
-
 {% block title %}Character Editor{% endblock %}
-
 {% block content %}
-<div class="card">
-  <div class="card-header">
-    <h1>Character Editor</h1>
-  </div>
-  
-  <p>Customize your AI assistant's personality, description, and behavior. These settings help define how your assistant interacts with your Twitch chat.</p>
-  
-  <div class="tabs">
-    <div class="tab active" data-target="personality-tab">Personality</div>
-    <div class="tab" data-target="description-tab">Description</div>
-    <div class="tab" data-target="example-messages-tab">Example Messages</div>
-    <div class="tab" data-target="features-tab">Features</div>
-  </div>
-  
-  <div id="personality-tab" class="tab-content active">
-    <form action="/api/v1/character/personality" method="POST" data-async>
-      <div class="form-group">
-        <label for="bot_name">Character Name</label>
-        <input type="text" id="bot_name" name="bot_name" value="{{ character.bot_name }}" required>
-        <p>This is the name your AI assistant will use.</p>
-      </div>
-      
-      <div class="form-group">
-        <label for="personality">Personality</label>
-        <textarea id="personality" name="personality" rows="12" required>{{ characterPersonality }}</textarea>
-        <p>Describe your assistant's personality traits, mannerisms, speaking style, interests, and attitudes.</p>
-      </div>
-      
-      <button type="submit" class="btn btn-primary">Save Personality</button>
-    </form>
-  </div>
-  
-  <div id="description-tab" class="tab-content">
-    <form action="/api/v1/character/description" method="POST" data-async>
-      <div class="form-group">
-        <label for="description">Physical Description</label>
-        <textarea id="description" name="description" rows="12" required>{{ characterDescription }}</textarea>
-        <p>Describe your assistant's appearance, physical attributes, clothing, and other visual aspects.</p>
-      </div>
-      
-      <button type="submit" class="btn btn-primary">Save Description</button>
-    </form>
-  </div>
-  
-  <div id="example-messages-tab" class="tab-content">
-    <form action="/api/v1/character/examples" method="POST" data-async>
-      <div class="form-group">
-        <label for="examples">Example Interactions</label>
-        <textarea id="examples" name="examples" rows="15" required>{{ characterExamples }}</textarea>
-        <p>Provide examples of how your assistant would respond to different situations. This helps establish the assistant's tone and style. Format as:</p>
-        <pre style="background-color: var(--input-bg); padding: 10px; margin-top: 5px; border-radius: 6px;">
+  <div class="card">
+    <div class="card-header">
+      <h1>Character Editor</h1>
+    </div>
+    <p>
+      Customize your AI assistant's personality, description, and behavior. These settings help define how your assistant interacts with your Twitch chat.
+    </p>
+    <div class="tabs">
+      <div class="tab active" data-target="personality-tab">Personality</div>
+      <div class="tab" data-target="description-tab">Description</div>
+      <div class="tab" data-target="example-messages-tab">Example Messages</div>
+      <div class="tab" data-target="features-tab">Features</div>
+    </div>
+    <div id="personality-tab" class="tab-content active">
+      <form action="/api/v1/character/personality" method="POST" data-async>
+        <div class="form-group">
+          <label for="bot_name">Character Name</label>
+          <input type="text"
+                 id="bot_name"
+                 name="bot_name"
+                 value="{{ character.bot_name }}"
+                 required>
+          <p>This is the name your AI assistant will use.</p>
+        </div>
+        <div class="form-group">
+          <label for="personality">Personality</label>
+          <textarea id="personality" name="personality" rows="12" required>{{ characterPersonality }}</textarea>
+          <p>Describe your assistant's personality traits, mannerisms, speaking style, interests, and attitudes.</p>
+        </div>
+        <button type="submit" class="btn btn-primary">Save Personality</button>
+      </form>
+    </div>
+    <div id="description-tab" class="tab-content">
+      <form action="/api/v1/character/description" method="POST" data-async>
+        <div class="form-group">
+          <label for="description">Physical Description</label>
+          <textarea id="description" name="description" rows="12" required>{{ characterDescription }}</textarea>
+          <p>Describe your assistant's appearance, physical attributes, clothing, and other visual aspects.</p>
+        </div>
+        <button type="submit" class="btn btn-primary">Save Description</button>
+      </form>
+    </div>
+    <div id="example-messages-tab" class="tab-content">
+      <form action="/api/v1/character/examples" method="POST" data-async>
+        <div class="form-group">
+          <label for="examples">Example Interactions</label>
+          <textarea id="examples" name="examples" rows="15" required>{{ characterExamples }}</textarea>
+          <p>
+            Provide examples of how your assistant would respond to different situations. This helps establish the assistant's tone and style. Format as:
+          </p>
+          <pre style="background-color: var(--input-bg); padding: 10px; margin-top: 5px; border-radius: 6px;">
 {{ character.bot_name }}: [Example response]
 
 {{ character.bot_name }}: [Another response]</pre>
-      </div>
-      
-      <button type="submit" class="btn btn-primary">Save Examples</button>
-    </form>
+        </div>
+        <button type="submit" class="btn btn-primary">Save Examples</button>
+      </form>
+    </div>
   </div>
-</div>
-
-<div id="features-tab" class="tab-content">
-  <form action="/api/v1/character/features" method="POST" data-async>
-    <div class="form-group">
-      <label for="funFacts">Fun Facts</label>
-      <select id="funFacts" name="funFacts">
-        <option value="true" {% if character.funFacts %}selected{% endif %}>Enabled</option>
-        <option value="false" {% if not character.funFacts %}selected{% endif %}>Disabled</option>
-      </select>
-      <p>Enable your AI assistant to occasionally share interesting fun facts in chat.</p>
-    </div>
-    
-    <div class="form-group">
-      <label for="funFactsInterval">Fun Facts Interval (minutes)</label>
-      <input type="number" id="funFactsInterval" name="funFactsInterval" value="{{ character.funFactsInterval or '30' }}" min="5" max="240">
-      <p>How often should your assistant share fun facts? (5-240 minutes)</p>
-    </div>
-    
-    <div class="form-group">
-      <label for="tts_enabled">Text-to-Speech</label>
-      <select id="tts_enabled" name="tts_enabled">
-        <option value="true" {% if character.tts_enabled %}selected{% endif %}>Enabled</option>
-        <option value="false" {% if not character.tts_enabled %}selected{% endif %}>Disabled</option>
-      </select>
-      <p>Enable your AI assistant to use text-to-speech for voice responses.</p>
-    </div>
-    
-    <div class="form-group">
-      <label for="ttsEqPref">Voice Quality Preset</label>
-      <select id="ttsEqPref" name="ttsEqPref" {% if not character.tts_enabled %}disabled{% endif %}>
-        <option value="clarity" {% if character.ttsEqPref == 'clarity' %}selected{% endif %}>Clarity</option>
-        <option value="warm" {% if character.ttsEqPref == 'warm' %}selected{% endif %}>Warm</option>
-        <option value="bright" {% if character.ttsEqPref == 'bright' %}selected{% endif %}>Bright</option>
-        <option value="broadcast" {% if character.ttsEqPref == 'broadcast' %}selected{% endif %}>Broadcast</option>
-      </select>
-      <p>Choose a preset for your assistant's voice quality.</p>
-    </div>
-    
-    <div class="form-group">
-      <label for="ttsUpsamplePref">Audio Upsampling</label>
-      <select id="ttsUpsamplePref" name="ttsUpsamplePref" {% if not character.tts_enabled %}disabled{% endif %}>
-        <option value="true" {% if character.ttsUpsamplePref %}selected{% endif %}>Enabled</option>
-        <option value="false" {% if not character.ttsUpsamplePref %}selected{% endif %}>Disabled</option>
-      </select>
-      <p>Enable audio upsampling for better voice quality (uses more CPU).</p>
-    </div>
-    
-    <button type="submit" class="btn btn-primary">Save Features</button>
-  </form>
-
-   <div class="card" style="margin-top: 20px;">
-    <h3>Custom Voice Upload</h3>
-    <p>Upload up to 4 WAV audio samples of your character's voice. Files must be mono, 16-bit, 22050Hz or 44100Hz, ≤20 seconds, and under 3MB each.</p>
-    
-    {% if character.speaker_file %}
-    <div class="alert alert-success">
-      <p>Voice samples configured: <strong>{{ character.speaker_file }}</strong></p>
-    </div>
-    {% endif %}
-    
-    <form id="voice-upload-form" action="/api/v1/character/voice-upload" method="POST" enctype="multipart/form-data">
+  <div id="features-tab" class="tab-content">
+    <form action="/api/v1/character/features" method="POST" data-async>
       <div class="form-group">
-        <label for="voice-files">Voice Samples (WAV files only)</label>
-        <input type="file" id="voice-files" name="voice-files" accept="audio/wav" multiple class="form-control">
-        <div id="file-list" class="mt-2"></div>
-        <div id="validation-message" class="alert alert-error" style="display: none; margin-top: 10px;"></div>
+        <label for="funFacts">Fun Facts</label>
+        <select id="funFacts" name="funFacts">
+          <option value="true" {% if character.funFacts %}selected{% endif %}>Enabled</option>
+          <option value="false" {% if not character.funFacts %}selected{% endif %}>Disabled</option>
+        </select>
+        <p>Enable your AI assistant to occasionally share interesting fun facts in chat.</p>
+      </div>
+      <div class="form-group">
+        <label for="funFactsInterval">Fun Facts Interval (minutes)</label>
+        <input type="number"
+               id="funFactsInterval"
+               name="funFactsInterval"
+               value="{{ character.funFactsInterval or '30' }}"
+               min="5"
+               max="240">
+        <p>How often should your assistant share fun facts? (5-240 minutes)</p>
+      </div>
+      <div class="form-group">
+        <label for="tts_enabled">Text-to-Speech</label>
+        <select id="tts_enabled" name="tts_enabled">
+          <option value="true" {% if character.tts_enabled %}selected{% endif %}>Enabled</option>
+          <option value="false" {% if not character.tts_enabled %}selected{% endif %}>Disabled</option>
+        </select>
+        <p>Enable your AI assistant to use text-to-speech for voice responses.</p>
+      </div>
+      <div class="form-group">
+        <label for="ttsEqPref">Voice Quality Preset</label>
+        <select id="ttsEqPref"
+                name="ttsEqPref"
+                {% if not character.tts_enabled %}disabled{% endif %}>
+          <option value="clarity"
+                  {% if character.ttsEqPref == 'clarity' %}selected{% endif %}>Clarity</option>
+          <option value="warm"
+                  {% if character.ttsEqPref == 'warm' %}selected{% endif %}>Warm</option>
+          <option value="bright"
+                  {% if character.ttsEqPref == 'bright' %}selected{% endif %}>Bright</option>
+          <option value="broadcast"
+                  {% if character.ttsEqPref == 'broadcast' %}selected{% endif %}>Broadcast</option>
+        </select>
+        <p>Choose a preset for your assistant's voice quality.</p>
+      </div>
+      <div class="form-group">
+        <label for="ttsUpsamplePref">Audio Upsampling</label>
+        <select id="ttsUpsamplePref"
+                name="ttsUpsamplePref"
+                {% if not character.tts_enabled %}disabled{% endif %}>
+          <option value="true" {% if character.ttsUpsamplePref %}selected{% endif %}>Enabled</option>
+          <option value="false"
+                  {% if not character.ttsUpsamplePref %}selected{% endif %}>Disabled</option>
+        </select>
+        <p>Enable audio upsampling for better voice quality (uses more CPU).</p>
+      </div>
+      <button type="submit" class="btn btn-primary">Save Features</button>
+    </form>
+    <div class="card" style="margin-top: 20px;">
+      <h3>Custom Voice Upload</h3>
+      <p>Upload up to 4 WAV audio samples of your character's voice. Files must be mono, 16-bit, 22050Hz, 44100Hz, or 48000Hz, ≤20 seconds, and under 3MB each.</p>
+      
+      {% if character.speaker_file %}
+      <div class="alert alert-success">
+        <p>Voice samples configured: <strong>{{ character.speaker_file }}</strong></p>
+      </div>
+      {% endif %}
+      
+      <div class="file-input-wrapper">
+        <label for="voice-file-input" class="btn btn-secondary">Browse Files</label>
+        <span id="file-select-text">No file selected</span>
+        <input type="file" id="voice-file-input" accept="audio/wav" style="display: none;">
       </div>
       
-      <button type="submit" id="upload-btn" class="btn btn-primary" disabled>Upload Voice Samples</button>
-    </form>
+      <button type="button" id="add-file-btn" class="btn btn-secondary" disabled style="margin-top: 10px;">Add File</button>
+      
+      <div id="validation-message" class="alert alert-error" style="display: none; margin-top: 10px;"></div>
+      
+      <div id="selected-files-container" style="margin-top: 15px; display: none;">
+        <h4>Selected Files</h4>
+        <table class="file-list-table" style="width: 100%; border-collapse: collapse;">
+          <thead>
+            <tr>
+              <th style="text-align: left; padding: 8px; border-bottom: 1px solid var(--border);">Filename</th>
+              <th style="text-align: left; padding: 8px; border-bottom: 1px solid var(--border);">Size</th>
+              <th style="text-align: left; padding: 8px; border-bottom: 1px solid var(--border);">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="file-list-table">
+            <!-- Files will be added here dynamically -->
+          </tbody>
+        </table>
+      </div>
+      
+      <button type="button" id="upload-btn" class="btn btn-primary" style="margin-top: 15px;" disabled>Upload Voice Samples</button>
+    </div>
   </div>
-</div>
 
-{% endblock %}
-
-{% block extraScripts %}
-<script>
-  // Auto-resize textareas as content grows
-  document.addEventListener('DOMContentLoaded', () => {
-    const textareas = document.querySelectorAll('textarea');
-    textareas.forEach(textarea => {
-      const adjustHeight = () => {
-        textarea.style.height = 'auto';
-        textarea.style.height = (textarea.scrollHeight) + 'px';
-      };
-      
-      // Initial adjustment
-      adjustHeight();
-      
-      // Adjust on input
-      textarea.addEventListener('input', adjustHeight);
-      
-      // Adjust when tab is shown
-      document.querySelectorAll('.tab').forEach(tab => {
-        tab.addEventListener('click', () => {
-          setTimeout(adjustHeight, 10);
-        });
-      });
-    });
-    
-    // Add toggle behavior for TTS fields
-    const ttsEnabledSelect = document.getElementById('tts_enabled');
-    const ttsRelatedFields = document.querySelectorAll('#ttsEqPref, #ttsUpsamplePref');
-    
-    if (ttsEnabledSelect) {
-      const updateTtsFields = () => {
-        const isEnabled = ttsEnabledSelect.value === 'true';
-        ttsRelatedFields.forEach(field => {
-          field.disabled = !isEnabled;
-          // Update styling based on disabled state
-          field.parentElement.style.opacity = isEnabled ? '1' : '0.5';
-        });
-      };
-      
-      // Initialize on page load
-      updateTtsFields();
-      
-      // Update when changed
-      ttsEnabledSelect.addEventListener('change', updateTtsFields);
-    }
-    
-    // Voice file upload handling
-    const voiceFileInput = document.getElementById('voice-files');
-    const fileList = document.getElementById('file-list');
-    const validationMessage = document.getElementById('validation-message');
-    const uploadBtn = document.getElementById('upload-btn');
-    const uploadForm = document.getElementById('voice-upload-form');
-    
-    if (voiceFileInput) {
-      voiceFileInput.addEventListener('change', async (e) => {
-        // Clear previous validation messages
-        validationMessage.style.display = 'none';
-        validationMessage.textContent = '';
-        fileList.innerHTML = '';
-        uploadBtn.disabled = true;
-        
-        const files = Array.from(e.target.files);
-        
-        // Check number of files
-        if (files.length > 4) {
-          validationMessage.textContent = 'Please select a maximum of 4 files.';
-          validationMessage.style.display = 'block';
-          voiceFileInput.value = '';
-          return;
-        }
-        
-        if (files.length === 0) {
-          return;
-        }
-        
-        let validFiles = true;
-        const fileInfoPromises = files.map(file => validateAudioFile(file));
-        
-        // Wait for all validations to complete
-        const fileResults = await Promise.all(fileInfoPromises);
-        
-        // Process validation results
-        fileResults.forEach((result, index) => {
-          const file = files[index];
-          const fileItem = document.createElement('div');
-          fileItem.classList.add('file-item');
-          
-          if (result.valid) {
-            fileItem.innerHTML = `<span style="color: var(--success);">✓</span> ${file.name} (${(file.size / 1024).toFixed(1)} KB, ${result.duration.toFixed(1)}s)`;
-          } else {
-            validFiles = false;
-            fileItem.innerHTML = `<span style="color: var(--error);">✗</span> ${file.name}: ${result.reason}`;
-          }
-          
-          fileList.appendChild(fileItem);
-        });
-        
-        // Update upload button state
-        uploadBtn.disabled = !validFiles;
-        
-        // Show validation message if needed
-        if (!validFiles) {
-          validationMessage.textContent = 'One or more files do not meet the requirements. Please fix the issues above.';
-          validationMessage.style.display = 'block';
-        }
-      });
-      
-      // File upload form submission handler
-      uploadForm.addEventListener('submit', (e) => {
-        // Show loading state
-        uploadBtn.disabled = true;
-        uploadBtn.innerHTML = '<span class="loading"></span> Uploading...';
-        
-        // Form will be submitted normally, no need to prevent default
-      });
-    }
-    
-    // Audio file validation function
-    // Audio file validation function
-    async function validateAudioFile(file) {
-      // Check file size (3MB limit)
-      if (file.size > 3 * 1024 * 1024) {
-        return {
-          valid: false,
-          reason: 'File exceeds 3MB size limit'
-        };
+  <style>
+    input[type="file"].form-control {
+        padding: 6px;
+        background-color: var(--input-bg);
+        color: var(--primary-text);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        width: 100%;
+        max-width: 500px;
+        margin-top: 5px;
       }
       
-      // Check file extension
-      if (!file.name.toLowerCase().endsWith('.wav')) {
-        return {
-          valid: false,
-          reason: 'Only WAV files are accepted'
-        };
+    .form-text {
+      display: block;
+      margin-top: 5px;
+      color: var(--secondary-text);
+    }
+
+    .file-input-wrapper {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    
+    #file-select-text {
+      color: var(--secondary-text);
+      margin-left: 5px;
+      flex-grow: 1;
+    }
+    
+    .file-list-table {
+      background-color: var(--input-bg);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    
+    .file-list-table tbody tr {
+      border-bottom: 1px solid var(--border);
+    }
+    
+    .file-list-table tbody tr:last-child {
+      border-bottom: none;
+    }
+    
+    .file-list-table td {
+      padding: 8px;
+    }
+    
+    .file-action-btn {
+      background-color: var(--button-secondary-bg);
+      color: var(--primary-text);
+      border: none;
+      padding: 4px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    
+    .file-action-btn:hover {
+      background-color: var(--button-secondary-hover);
+    }
+    
+    .remove-file-btn {
+      color: var(--error);
+    }
+  </style>
+{% endblock %}
+{% block extraScripts %}
+<script>
+  document.addEventListener('DOMContentLoaded', () => {
+    const fileInput = document.getElementById('voice-file-input');
+    const fileSelectText = document.getElementById('file-select-text');
+    const addFileBtn = document.getElementById('add-file-btn');
+    const fileListTable = document.getElementById('file-list-table');
+    const selectedFilesContainer = document.getElementById('selected-files-container');
+    const validationMessage = document.getElementById('validation-message');
+    const uploadBtn = document.getElementById('upload-btn');
+    
+    // Array to store selected files with their data
+    const selectedFiles = [];
+    
+    // When file is selected in the file input
+    fileInput.addEventListener('change', async (e) => {
+      validationMessage.style.display = 'none';
+      
+      if (fileInput.files.length > 0) {
+        const file = fileInput.files[0];
+        fileSelectText.textContent = file.name;
+        
+        // Check file size
+        if (file.size > 3 * 1024 * 1024) {
+          validationMessage.textContent = 'File exceeds 3MB size limit';
+          validationMessage.style.display = 'block';
+          addFileBtn.disabled = true;
+          return;
+        }
+        
+        // Check file extension
+        if (!file.name.toLowerCase().endsWith('.wav')) {
+          validationMessage.textContent = 'Only WAV files are accepted';
+          validationMessage.style.display = 'block';
+          addFileBtn.disabled = true;
+          return;
+        }
+        
+        addFileBtn.disabled = false;
+      } else {
+        fileSelectText.textContent = 'No file selected';
+        addFileBtn.disabled = true;
+      }
+    });
+    
+    // Add file button click
+    addFileBtn.addEventListener('click', async () => {
+      if (fileInput.files.length === 0) return;
+      
+      const file = fileInput.files[0];
+      
+      // Check if we already have 4 files
+      if (selectedFiles.length >= 4) {
+        validationMessage.textContent = 'Maximum 4 files allowed';
+        validationMessage.style.display = 'block';
+        return;
+      }
+      
+      // Check if file with same name already exists
+      if (selectedFiles.some(f => f.name === file.name)) {
+        validationMessage.textContent = 'A file with this name is already added';
+        validationMessage.style.display = 'block';
+        return;
       }
       
       try {
-        // Read audio metadata from file
-        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        const arrayBuffer = await file.arrayBuffer();
-        const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+        // Read file as base64
+        const base64 = await readFileAsBase64(file);
         
-        const duration = audioBuffer.duration;
-        const numChannels = audioBuffer.numberOfChannels;
-        const sampleRate = audioBuffer.sampleRate;
-        
-        console.log(`Audio file ${file.name} properties:`, {
-          duration,
-          numChannels,
-          sampleRate,
-          size: file.size
+        // Add file to our array
+        selectedFiles.push({
+          name: file.name,
+          size: file.size,
+          data: base64
         });
         
-        // Validate audio parameters
-        if (duration > 20) {
-          return {
-            valid: false,
-            reason: `Duration exceeds 20 seconds (${duration.toFixed(1)}s)`
-          };
+        // Add to UI
+        addFileToTable(file);
+        
+        // Reset file input
+        fileInput.value = '';
+        fileSelectText.textContent = 'No file selected';
+        addFileBtn.disabled = true;
+        
+        // Show container if this is the first file
+        if (selectedFiles.length === 1) {
+          selectedFilesContainer.style.display = 'block';
         }
         
-        if (numChannels !== 1) {
-          return {
-            valid: false,
-            reason: `File must be mono (has ${numChannels} channels)`
-          };
-        }
-        
-        // Accept common sample rates - browsers sometimes report different rates
-        // 22050Hz and 44100Hz are both acceptable for XTTS
-        const acceptableSampleRates = [22050, 44100];
-        const closestRate = acceptableSampleRates.reduce((prev, curr) => 
-          (Math.abs(curr - sampleRate) < Math.abs(prev - sampleRate) ? curr : prev)
-        );
-        
-        // Allow some variance (within 5% of target rate)
-        if (Math.abs(sampleRate - closestRate) / closestRate > 0.05) {
-          return {
-            valid: false,
-            reason: `Sample rate should be 22050Hz or 44100Hz (found ${sampleRate}Hz)`
-          };
-        }
-        
-        // All checks passed
-        return {
-          valid: true,
-          duration: duration,
-          channels: numChannels,
-          sampleRate: sampleRate,
-          closestStandardRate: closestRate
-        };
+        // Enable upload button if we have files
+        updateUploadButtonState();
       } catch (error) {
-        console.error('Audio validation error:', error);
-        return {
-          valid: false,
-          reason: 'Failed to analyze audio file. Make sure it\'s a valid WAV file.'
-        };
+        console.error('Error reading file:', error);
+        validationMessage.textContent = 'Error reading file';
+        validationMessage.style.display = 'block';
       }
+    });
+    
+    // Function to read file as base64
+    function readFileAsBase64(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
     }
+    
+    // Function to add a file to the table
+    function addFileToTable(file) {
+      const row = document.createElement('tr');
+      row.id = `file-row-${file.name.replace(/[^a-z0-9]/gi, '-')}`;
+      
+      const sizeKB = (file.size / 1024).toFixed(1);
+      
+      row.innerHTML = `
+        <td>${file.name}</td>
+        <td>${sizeKB} KB</td>
+        <td>
+          <button type="button" class="file-action-btn remove-file-btn" data-filename="${file.name}">
+            Remove
+          </button>
+        </td>
+      `;
+      
+      fileListTable.appendChild(row);
+      
+      // Add event listener to remove button
+      row.querySelector('.remove-file-btn').addEventListener('click', function() {
+        const filename = this.getAttribute('data-filename');
+        removeFile(filename);
+      });
+    }
+    
+    // Function to remove a file
+    function removeFile(filename) {
+      // Remove from array
+      const index = selectedFiles.findIndex(f => f.name === filename);
+      if (index > -1) {
+        selectedFiles.splice(index, 1);
+      }
+      
+      // Remove from UI
+      const row = document.getElementById(`file-row-${filename.replace(/[^a-z0-9]/gi, '-')}`);
+      if (row) {
+        row.remove();
+      }
+      
+      // Hide container if no files left
+      if (selectedFiles.length === 0) {
+        selectedFilesContainer.style.display = 'none';
+      }
+      
+      // Update upload button state
+      updateUploadButtonState();
+    }
+    
+    // Update upload button enabled/disabled state
+    function updateUploadButtonState() {
+      uploadBtn.disabled = selectedFiles.length === 0;
+    }
+    
+    // Handle upload button click - send data via AJAX
+    uploadBtn.addEventListener('click', async () => {
+      if (selectedFiles.length === 0) {
+        validationMessage.textContent = 'Please add at least one file';
+        validationMessage.style.display = 'block';
+        return;
+      }
+      
+      // Show loading state
+      uploadBtn.disabled = true;
+      uploadBtn.innerHTML = '<span class="loading"></span> Uploading...';
+      
+      try {
+        // Send files to server
+        const response = await fetch('/api/v1/character/voice-upload', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ files: selectedFiles })
+        });
+        
+        // Handle response
+        if (response.redirected) {
+          window.location.href = response.url;
+        } else {
+          const data = await response.json();
+          if (data.success) {
+            window.location.href = '/web/character?success=Voice+files+uploaded+successfully';
+          } else {
+            validationMessage.textContent = data.error || 'Upload failed';
+            validationMessage.style.display = 'block';
+            uploadBtn.disabled = false;
+            uploadBtn.textContent = 'Upload Voice Samples';
+          }
+        }
+      } catch (error) {
+        console.error('Upload error:', error);
+        validationMessage.textContent = 'Error uploading files';
+        validationMessage.style.display = 'block';
+        uploadBtn.disabled = false;
+        uploadBtn.textContent = 'Upload Voice Samples';
+      }
+    });
   });
 </script>
 {% endblock %}
