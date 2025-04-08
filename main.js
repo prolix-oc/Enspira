@@ -337,6 +337,55 @@ inputBar.on("submit", async (text) => {
         await saveChatContextToDisk(args);
         break;
 
+      case "setpass":
+        if (!args) {
+          logger.log("System", `Please specify a user ID and password.`);
+          break;
+        }
+
+        const passArgs = args.split(' ');
+        if (passArgs.length < 2) {
+          logger.log("System", `Please provide both a user ID and password.`);
+          break;
+        }
+
+        const userIds = passArgs[0];
+        const plainPassword = passArgs.slice(1).join(' '); // Handle passwords with spaces
+
+        try {
+          // Import hashPassword function from routes/v1.js
+          const { hashPassword } = await import('./routes/v1.js');
+          const passwordData = await hashPassword(plainPassword);
+
+          // Update user parameters with hashed password data
+          const hashUpdate = await updateUserParameter(
+            userIds,
+            "webPasswordHash",
+            passwordData.hash
+          );
+
+          const saltUpdate = await updateUserParameter(
+            userIds,
+            "webPasswordSalt",
+            passwordData.salt
+          );
+
+          const iterUpdate = await updateUserParameter(
+            userIds,
+            "webPasswordIterations",
+            passwordData.iterations
+          );
+
+          if (hashUpdate && saltUpdate && iterUpdate) {
+            logger.log("System", `Password updated successfully for user ${userIds}`);
+          } else {
+            logger.log("System", `Failed to update password for user ${userIds}`);
+          }
+        } catch (passError) {
+          logger.error("System", `Error setting password: ${passError.message}`);
+        }
+        break;
+
       case "test_chats":
         const testChats = await aiHelper.returnRecentChats(args, true);
         logger.log("Milvus", `Got the following content: ${JSON.stringify(testChats.chatList)} in ${testChats.executionTime} seconds.`);
