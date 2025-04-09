@@ -39,7 +39,7 @@ import { fileURLToPath } from "url";
 
 const queryCache = new Map();
 const collectionLoadStatus = new Map();
-const pendingVectors = new Map(); // collectionName_userId -> [vectors to insert]
+const pendingVectors = new Map();
 const MAX_BATCH_SIZE = 100;
 const MAX_CACHE_SIZE = 150;
 const DEFAULT_TTL = 60000;
