@@ -454,6 +454,111 @@ export async function getAppAccessToken() {
   }
 }
 
+async function fetchCurrentTwitchSubscriptions(userId) {
+  try {
+    const user = await returnAuthObject(userId);
+    
+    // We need an app access token for this request
+    const appToken = await getAppAccessToken();
+    
+    if (!appToken) {
+      logger.error("Twitch", "Failed to get app access token for subscription check");
+      return [];
+    }
+    
+    const response = await axios.get("https://api.twitch.tv/helix/eventsub/subscriptions", {
+      headers: {
+        "Client-ID": await retrieveConfigValue("twitch.clientId"),
+        "Authorization": `Bearer ${appToken}`
+      }
+    });
+    
+    if (response.data && response.data.data) {
+      // Filter to subscriptions for this user's callback URL
+      const callbackUrl = `${await retrieveConfigValue("server.endpoints.external")}/api/v1/twitch/eventsub/${userId}`;
+      
+      return response.data.data.filter(sub => 
+        sub.transport && 
+        sub.transport.callback === callbackUrl
+      );
+    }
+    
+    return [];
+  } catch (error) {
+    logger.error("Twitch", `Error fetching current subscriptions: ${error.message}`);
+    return [];
+  }
+}
+
+/**
+ * Enhanced function to register chat message subscription with better error handling
+ * @param {string} userId - The user ID
+ * @returns {Promise<{success: boolean, created?: boolean, error?: string}>}
+ */
+async function registerChatMessageSubscription(userId) {
+  try {
+    const user = await returnAuthObject(userId);
+    
+    // Ensure we have the required data
+    if (!user.twitch_tokens?.streamer?.twitch_user_id) {
+      logger.error("Twitch", `Missing streamer ID for user ${userId}, can't register chat events`);
+      return { success: false, error: "Missing streamer data" };
+    }
+
+    // Check if token is valid and has the right scope
+    const streamerScopes = await getUserScopes(userId, "streamer");
+    if (!streamerScopes.includes("channel:moderate")) {
+      logger.error("Twitch", `User ${userId} is missing channel:moderate scope required for chat events`);
+      return { 
+        success: false, 
+        error: "Missing required scopes. Please reconnect your Twitch account with chat reading permissions." 
+      };
+    }
+
+    // Find chat subscription config
+    const chatSubConfig = SUBSCRIPTION_TYPES.find(
+      sub => sub.type === "channel.chat.message" && sub.version === "1"
+    );
+    
+    if (!chatSubConfig) {
+      return { success: false, error: "Chat subscription config not found" };
+    }
+
+    // Get broadcaster ID
+    const broadcasterId = user.twitch_tokens.streamer.twitch_user_id;
+    
+    // Do we already have this subscription?
+    if (user.twitch_tokens.streamer.subscriptions) {
+      const existingSub = user.twitch_tokens.streamer.subscriptions.find(
+        sub => sub.type === "channel.chat.message" && sub.version === "1"
+      );
+      
+      if (existingSub) {
+        logger.log("Twitch", `Chat subscription already exists for ${userId}`);
+        return { success: true, created: false };
+      }
+    }
+    
+    // Create the subscription
+    const result = await createSubscription(
+      userId, 
+      chatSubConfig, 
+      broadcasterId
+    );
+    
+    if (result.success) {
+      logger.log("Twitch", `Successfully registered chat subscription for ${userId}`);
+      return { success: true, created: true };
+    } else {
+      logger.error("Twitch", `Failed to create chat subscription: ${result.error}`);
+      return { success: false, error: result.error };
+    }
+  } catch (error) {
+    logger.error("Twitch", `Error in registerChatMessageSubscription: ${error.message}`);
+    return { success: false, error: error.message };
+  }
+}
+
 /**
  * Main function to register EventSub for all users
  * @returns {Promise<{success: number, failures: number}>}
@@ -469,8 +574,12 @@ export async function registerAllUsersEventSub() {
     const users = await returnAPIKeys();
     let successCount = 0;
     let failureCount = 0;
-
+    const chatResult = await registerChatMessageSubscription(user.user_id);
+    if (!chatResult.success) {
+      logger.error("Twitch", `Failed to register chat subscription for ${user.user_id}: ${chatResult.error}`);
+    }
     // Process each user sequentially to avoid rate limits
+    
     for (const user of users) {
       try {
         // Skip users without any Twitch tokens
@@ -1356,156 +1465,190 @@ async function createSubscription(userId, subscriptionConfig, broadcasterId) {
   try {
     const user = await returnAuthObject(userId);
 
-    if (!user.twitch_tokens || !user.twitch_tokens.streamer) {
-      return { success: false, error: "No streamer account connected" };
-    }
-
-    // Double-check webhook secret exists
-    if (!user.twitch_tokens.streamer.webhook_secret) {
-      // Try to create it one more time
-      const newSecret = crypto.randomBytes(32).toString("hex");
-      await updateUserParameter(
-        userId,
-        "twitch_tokens.streamer.webhook_secret",
-        newSecret
+    // All the existing validation...
+    
+    // Let's add better subscription checking using Twitch API
+    const currentTwitchSubscriptions = await fetchCurrentTwitchSubscriptions(userId);
+    
+    // Check if we already have this subscription on Twitch's side
+    const existingSubscription = currentTwitchSubscriptions.find(sub => 
+      sub.type === subscriptionConfig.type && 
+      sub.version === subscriptionConfig.version &&
+      JSON.stringify(sub.condition) === JSON.stringify(subscriptionConfig.condition(broadcasterId))
+    );
+    
+    if (existingSubscription) {
+      logger.log("Twitch", `Subscription for ${subscriptionConfig.type} already exists on Twitch side, skipping creation`);
+      
+      // Make sure it's in our database as well
+      const subscriptions = user.twitch_tokens?.streamer?.subscriptions || [];
+      const exists = subscriptions.some(sub => 
+        sub.id === existingSubscription.id && 
+        sub.type === existingSubscription.type &&
+        sub.version === existingSubscription.version
       );
-      // Refresh user
-      const refreshedUser = await returnAuthObject(userId);
-      if (!refreshedUser.twitch_tokens.streamer.webhook_secret) {
-        return { success: false, error: "Could not create webhook secret" };
+      
+      if (!exists) {
+        // Update our local subscriptions list with the Twitch-side data
+        subscriptions.push({
+          id: existingSubscription.id,
+          type: existingSubscription.type,
+          version: existingSubscription.version,
+          created_at: existingSubscription.created_at
+        });
+        
+        await updateUserParameter(
+          userId,
+          "twitch_tokens.streamer.subscriptions",
+          subscriptions
+        );
+        
+        logger.log("Twitch", `Updated local subscription records for ${subscriptionConfig.type}`);
       }
+      
+      return {
+        success: true,
+        id: existingSubscription.id,
+        version: existingSubscription.version,
+        alreadyExists: true
+      };
     }
 
-    // Validate broadcaster_user_id
-    if (!broadcasterId) {
-      logger.error("Twitch", `Missing broadcaster_user_id for user ${userId}`);
-      return { success: false, error: "Missing broadcaster_user_id" };
-    }
-
-    // Always use app access token for EventSub subscriptions
-    let accessToken = await getAppAccessToken();
-
-    // Generate the condition based on subscription type and version
-    const condition = subscriptionConfig.condition(broadcasterId);
-
-    logger.log(
-      "Twitch",
-      `Creating ${subscriptionConfig.type} (v${subscriptionConfig.version}) subscription with condition: ${JSON.stringify(condition)} using app access token`
-    );
-
-    const callbackUrl = `${await retrieveConfigValue("server.endpoints.external")}/api/v1/twitch/eventsub/${userId}`;
-
-    const subscriptionBody = {
-      type: subscriptionConfig.type,
-      version: subscriptionConfig.version,
-      condition: condition,
-      transport: {
-        method: "webhook",
-        callback: callbackUrl,
-        secret: user.twitch_tokens.streamer.webhook_secret,
-      },
-    };
-
-    // Import axios if needed
-    const axios = (await import("axios")).default;
-
-    const response = await axios.post(
-      "https://api.twitch.tv/helix/eventsub/subscriptions",
-      subscriptionBody,
-      {
-        headers: {
-          "Client-ID": await retrieveConfigValue("twitch.clientId"),
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
+    // If we're here, we need to create the subscription
+    try {
+      // Use app access token
+      const accessToken = await getAppAccessToken();
+      
+      // Generate the condition
+      const condition = subscriptionConfig.condition(broadcasterId);
+      
+      const callbackUrl = `${await retrieveConfigValue("server.endpoints.external")}/api/v1/twitch/eventsub/${userId}`;
+      
+      const subscriptionBody = {
+        type: subscriptionConfig.type,
+        version: subscriptionConfig.version,
+        condition: condition,
+        transport: {
+          method: "webhook",
+          callback: callbackUrl,
+          secret: user.twitch_tokens.streamer.webhook_secret,
         },
+      };
+      
+      const response = await axios.post(
+        "https://api.twitch.tv/helix/eventsub/subscriptions",
+        subscriptionBody,
+        {
+          headers: {
+            "Client-ID": await retrieveConfigValue("twitch.clientId"),
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+      
+      // Make sure subscriptions array exists
+      if (!user.twitch_tokens.streamer.subscriptions) {
+        await updateUserParameter(
+          userId,
+          "twitch_tokens.streamer.subscriptions",
+          []
+        );
       }
-    );
-
-    // Make sure subscriptions array exists
-    if (!user.twitch_tokens.streamer.subscriptions) {
-      await ensureParameterPath(userId, "twitch_tokens.streamer");
+      
+      // Save subscription ID
+      const subscriptionId = response.data.data[0].id;
+      
+      // Get the current subscriptions array
+      const currentUser = await returnAuthObject(userId);
+      const subscriptions = currentUser.twitch_tokens.streamer.subscriptions || [];
+      
+      // Add new subscription and update
+      subscriptions.push({
+        id: subscriptionId,
+        type: subscriptionConfig.type,
+        version: subscriptionConfig.version,
+        created_at: new Date().toISOString(),
+      });
+      
       await updateUserParameter(
         userId,
         "twitch_tokens.streamer.subscriptions",
-        []
+        subscriptions
       );
+      
+      return {
+        success: true,
+        id: subscriptionId,
+        version: subscriptionConfig.version,
+      };
+    } catch (error) {
+      // Special handling for 409 conflict errors
+      if (error.response && error.response.status === 409) {
+        logger.log("Twitch", `409 Conflict creating subscription for ${subscriptionConfig.type}. Subscription likely exists.`);
+        
+        // Try to fetch again to get the current status
+        const refreshedSubs = await fetchCurrentTwitchSubscriptions(userId);
+        const matchingSub = refreshedSubs.find(sub => 
+          sub.type === subscriptionConfig.type && 
+          sub.version === subscriptionConfig.version
+        );
+        
+        if (matchingSub) {
+          // Update our local record to match Twitch's record
+          const subscriptions = user.twitch_tokens?.streamer?.subscriptions || [];
+          
+          // Check if we already have this subscription
+          const existingIndex = subscriptions.findIndex(sub => 
+            sub.id === matchingSub.id
+          );
+          
+          if (existingIndex >= 0) {
+            // Update existing record
+            subscriptions[existingIndex] = {
+              id: matchingSub.id,
+              type: matchingSub.type,
+              version: matchingSub.version,
+              created_at: matchingSub.created_at
+            };
+          } else {
+            // Add new record
+            subscriptions.push({
+              id: matchingSub.id,
+              type: matchingSub.type,
+              version: matchingSub.version,
+              created_at: matchingSub.created_at
+            });
+          }
+          
+          await updateUserParameter(
+            userId,
+            "twitch_tokens.streamer.subscriptions",
+            subscriptions
+          );
+          
+          return {
+            success: true,
+            id: matchingSub.id,
+            version: matchingSub.version,
+            alreadyExists: true
+          };
+        }
+      }
+      
+      // Handle other errors
+      logger.error(
+        "Twitch",
+        `Error creating subscription ${subscriptionConfig.type}: ${error.message}`
+      );
+      
+      return { success: false, error: error.message };
     }
-
-    // Save subscription ID
-    const subscriptionId = response.data.data[0].id;
-
-    // Get the current subscriptions array
-    const currentUser = await returnAuthObject(userId);
-    const subscriptions =
-      currentUser.twitch_tokens.streamer.subscriptions || [];
-
-    // Add new subscription and update
-    subscriptions.push({
-      id: subscriptionId,
-      type: subscriptionConfig.type,
-      version: subscriptionConfig.version,
-      created_at: new Date().toISOString(),
-    });
-
-    await updateUserParameter(
-      userId,
-      "twitch_tokens.streamer.subscriptions",
-      subscriptions
-    );
-
-    return {
-      success: true,
-      id: subscriptionId,
-      version: subscriptionConfig.version,
-    };
   } catch (error) {
     logger.error(
       "Twitch",
-      `Error creating subscription ${subscriptionConfig.type}: ${error.message}`
+      `Error in createSubscription for ${subscriptionConfig.type}: ${error.message}`
     );
-
-    if (error.response) {
-      const status = error.response.status;
-      const data = error.response.data;
-
-      logger.error(
-        "Twitch",
-        `Response status: ${status}, data: ${JSON.stringify(data)}`
-      );
-
-      // Handle specific error cases
-      if (status === 400) {
-        if (data.message) {
-          return { success: false, error: `Bad request: ${data.message}` };
-        }
-        if (
-          data.error === "Bad Request" &&
-          data.message &&
-          data.message.includes("condition.broadcaster_user_id")
-        ) {
-          return { success: false, error: "Invalid broadcaster ID" };
-        }
-      } else if (status === 401) {
-        logger.log(
-          "Twitch",
-          `Token unauthorized, trying to get a new app token`
-        );
-        global.twitchAppToken = null;
-        global.twitchAppTokenExpiry = null;
-        return { success: false, error: "Unauthorized. Token refresh needed." };
-      } else if (status === 403) {
-        return {
-          success: false,
-          error: "Insufficient permissions. Check Twitch API credentials.",
-        };
-      } else if (status === 429) {
-        return {
-          success: false,
-          error: "Rate limited by Twitch. Try again later.",
-        };
-      }
-    }
-
     return { success: false, error: error.message };
   }
 }

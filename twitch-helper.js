@@ -3,6 +3,7 @@ import { funFact, returnAuthObject } from "./api-helper.js";
 import { sendChatCompletionRequest, moderatorPrompt } from "./prompt-helper.js";
 import moment from "moment";
 import { retrieveConfigValue } from './config-helper.js'
+const lastFunFactTime = new Map();
 
 /**
  * Returns a formatted string for a Twitch event based on its type.
