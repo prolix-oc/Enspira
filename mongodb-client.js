@@ -285,45 +285,53 @@ async function migrateFromFileIfNeeded() {
   }
 }
 
+async function withCaching(key, fetchFn, options = {}) {
+  const { ttl = 60000, forceFresh = false } = options;
+  
+  // Check cache first unless forceFresh is true
+  if (!forceFresh && userCache.has(key)) {
+    const cachedData = userCache.get(key);
+    if (Date.now() < cachedData.expiry) {
+      return cachedData.data;
+    }
+    userCache.delete(key);
+  }
+  
+  // Try DB connection if needed
+  if (!connectionEstablished) {
+    const connected = await connectToMongoDB();
+    if (!connected) {
+      logger.error("MongoDB", `Cannot fetch data: Database not connected`);
+      return null;
+    }
+  }
+  
+  // Fetch from database
+  try {
+    const data = await fetchFn();
+    
+    if (data) {
+      // Cache for specified time
+      userCache.set(key, {
+        data,
+        expiry: Date.now() + ttl,
+        lastModified: Date.now()
+      });
+    }
+    
+    return data;
+  } catch (error) {
+    logger.error("MongoDB", `Error fetching data for ${key}: ${error.message}`);
+    return null;
+  }
+}
+
 // Get user by ID with caching
 export async function getUserById(userId) {
   try {
-    // Check cache first
-    if (userCache.has(userId)) {
-      const cachedData = userCache.get(userId);
-      if (Date.now() < cachedData.expiry) {
-        return cachedData.data;
-      }
-      // Cache expired, remove it
-      userCache.delete(userId);
-    }
-
-    if (!connectionEstablished) {
-      // Try to connect if not already connected
-      const connected = await connectToMongoDB();
-      if (!connected) {
-        logger.error(
-          "MongoDB",
-          `Cannot get user ${userId}: Database not connected`
-        );
-        return null;
-      }
-    }
-
-    // Fetch from database
-    const user = await User.findOne({ user_id: userId }).lean();
-
-    if (user) {
-      // Cache for 1 minute
-      userCache.set(userId, {
-        data: user,
-        expiry: Date.now() + 60000,
-        lastModified: Date.now(),
-      });
-      return user;
-    }
-
-    return null;
+    return withCaching(userId, 
+      () => User.findOne({ user_id: userId }).lean()
+    );
   } catch (error) {
     logger.error("MongoDB", `Error fetching user ${userId}: ${error.message}`);
     return null;

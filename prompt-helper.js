@@ -11,21 +11,13 @@ import { jsonrepair } from 'jsonrepair'
 import OpenAI from "openai";
 import { performance } from "node:perf_hooks";
 import { logger } from './create-global-logger.js';
-const templateCache = {};
+import { utils } from './utils/index.js';
 
-async function getTemplate(filePath) {
-  if (templateCache[filePath]) {
-    return templateCache[filePath];
-  }
-  try {
-    const content = await fs.readFile(filePath, "utf-8");
-    templateCache[filePath] = content;
-    return content;
-  } catch (error) {
-    logger.log("Files", `Error reading template file ${filePath}: ${error}`);
-    throw error;
-  }
-}
+const { getTemplate } = utils.file;
+const { replacePlaceholders } = utils.string
+const { withErrorHandling } = utils.error
+
+const templateCache = {};
 
 /**
  * Helper function to extract all social media replacements for templates.
@@ -456,8 +448,14 @@ export async function sendChatCompletionRequestCoT(requestBody, modelConfig) {
 
 const moderatorPrompt = async (message, userId) => {
   const userObject = await returnAuthObject(userId);
-  const instructTemplate = await getTemplate("./instructs/helpers/moderation.prompt");
-
+  const instructTemplate = await withErrorHandling(
+    () => getTemplate(`./instructs/helpers/moderation.prompt`),
+    { 
+      context: 'Templates', 
+      defaultValue: '', 
+      logError: true 
+    }
+  ); 
   // Get social media replacements with enhanced platform-specific support
   const socialReplacements = await getSocialMediaReplacements(userId);
 
@@ -497,7 +495,15 @@ const moderatorPrompt = async (message, userId) => {
  */
 const contextPromptChat = async (promptData, message, userID) => {
   const currentAuthObject = await returnAuthObject(userID);
-  const instructTemplate = await getTemplate(`./instructs/system_cot.prompt`);
+  const instructTemplate = await withErrorHandling(
+    () => getTemplate(`./instructs/system.prompt`),
+    { 
+      context: 'Templates', 
+      defaultValue: '', 
+      logError: true 
+    }
+  );  
+  
   const timeStamp = moment().format("dddd, MMMM Do YYYY, [at] hh:mm A");
 
   // Load all necessary files in parallel for better performance
@@ -612,8 +618,14 @@ const contextPromptChat = async (promptData, message, userID) => {
 
 const contextPromptChatCoT = async (promptData, message, userID) => {
   const currentAuthObject = await returnAuthObject(userID);
-  const instructTemplate = await getTemplate(`./instructs/system_cot.prompt`);
-  const timeStamp = moment().format("dddd, MMMM Do YYYY, [at] hh:mm A");
+  const instructTemplate = await withErrorHandling(
+    () => getTemplate(`./instructs/system_cot.prompt`),
+    { 
+      context: 'Templates', 
+      defaultValue: '', 
+      logError: true 
+    }
+  );    const timeStamp = moment().format("dddd, MMMM Do YYYY, [at] hh:mm A");
 
   // Load all necessary files in parallel for better performance
   const fileContents = await readPromptFiles(userID, [
@@ -741,7 +753,15 @@ const eventPromptChat = async (message, userId) => {
     `Doing eventing stuff for: ${userObject.user_name} and ${userId}`
   );
 
-  const instructTemplate = await getTemplate(`./instructs/system.prompt`);
+  const instructTemplate = await withErrorHandling(
+    () => getTemplate(`./instructs/system.prompt`),
+    { 
+      context: 'Templates', 
+      defaultValue: '', 
+      logError: true 
+    }
+  );    
+  
   const timeStamp = moment().format("dddd, MMMM Do YYYY, [at] hh:mm A");
 
   // Load all necessary files in parallel for better performance
@@ -835,8 +855,14 @@ const eventPromptChat = async (message, userId) => {
  */
 const queryPrompt = async (message, userId) => {
   const userObject = await returnAuthObject(userId);
-  const instructTemplate = await getTemplate("./instructs/helpers/query.prompt");
-  const timeStamp = moment().format("MM/DD/YY [at] HH:mm");
+  const instructTemplate = await withErrorHandling(
+    () => getTemplate(`./instructs/helpers/query.prompt`),
+    { 
+      context: 'Templates', 
+      defaultValue: '', 
+      logError: true 
+    }
+  );   const timeStamp = moment().format("MM/DD/YY [at] HH:mm");
   const [dateString, timeString] = timeStamp.split(" at ");
 
   // Get social media replacements with enhanced platform-specific support
@@ -876,8 +902,14 @@ const queryPrompt = async (message, userId) => {
 const rerankPrompt = async (message, userId) => {
   logger.log("Rerank", `Received message ${message}`);
   const userObject = await returnAuthObject(userId);
-  const instructTemplate = await getTemplate("./instructs/helpers/rerank.prompt");
-
+  const instructTemplate = await withErrorHandling(
+    () => getTemplate(`./instructs/helpers/rerank.prompt`),
+    { 
+      context: 'Templates', 
+      defaultValue: '', 
+      logError: true 
+    }
+  ); 
   // Get social media replacements with enhanced platform-specific support
   const socialReplacements = await getSocialMediaReplacements(userId);
 
@@ -903,8 +935,14 @@ const rerankPrompt = async (message, userId) => {
 };
 
 const summaryPrompt = async (textContent) => {
-  const instructTemplate = await getTemplate("./instructs/helpers/summary.prompt");
-
+  const instructTemplate = await withErrorHandling(
+    () => getTemplate(`./instructs/helpers/summary.prompt`),
+    { 
+      context: 'Templates', 
+      defaultValue: '', 
+      logError: true 
+    }
+  ); 
   const promptWithSamplers = await SummaryRequestBody.create(
     instructTemplate,
     await retrieveConfigValue("models.summary.model"),
@@ -919,21 +957,6 @@ const summaryPrompt = async (textContent) => {
   );
   return promptWithSamplers;
 };
-
-/**
- * Replaces placeholders in a template string with corresponding values from a replacements object.
- *
- * @param {string} template - The template string containing placeholders.
- * @param {object} replacements - An object where keys are placeholders and values are their replacements.
- * @returns {string} - The template string with placeholders replaced by their corresponding values.
- */
-function replacePlaceholders(template, replacements) {
-  let result = template;
-  for (const [placeholder, value] of Object.entries(replacements)) {
-    result = result.replace(new RegExp(placeholder, "g"), value);
-  }
-  return result;
-}
 
 /**
  * Reads multiple files and returns their contents in an object.

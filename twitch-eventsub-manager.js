@@ -1519,30 +1519,48 @@ async function createSubscription(userId, subscriptionConfig, broadcasterId) {
 async function ensureValidToken(userId, tokenType) {
   try {
     const user = await returnAuthObject(userId);
-
-    if (
-      !user.twitch_tokens ||
-      !user.twitch_tokens[tokenType] ||
-      !user.twitch_tokens[tokenType].refresh_token
-    ) {
+    
+    if (!user?.twitch_tokens?.[tokenType]?.refresh_token) {
       return false;
     }
-
-    // Check if token is expired or expiring soon
+    
+    const tokenData = user.twitch_tokens[tokenType];
     const now = Date.now();
-    const tokenExpiry = user.twitch_tokens[tokenType].expires_at || 0;
-
-    if (now >= tokenExpiry - 5 * 60 * 1000) {
-      // Token is expired or expiring in next 5 minutes, refresh it
-      return await refreshToken(userId, tokenType);
+    const tokenExpiry = tokenData.expires_at || 0;
+    const bufferTime = 5 * 60 * 1000; // 5 minutes buffer
+    
+    // If token is valid and not close to expiry, return it
+    if (tokenData.access_token && now < tokenExpiry - bufferTime) {
+      return tokenData.access_token;
     }
-
-    return true;
-  } catch (error) {
-    logger.error(
-      "Twitch",
-      `Error checking token for ${userId}: ${error.message}`
+    
+    // Token needs refresh
+    const response = await axios.post(
+      "https://id.twitch.tv/oauth2/token",
+      new URLSearchParams({
+        client_id: await retrieveConfigValue("twitch.clientId"),
+        client_secret: await retrieveConfigValue("twitch.clientSecret"),
+        grant_type: "refresh_token",
+        refresh_token: tokenData.refresh_token
+      }),
+      { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
     );
+    
+    const { access_token, refresh_token, expires_in } = response.data;
+    
+    // Update token in user record with a single operation
+    await updateUserParameter(userId, `twitch_tokens.${tokenType}`, {
+      ...tokenData,
+      access_token,
+      refresh_token,
+      expires_at: Date.now() + expires_in * 1000,
+      scopes: null // Clear cached scopes as they might change
+    });
+    
+    logger.log("Twitch", `Refreshed ${tokenType} token for user ${userId}`);
+    return access_token;
+  } catch (error) {
+    logger.error("Twitch", `Failed to refresh ${tokenType} token: ${error.message}`);
     return false;
   }
 }

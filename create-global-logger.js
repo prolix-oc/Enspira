@@ -16,10 +16,9 @@ export function ensureGlobalLogger() {
 ensureGlobalLogger();
 
 // For modules that need direct console access, provide a console wrapper
-export const logConsole = {
-  log: (message) => logger.log("Console", message),
-  info: (message) => logger.info(message),
-  warn: (message) => logger.warn(message),
-  error: (message) => logger.error("Console", message),
-  debug: (message) => logger.debug(message)
-};
+export const logConsole = Object.fromEntries(
+  ['log', 'info', 'warn', 'error', 'debug'].map(level => [
+    level, 
+    (message) => logger[level](level === 'log' || level === 'error' ? "Console" : null, message)
+  ])
+);

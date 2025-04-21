@@ -548,45 +548,42 @@ const adMessage = async (event) => {
  * @param {string} [platform] - If provided, returns information for a specific platform.
  * @returns {Promise<string|object>} - A formatted string, specific platform value, or object containing social media information.
  */
-const socialMedias = async (userId, platform = "") => {
+async function socialMedias(userId, platform = "") {
   try {
     const currentUser = await returnAuthObject(userId);
     
-    // Handle missing social media data
-    if (!currentUser || !currentUser.socials) {
-      logger.log("System", `No social media data found for user ${userId}`);
-      return platform ? "" : ""; // Return empty string for specific platform or formatted output
+    if (!currentUser?.socials) {
+      return platform ? "" : "";
     }
     
-    const currentSocials = currentUser.socials;
-
     // Return all social media as an object if requested
     if (platform === "all") {
-      return { ...currentSocials }; // Return a copy to prevent mutation
+      return { ...currentUser.socials };
     }
 
-    // Normalize the platform name to handle different formats
-    // e.g., "tt", "tiktok", "TikTok" should all map to the same key
+    // Normalize platform name and return specific value if requested
     const normalizedPlatform = normalizePlatformName(platform);
-    
-    // Return specific platform if requested
     if (normalizedPlatform) {
-      return currentSocials[normalizedPlatform] || "";
+      return currentUser.socials[normalizedPlatform] || "";
     }
 
-    // Format all available social media for template use
-    const formattedSocials = Object.entries(currentSocials)
-      .filter(([key, value]) => value && value.trim() !== "")
+    // Format all available platforms for template use
+    return Object.entries(currentUser.socials)
+      .filter(([_, value]) => value?.trim())
       .map(([key, value]) => formatSocialMediaValue(key, value))
       .filter(Boolean)
-      .join(", ");
-
-    return formattedSocials ? `(${formattedSocials})` : "";
+      .join(", ")
+      ? `(${Object.entries(currentUser.socials)
+          .filter(([_, value]) => value?.trim())
+          .map(([key, value]) => formatSocialMediaValue(key, value))
+          .filter(Boolean)
+          .join(", ")})`
+      : "";
   } catch (error) {
-    logger.log("System", `Error retrieving social media for user ${userId}: ${error.message}`);
+    logger.log("System", `Error retrieving social media: ${error.message}`);
     return platform ? "" : "";
   }
-};
+}
 
 /**
  * Normalizes platform names to consistent keys.
