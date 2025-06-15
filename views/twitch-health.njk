@@ -1,0 +1,140 @@
+const twitchHealthDashboard = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Twitch Health Dashboard - Enspira</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background: #1a1a1a; color: #fff; }
+        .dashboard { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+        .card { background: #2a2a2a; border-radius: 8px; padding: 20px; border-left: 4px solid #9146ff; }
+        .healthy { border-left-color: #00ff88; }
+        .warning { border-left-color: #ffaa00; }
+        .error { border-left-color: #ff4444; }
+        .metric { display: flex; justify-content: space-between; margin: 10px 0; }
+        .metric-value { font-weight: bold; color: #9146ff; }
+        .status-indicator { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 8px; }
+        .status-healthy { background: #00ff88; }
+        .status-warning { background: #ffaa00; }
+        .status-error { background: #ff4444; }
+        h2 { margin-top: 0; color: #9146ff; }
+        .refresh-btn { background: #9146ff; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; }
+        .refresh-btn:hover { background: #7c3aed; }
+        .timestamp { color: #888; font-size: 0.9em; }
+    </style>
+</head>
+<body>
+    <h1>🟣 Twitch Health Dashboard</h1>
+    <button class="refresh-btn" onclick="location.reload()">Refresh Data</button>
+    
+    <div class="dashboard" id="dashboard">
+        <div class="card">
+            <h2>Loading...</h2>
+            <p>Please wait while we fetch the latest health data.</p>
+        </div>
+    </div>
+
+    <script>
+        async function loadHealthData() {
+            try {
+                const response = await fetch('/api/v1/twitch/health?detailed=true');
+                const data = await response.json();
+                
+                updateDashboard(data);
+            } catch (error) {
+                console.error('Failed to load health data:', error);
+                document.getElementById('dashboard').innerHTML = 
+                    '<div class="card error"><h2>Error</h2><p>Failed to load health data</p></div>';
+            }
+        }
+        
+        function updateDashboard(data) {
+            const dashboard = document.getElementById('dashboard');
+            const healthClass = data.overall === 'healthy' ? 'healthy' : 
+                               data.overall === 'degraded' ? 'warning' : 'error';
+            
+            dashboard.innerHTML = \`
+                <div class="card \${healthClass}">
+                    <h2>
+                        <span class="status-indicator status-\${data.overall === 'healthy' ? 'healthy' : 
+                              data.overall === 'degraded' ? 'warning' : 'error'}"></span>
+                        System Health
+                    </h2>
+                    <div class="metric">
+                        <span>Overall Status:</span>
+                        <span class="metric-value">\${data.overall.toUpperCase()}</span>
+                    </div>
+                    <div class="metric">
+                        <span>Uptime:</span>
+                        <span class="metric-value">\${formatUptime(data.uptime)}</span>
+                    </div>
+                    <div class="metric">
+                        <span>Memory Usage:</span>
+                        <span class="metric-value">\${(data.memoryUsage.heapUsed / 1024 / 1024).toFixed(1)} MB</span>
+                    </div>
+                    <div class="timestamp">Updated: \${new Date(data.timestamp).toLocaleString()}</div>
+                </div>
+                
+                <div class="card">
+                    <h2>Event Processing</h2>
+                    <div class="metric">
+                        <span>Events Processed:</span>
+                        <span class="metric-value">\${data.twitch.events.eventsProcessed || 0}</span>
+                    </div>
+                    <div class="metric">
+                        <span>Success Rate:</span>
+                        <span class="metric-value">\${data.twitch.events.successRate || '100%'}</span>
+                    </div>
+                    <div class="metric">
+                        <span>Avg Response Time:</span>
+                        <span class="metric-value">\${data.twitch.events.averageResponseTime || 0}ms</span>
+                    </div>
+                    <div class="metric">
+                        <span>Chat Messages:</span>
+                        <span class="metric-value">\${data.twitch.events.chatMessagesProcessed || 0}</span>
+                    </div>
+                </div>
+                
+                \${data.twitch.api ? \`
+                <div class="card">
+                    <h2>API Health</h2>
+                    <div class="metric">
+                        <span>Total Requests:</span>
+                        <span class="metric-value">\${data.twitch.api.totalRequests}</span>
+                    </div>
+                    <div class="metric">
+                        <span>Success Rate:</span>
+                        <span class="metric-value">\${data.twitch.api.successRate}</span>
+                    </div>
+                    <div class="metric">
+                        <span>Rate Limit Violations:</span>
+                        <span class="metric-value">Helix: \${data.twitch.api.rateLimitViolations.helix}, Auth: \${data.twitch.api.rateLimitViolations.auth}</span>
+                    </div>
+                </div>
+                \` : ''}
+            \`;
+        }
+        
+        function formatUptime(seconds) {
+            const hours = Math.floor(seconds / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            return \`\${hours}h \${minutes}m\`;
+        }
+        
+        // Load data on page load
+        loadHealthData();
+        
+        // Auto-refresh every 30 seconds
+        setInterval(loadHealthData, 30000);
+    </script>
+</body>
+</html>
+`;
+
+// Export everything for use in other modules
+export { 
+  TwitchAlertSystem, 
+  setupEnhancedTwitchCronJobs, 
+  twitchHealthDashboard 
+};

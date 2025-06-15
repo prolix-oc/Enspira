@@ -1065,25 +1065,102 @@ const filterCharacterFromMessage = async (str, userId) => {
 };
 
 /**
+ * Helper function to escape special regex characters
+ * @param {string} string - String to escape
+ * @returns {string} - Escaped string safe for regex
+ */
+function escapeRegExp(string) {
+  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
  * Checks if a message contains the character's name or Twitch username.
+ * Enhanced to handle multiple variations and better bot account detection.
  *
  * @param {string} message - The message to check.
  * @param {string} userId - The user ID.
  * @returns {Promise<boolean>} - True if the message contains the character's name or Twitch username, false otherwise.
  */
 async function containsCharacterName(message, userId) {
-  const userObj = await returnAuthObject(userId);
-  const characterName = userObj.bot_name;
-  const characterTwitchUser = userObj.bot_twitch;
+  try {
+    const userObj = await returnAuthObject(userId);
+    
+    if (!message || typeof message !== 'string') {
+      return false;
+    }
 
-  const nameRegex = new RegExp(characterName, "i");
-
-  const twitchHandle = characterTwitchUser.startsWith("@")
-    ? characterTwitchUser.slice(1)
-    : characterTwitchUser;
-  const twitchHandleRegex = new RegExp(twitchHandle, "i");
-
-  return nameRegex.test(message) || twitchHandleRegex.test(message);
+    const normalizedMessage = message.toLowerCase().trim();
+    
+    // Get all possible name variations
+    const namesToCheck = new Set();
+    
+    // Add character/bot name
+    if (userObj.bot_name) {
+      namesToCheck.add(userObj.bot_name.toLowerCase());
+    }
+    
+    // Add Twitch bot username variations
+    if (userObj.bot_twitch) {
+      const botTwitch = userObj.bot_twitch.toLowerCase();
+      namesToCheck.add(botTwitch);
+      // Remove @ if present and add both versions
+      const cleanBotTwitch = botTwitch.startsWith('@') ? botTwitch.slice(1) : botTwitch;
+      namesToCheck.add(cleanBotTwitch);
+      namesToCheck.add('@' + cleanBotTwitch);
+    }
+    
+    // Add the actual bot account username from tokens if available
+    if (userObj.twitch_tokens?.bot?.twitch_login) {
+      const botLogin = userObj.twitch_tokens.bot.twitch_login.toLowerCase();
+      namesToCheck.add(botLogin);
+      namesToCheck.add('@' + botLogin);
+    }
+    
+    if (userObj.twitch_tokens?.bot?.twitch_display_name) {
+      const botDisplayName = userObj.twitch_tokens.bot.twitch_display_name.toLowerCase();
+      namesToCheck.add(botDisplayName);
+      namesToCheck.add('@' + botDisplayName);
+    }
+    
+    // Also check against streamer account in case bot_twitch points to streamer
+    if (userObj.twitch_tokens?.streamer?.twitch_login) {
+      const streamerLogin = userObj.twitch_tokens.streamer.twitch_login.toLowerCase();
+      namesToCheck.add(streamerLogin);
+      namesToCheck.add('@' + streamerLogin);
+    }
+    
+    // Remove empty/undefined entries
+    const validNames = Array.from(namesToCheck).filter(name => name && name.length > 0);
+    
+    if (validNames.length === 0) {
+      logger.warn("Twitch", `No valid bot names found for user ${userId} when checking mentions`);
+      return false;
+    }
+    
+    // Check each name variation
+    for (const nameToCheck of validNames) {
+      // Exact word match (handles @mentions and regular mentions)
+      const wordBoundaryRegex = new RegExp(`\\b${escapeRegExp(nameToCheck)}\\b`, 'i');
+      if (wordBoundaryRegex.test(normalizedMessage)) {
+        logger.log("Twitch", `Character name detected: "${nameToCheck}" in message: "${message}"`);
+        return true;
+      }
+      
+      // Also check for @ mentions without word boundaries (for usernames with special chars)
+      if (nameToCheck.startsWith('@')) {
+        const atMentionRegex = new RegExp(`${escapeRegExp(nameToCheck)}`, 'i');
+        if (atMentionRegex.test(normalizedMessage)) {
+          logger.log("Twitch", `@ mention detected: "${nameToCheck}" in message: "${message}"`);
+          return true;
+        }
+      }
+    }
+    
+    return false;
+  } catch (error) {
+    logger.error("Twitch", `Error checking character name in message: ${error.message}`);
+    return false;
+  }
 }
 
 /**
@@ -1100,6 +1177,7 @@ async function containsPlayerSocials(message, userId) {
 }
 
 /**
+ * Enhanced containsAuxBotName function with better bot detection
  * Checks if a message contains any of the auxiliary bot names.
  *
  * @param {string} message - The message to check.
@@ -1107,19 +1185,42 @@ async function containsPlayerSocials(message, userId) {
  * @returns {Promise<boolean>} - True if the message contains any of the auxiliary bot names, false otherwise.
  */
 async function containsAuxBotName(message, userId) {
-  const userObj = await returnAuthObject(userId);
-  const auxBots = [...userObj.aux_bots];
-  if (typeof message !== "string" || !Array.isArray(auxBots)) {
-
-  }
-
-  const lowerCaseMessage = message.toLowerCase();
-  for (const username of auxBots) {
-    if (lowerCaseMessage.includes(username.toLowerCase())) {
-      return true;
+  try {
+    const userObj = await returnAuthObject(userId);
+    
+    if (!message || typeof message !== 'string' || !Array.isArray(userObj.aux_bots)) {
+      return false;
     }
+    
+    const normalizedMessage = message.toLowerCase();
+    
+    // Check each aux bot name
+    for (const botName of userObj.aux_bots) {
+      if (!botName || typeof botName !== 'string') continue;
+      
+      const normalizedBotName = botName.toLowerCase();
+      
+      // Check for exact word match
+      const wordBoundaryRegex = new RegExp(`\\b${escapeRegExp(normalizedBotName)}\\b`, 'i');
+      if (wordBoundaryRegex.test(normalizedMessage)) {
+        logger.log("Twitch", `Aux bot name detected: "${botName}" in message, ignoring`);
+        return true;
+      }
+      
+      // Also check with @ prefix
+      const atBotName = '@' + normalizedBotName;
+      const atMentionRegex = new RegExp(`\\b${escapeRegExp(atBotName)}\\b`, 'i');
+      if (atMentionRegex.test(normalizedMessage)) {
+        logger.log("Twitch", `Aux bot @ mention detected: "${atBotName}" in message, ignoring`);
+        return true;
+      }
+    }
+    
+    return false;
+  } catch (error) {
+    logger.error("Twitch", `Error checking aux bot names: ${error.message}`);
+    return false;
   }
-  return false;
 }
 
 export {

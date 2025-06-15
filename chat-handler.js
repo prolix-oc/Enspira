@@ -1,4 +1,4 @@
-// chat-handler.js
+// Enhanced chat-handler.js with better logging and debugging
 import { respondToChat, respondToEvent } from './ai-logic.js';
 import { containsCharacterName, containsAuxBotName } from './prompt-helper.js';
 import { isCommandMatch } from './twitch-helper.js';
@@ -9,6 +9,7 @@ import { sendChatMessage } from './twitch-eventsub-manager.js';
 
 /**
  * Central handler for all chat messages from any source (API or EventSub)
+ * Enhanced with better logging and debugging
  * @param {object} chatData - Normalized chat message data
  * @param {string} userId - The system user ID
  * @param {boolean} autoRespond - Whether to automatically send Twitch chat responses
@@ -24,6 +25,9 @@ export async function handleChatMessage(chatData, userId, autoRespond = false) {
 
     // Extract message details
     const { message, user: chatUser, firstMessage = false } = chatData;
+    
+    // Enhanced logging for debugging
+    logger.log("Chat", `Processing message from ${chatUser}: "${message}" (firstMessage: ${firstMessage})`);
     
     // Format date for context
     const formattedDate = new Date().toLocaleString();
@@ -41,8 +45,10 @@ export async function handleChatMessage(chatData, userId, autoRespond = false) {
       return { success: true, ignored: true, reason: "command" };
     }
     
-    // Check if message mentions the character
+    // Check if message mentions the character - Enhanced logging
+    logger.log("Chat", `Checking if message mentions character for user ${userId}...`);
     const mentionsChar = await containsCharacterName(message, userId);
+    logger.log("Chat", `Character mention check result: ${mentionsChar ? 'YES' : 'NO'}`);
     
     // Process the message based on conditions
     if (mentionsChar) {
@@ -53,6 +59,7 @@ export async function handleChatMessage(chatData, userId, autoRespond = false) {
       const messageData = { message, user: chatUser };
       
       // Get AI response
+      logger.log("Chat", `Getting AI response for mention from ${chatUser}...`);
       const aiResponse = await respondToChat(messageData, userId);
       
       if (!aiResponse.success) {
@@ -62,6 +69,8 @@ export async function handleChatMessage(chatData, userId, autoRespond = false) {
           error: aiResponse.error || "Failed to generate response" 
         };
       }
+      
+      logger.log("Chat", `AI response generated: "${aiResponse.text.substring(0, 100)}..."`);
       
       // Create summary for vector storage
       const summaryString = `On ${formattedDate} ${chatUser} said in ${user.user_name || user.twitch_name}'s Twitch chat: "${message}". You responded by saying: ${aiResponse.text}`;
@@ -79,7 +88,16 @@ export async function handleChatMessage(chatData, userId, autoRespond = false) {
       // Send to Twitch chat if autoRespond is enabled
       let chatResponse = null;
       if (autoRespond && user.twitch_tokens?.bot?.access_token) {
+        logger.log("Chat", `Sending response to Twitch chat: "${aiResponse.text}"`);
         chatResponse = await sendChatMessage(aiResponse.text, userId);
+        
+        if (chatResponse.success) {
+          logger.log("Chat", `Successfully sent response to Twitch chat`);
+        } else {
+          logger.error("Chat", `Failed to send response to Twitch chat: ${chatResponse.error}`);
+        }
+      } else if (autoRespond) {
+        logger.warn("Chat", `AutoRespond enabled but no bot token available for user ${userId}`);
       }
       
       return {
@@ -143,10 +161,12 @@ export async function handleChatMessage(chatData, userId, autoRespond = false) {
       };
     } else {
       // Regular message - just store for context
+      logger.log("Chat", `Regular message from ${chatUser}, storing for context (if enabled)`);
       const summaryString = `On ${formattedDate} ${chatUser} said in ${user.user_name || user.twitch_name}'s Twitch chat: "${message}"`;
       
       // Store in vector memory if enabled in user settings
       if (user.store_all_chat) {
+        logger.log("Chat", `Storing regular chat message for context`);
         addChatMessageAsVector(
           summaryString,
           message,
