@@ -3,6 +3,7 @@ import fs from "fs-extra";
 import { join } from "path";
 import { audioRoutes } from './routes/audio.js';
 import twitchEventSubRoutes from './routes/twitch.js';
+import websocketVTuberRoute from './routes/websocket-vtuber.js'; // Add WebSocket route import
 import * as aiHelper from "./ai-logic.js";
 import webRoutes from './routes/web.js';
 import {
@@ -74,6 +75,10 @@ const createServer = async () => {
     "healthcheck": {
       endpoint: "/v1/healthcheck",
       method: "GET"
+    },
+    "websocket": {
+      endpoint: "/ws-client",
+      method: "WebSocket"
     }
   };
 
@@ -105,7 +110,9 @@ const createServer = async () => {
       reply.send(error);
     }
   });
+  
   await setupTemplating(fastify);
+  
   // Register routes
   await fastify.register(routes, {
     prefix: "/api/v1",
@@ -124,6 +131,9 @@ const createServer = async () => {
   await fastify.register(webRoutes, {
     prefix: "/web"
   });
+
+  // Register WebSocket route for VTuber integration
+  await fastify.register(websocketVTuberRoute);
 
   return fastify;
 };
@@ -191,6 +201,7 @@ export async function preflightChecks() {
       },
       restIsOnline: true,
       dbIsOnline: databaseRes,
+      websocketEnabled: true, // Add WebSocket status to health check
     };
 
     return checkResult;
@@ -207,6 +218,7 @@ export async function preflightChecks() {
       },
       restIsOnline: false,
       dbIsOnline: false,
+      websocketEnabled: false,
     };
   }
 }
@@ -227,6 +239,10 @@ export async function launchRest(fastify) {
     logger.log(
       "API",
       `Fastify server launched successfully on port ${portNum}`,
+    );
+    logger.log(
+      "WebSocket",
+      `WebSocket endpoint available at ws://localhost:${portNum}/ws-client`
     );
     return Promise.resolve();
   } catch (err) {
@@ -309,6 +325,7 @@ export async function initializeApp() {
     }
 
     logger.log("System", "Enspira is fully initialized and ready!");
+    logger.log("WebSocket", "VTuber WebSocket integration is active and ready for connections!");
     return { server, status };
   } catch (error) {
     logger.error("System", `Failed to initialize the application: ${error.message}`);
