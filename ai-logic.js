@@ -5,6 +5,7 @@ import fetch from "node-fetch";
 import https from "https";
 import { performance } from "node:perf_hooks";
 import { processAudio } from "./audio-processor.js";
+
 import {
   MilvusClient,
   DataType,
@@ -36,6 +37,10 @@ import {
 import { returnAuthObject } from "./api-helper.js";
 import { retrieveConfigValue } from "./config-helper.js";
 import { fileURLToPath } from "url";
+import { 
+  processResponseWithExpressions, 
+  generateExpressionPrompt 
+} from "./expression-parser.js";
 
 // ==================== CONSTANTS AND GLOBALS ====================
 const queryCache = new Map();
@@ -45,6 +50,7 @@ const MAX_BATCH_SIZE = 100;
 const MAX_CACHE_SIZE = 150;
 const DEFAULT_TTL = 60000;
 const MAX_WAIT_MS = 500;
+let userExpressions = new Map();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -2372,8 +2378,8 @@ async function respondWithVoice(message, userId) {
         new URL(await retrieveConfigValue("alltalk.ttsGenEndpoint.internal")),
         voiceForm
       );
-      internalGenUrl = `${await retrieveConfigValue("alltalk.ttsServeEndpoint.internal")}${res.data.output_file_url}`
-      externalGenUrl = `${await retrieveConfigValue("alltalk.ttsServeEndpoint.external")}${res.data.output_file_url}`
+      internalGenUrl = `${await retrieveConfigValue("alltalk.ttsServeEndpoint.internal")}${res.data.output_file_url}`;
+      externalGenUrl = `${await retrieveConfigValue("alltalk.ttsServeEndpoint.external")}${res.data.output_file_url}`;
       const fileRes = await axios({
         method: "GET",
         url: `${await retrieveConfigValue("alltalk.ttsServeEndpoint.internal")}${res.data.output_file_url}`,
@@ -2400,9 +2406,7 @@ async function respondWithVoice(message, userId) {
 
         const serviceEndpoint =
           ttsPreference === "fish" ? "fishTTS" : "alltalk";
-        const audioUrl = userObj.is_local
-          ? internalGenUrl
-          : externalGenUrl
+        const audioUrl = userObj.is_local ? internalGenUrl : externalGenUrl;
 
         logger.log(
           "LLM",
@@ -2421,9 +2425,7 @@ async function respondWithVoice(message, userId) {
           : `${await retrieveConfigValue(`${serviceEndpoint}.ttsServeEndpoint.external`)}/${path.basename(audioFilePath)}`;
       }
     } else {
-      const audioUrl = userObj.is_local
-        ? internalGenUrl
-        : externalGenUrl;
+      const audioUrl = userObj.is_local ? internalGenUrl : externalGenUrl;
 
       logger.log(
         "LLM",
@@ -2500,7 +2502,10 @@ export async function respondToDirectVoice(message, userId, withVoice = false) {
       throw new Error("No response generated for voice interaction");
     }
 
-    await fs.writeFile('./chat_cmp_resp.json', JSON.stringify(chatTask.response, null, 2))
+    await fs.writeFile(
+      "./chat_cmp_resp.json",
+      JSON.stringify(chatTask.response, null, 2)
+    );
 
     logger.log(
       "Voice",
@@ -2553,6 +2558,652 @@ export async function respondToDirectVoice(message, userId, withVoice = false) {
     return {
       response:
         "I'm sorry, I'm having trouble processing voice interactions right now. Please try again.",
+      error: error.message,
+    };
+  }
+}
+
+/**
+ * Store available expressions for a user
+ * @param {string} userId - User ID
+ * @param {string[]} expressions - Available expressions from the model
+ */
+export function setUserExpressions(userId, expressions) {
+  if (!expressions || !Array.isArray(expressions)) {
+    logger.log("Expression", `Invalid expressions array for user ${userId}`);
+    return;
+  }
+
+  userExpressions.set(userId, expressions);
+  logger.log(
+    "Expression",
+    `Stored ${expressions.length} expressions for user ${userId}: ${expressions.join(", ")}`
+  );
+}
+
+/**
+ * Get available expressions for a user
+ * @param {string} userId - User ID
+ * @returns {string[]} - Available expressions
+ */
+export function getUserExpressions(userId) {
+  return userExpressions.get(userId) || [];
+}
+
+/**
+ * Enhanced respondToChat with expression support
+ * @param {Object} messageData - Message data containing message and user
+ * @param {string} userId - User ID
+ * @returns {Object} - Enhanced response with expressions
+ */
+export async function respondToChatWithExpressions(messageData, userId) {
+  try {
+    const { message, user } = messageData;
+    const formattedDate = new Date().toLocaleString();
+
+    logger.log(
+      "AI",
+      `Starting respondToChatWithExpressions for user ${userId}: "${message.substring(0, 50)}..."`
+    );
+
+    // Get available expressions for this user
+    const availableExpressions = getUserExpressions(userId);
+
+    // Enhanced context response with expression support
+    const response = await respondWithContextAndExpressions(
+      message,
+      user,
+      userId,
+      availableExpressions
+    );
+
+    if (!response || !response.success) {
+      logger.error(
+        "AI",
+        `respondWithContextAndExpressions failed for user ${userId}:`,
+        response?.error || "Unknown error"
+      );
+      return {
+        success: false,
+        error: response?.error || "No response generated from AI system",
+        details: response?.details || "respondWithContextAndExpressions failed",
+      };
+    }
+
+    if (!response.cleanText || response.cleanText.trim() === "") {
+      logger.error("AI", `AI generated empty response for user ${userId}`);
+      return {
+        success: false,
+        error: "AI generated empty response",
+        details: "Response object exists but cleanText field is empty",
+      };
+    }
+
+    logger.log(
+      "AI",
+      `AI response with expressions generated for user ${userId}: "${response.cleanText.substring(0, 50)}..." (${response.expressions.length} expressions)`
+    );
+
+    // Store the interaction asynchronously
+    try {
+      const summaryString = `On ${formattedDate}, ${user} said: "${message}". You responded by saying: ${response.cleanText}`;
+
+      addChatMessageAsVector(
+        summaryString,
+        message,
+        user,
+        formattedDate,
+        response.cleanText,
+        userId
+      ).catch((err) => {
+        logger.error(
+          "AI",
+          `Error saving chat message vector for user ${userId}: ${err.message}`
+        );
+      });
+    } catch (vectorError) {
+      logger.error(
+        "AI",
+        `Error preparing chat message vector for user ${userId}: ${vectorError.message}`
+      );
+    }
+
+    return {
+      success: true,
+      text: response.cleanText,
+      expressions: response.expressions,
+      estimatedDuration: response.estimatedDuration,
+      thoughtProcess: response.thoughtProcess || null,
+      metadata: {
+        timestamp: formattedDate,
+        userId: userId,
+        username: user,
+        expressionCount: response.expressions.length,
+        debug: response.debug,
+      },
+    };
+  } catch (error) {
+    logger.error(
+      "AI",
+      `Critical error in respondToChatWithExpressions for user ${userId}: ${error.message}`
+    );
+    logger.error("AI", `Stack trace: ${error.stack}`);
+
+    return {
+      success: false,
+      error: `Failed to process chat: ${error.message}`,
+      details: error.stack,
+    };
+  }
+}
+
+/**
+ * Enhanced respondWithContext that includes expression processing
+ * @param {string} message - User message
+ * @param {string} username - Username
+ * @param {string} userID - User ID
+ * @param {string[]} availableExpressions - Available expressions
+ * @returns {Object} - Response with expressions
+ */
+async function respondWithContextAndExpressions(
+  message,
+  username,
+  userID,
+  availableExpressions = []
+) {
+  const contextId = `ctx_${Date.now()}_${Math.random().toString(36).substr(2, 8)}`;
+
+  try {
+    logger.log(
+      "AI",
+      `[${contextId}] Starting respondWithContextAndExpressions for user ${userID}: "${message.substring(0, 50)}..."`
+    );
+
+    // Check if we should use cached response
+    const responseCacheKey = `response_expr_${userID}_${message}_${username}`;
+    const cachedResponse = getCachedResult(responseCacheKey);
+    if (cachedResponse) {
+      logger.log(
+        "AI",
+        `[${contextId}] Using cached response from previous identical query`
+      );
+      return cachedResponse;
+    }
+
+    // Validate configuration
+    logger.log("AI", `[${contextId}] Validating model configuration...`);
+
+    const modelConfig = await retrieveConfigValue("models.chat");
+    if (
+      !modelConfig ||
+      !modelConfig.endpoint ||
+      !modelConfig.apiKey ||
+      !modelConfig.model
+    ) {
+      throw new Error("Incomplete chat model configuration");
+    }
+
+    logger.log(
+      "AI",
+      `[${contextId}] Model configuration validated. Available expressions: ${availableExpressions.length}`
+    );
+
+    // Parallel vector searches (same as before)
+    logger.log("AI", `[${contextId}] Starting parallel vector searches...`);
+
+    const searchPromises = [
+      Promise.race([
+        findRelevantDocuments(message, userID, 8),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("Document search timeout")), 10000)
+        ),
+      ]).catch((error) => {
+        logger.warn(
+          "AI",
+          `[${contextId}] Document search failed: ${error.message}`
+        );
+        return [];
+      }),
+
+      Promise.race([
+        findRelevantVoiceInMilvus(message, userID, 3),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("Voice search timeout")), 8000)
+        ),
+      ]).catch((error) => {
+        logger.warn(
+          "AI",
+          `[${contextId}] Voice search failed: ${error.message}`
+        );
+        return [];
+      }),
+
+      Promise.race([
+        findRelevantChats(message, username, userID, 3),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("Chat search timeout")), 8000)
+        ),
+      ]).catch((error) => {
+        logger.warn(
+          "AI",
+          `[${contextId}] Chat search failed: ${error.message}`
+        );
+        return [];
+      }),
+    ];
+
+    const [rawContext, voiceCtx, chatHistory] =
+      await Promise.all(searchPromises);
+
+    // Parallel reranking
+    logger.log("AI", `[${contextId}] Starting reranking process...`);
+
+    const rerankPromises = [
+      resultsReranked(rawContext, message, userID, true).catch((error) => {
+        logger.warn(
+          "AI",
+          `[${contextId}] Document reranking failed: ${error.message}`
+        );
+        return "- No additional context available due to processing error.";
+      }),
+
+      resultsReranked(chatHistory, message, userID).catch((error) => {
+        logger.warn(
+          "AI",
+          `[${contextId}] Chat reranking failed: ${error.message}`
+        );
+        return [];
+      }),
+
+      resultsReranked(voiceCtx, message, userID).catch((error) => {
+        logger.warn(
+          "AI",
+          `[${contextId}] Voice reranking failed: ${error.message}`
+        );
+        return [];
+      }),
+    ];
+
+    const [contextBody, relChatBody, relVoiceBody] =
+      await Promise.all(rerankPromises);
+
+    // Build prompt data
+    const promptData = {
+      relChats: Array.isArray(relChatBody) ? relChatBody : [],
+      relContext: contextBody || "- No additional context available.",
+      relVoice: Array.isArray(relVoiceBody) ? relVoiceBody : [],
+      chat_user: username,
+    };
+
+    logger.log(
+      "AI",
+      `[${contextId}] Building context prompt with expression support...`
+    );
+
+    // Generate prompt with expression enhancement
+    let body;
+    try {
+      body = await contextPromptChatWithExpressions(
+        promptData,
+        message,
+        userID,
+        availableExpressions
+      );
+
+      if (!body || !body.messages || !Array.isArray(body.messages)) {
+        throw new Error("Invalid prompt body structure");
+      }
+
+      logger.log(
+        "AI",
+        `[${contextId}] Enhanced prompt generated with ${availableExpressions.length} expressions available`
+      );
+    } catch (promptError) {
+      logger.error(
+        "AI",
+        `[${contextId}] Error generating prompt: ${promptError.message}`
+      );
+      throw new Error(`Failed to generate prompt: ${promptError.message}`);
+    }
+
+    // Send completion request
+    logger.log("AI", `[${contextId}] Sending completion request...`);
+
+    const chatTask = await retryMilvusOperation(
+      async () => {
+        const startTime = Date.now();
+
+        try {
+          const result = await sendChatCompletionRequest(body, modelConfig);
+          const elapsedTime = Date.now() - startTime;
+
+          logger.log(
+            "AI",
+            `[${contextId}] Completion request completed in ${elapsedTime}ms`
+          );
+
+          if (
+            !result ||
+            result.error ||
+            !result.response ||
+            result.response.trim() === ""
+          ) {
+            throw new Error(
+              result?.error || "Empty response from chat completion"
+            );
+          }
+
+          return result;
+        } catch (requestError) {
+          logger.error(
+            "AI",
+            `[${contextId}] Request error: ${requestError.message}`
+          );
+          throw requestError;
+        }
+      },
+      3, // Max retries
+      1000 // Initial delay
+    );
+
+    logger.log("AI", `[${contextId}] Chat completion successful`);
+
+    // Process response for expressions
+    logger.log("AI", `[${contextId}] Processing response for expressions...`);
+
+    const expressionResult = await processResponseWithExpressions(
+      chatTask.response,
+      availableExpressions,
+      { enableDebugLogging: true }
+    );
+
+    if (!expressionResult.success) {
+      logger.error(
+        "AI",
+        `[${contextId}] Expression processing failed: ${expressionResult.error}`
+      );
+      // Fall back to original response without expressions
+      const strippedResp = await replyStripped(chatTask.response, userID);
+
+      return {
+        success: true,
+        cleanText: strippedResp,
+        expressions: [],
+        thoughtProcess: chatTask.thoughtProcess,
+        error: expressionResult.error,
+      };
+    }
+
+    // Strip response text of any remaining artifacts
+    const finalCleanText = await replyStripped(
+      expressionResult.cleanText,
+      userID
+    );
+
+    if (!finalCleanText || finalCleanText.trim() === "") {
+      logger.error(
+        "AI",
+        `[${contextId}] Response stripping resulted in empty text`
+      );
+      throw new Error("Response processing resulted in empty text");
+    }
+
+    const finalResponse = {
+      success: true,
+      cleanText: finalCleanText,
+      expressions: expressionResult.expressions,
+      estimatedDuration: expressionResult.estimatedDuration,
+      thoughtProcess: chatTask.thoughtProcess,
+      debug: expressionResult.debug,
+      metadata: {
+        contextId: contextId,
+        timeToFirstToken: chatTask.timeToFirstToken,
+        tokensPerSecond: chatTask.tokensPerSecond,
+        requestId: chatTask.requestId,
+        expressionCount: expressionResult.expressions.length,
+        endpoint: modelConfig.endpoint,
+        model: modelConfig.model,
+      },
+    };
+
+    // Cache successful responses
+    setCachedResult(responseCacheKey, finalResponse, 10000);
+
+    logger.log(
+      "AI",
+      `[${contextId}] Response processing completed with ${expressionResult.expressions.length} expressions`
+    );
+
+    return finalResponse;
+  } catch (error) {
+    logger.error(
+      "AI",
+      `[${contextId}] Error in respondWithContextAndExpressions: ${error.message}`
+    );
+    logger.error("AI", `[${contextId}] Stack trace: ${error.stack}`);
+
+    // Return a fallback response
+    return {
+      success: false,
+      error: error.message,
+      details: error.stack,
+      contextId: contextId,
+    };
+  }
+}
+
+/**
+ * Enhanced prompt generation with expression support
+ * @param {Object} promptData - Prompt data with context
+ * @param {string} message - User message
+ * @param {string} userID - User ID
+ * @param {string[]} availableExpressions - Available expressions
+ * @returns {Object} - Enhanced prompt body
+ */
+async function contextPromptChatWithExpressions(
+  promptData,
+  message,
+  userID,
+  availableExpressions = []
+) {
+  // Get the base prompt from the original function
+  const basePromptBody = await contextPromptChat(promptData, message, userID);
+
+  if (
+    !basePromptBody ||
+    !basePromptBody.messages ||
+    !Array.isArray(basePromptBody.messages)
+  ) {
+    throw new Error("Invalid base prompt structure");
+  }
+
+  // Find the system message to enhance with expression instructions
+  const systemMessageIndex = basePromptBody.messages.findIndex(
+    (msg) => msg.role === "system"
+  );
+
+  if (systemMessageIndex !== -1 && availableExpressions.length > 0) {
+    const originalSystemContent =
+      basePromptBody.messages[systemMessageIndex].content;
+    const enhancedSystemContent = generateExpressionPrompt(
+      availableExpressions,
+      originalSystemContent
+    );
+
+    basePromptBody.messages[systemMessageIndex].content = enhancedSystemContent;
+
+    logger.log(
+      "Expression",
+      `Enhanced system prompt with ${availableExpressions.length} expressions`
+    );
+  } else {
+    logger.log(
+      "Expression",
+      `No expressions available or no system message found for enhancement`
+    );
+  }
+
+  return basePromptBody;
+}
+
+/**
+ * Enhanced voice response with expression support
+ * @param {string} message - User message
+ * @param {string} userId - User ID
+ * @param {boolean} withVoice - Whether to generate audio
+ * @returns {Object} - Response with expressions and optional audio
+ */
+export async function respondToDirectVoiceWithExpressions(
+  message,
+  userId,
+  withVoice = false
+) {
+  try {
+    logger.log(
+      "Voice",
+      `Processing voice interaction with expressions for user ${userId}: "${message.substring(0, 50)}..."`
+    );
+
+    const userObj = await returnAuthObject(userId);
+    if (!userObj) {
+      throw new Error(`User ${userId} not found`);
+    }
+
+    // Get available expressions for this user
+    const availableExpressions = getUserExpressions(userId);
+
+    // Enhanced parallel processing for voice context
+    const [voiceCtx, rawContext] = await Promise.allSettled([
+      findRelevantVoiceInMilvus(message, userId, 3),
+      findRelevantDocuments(message, userId, 6),
+    ]);
+
+    const voiceResults = voiceCtx.status === "fulfilled" ? voiceCtx.value : [];
+    const contextResults =
+      rawContext.status === "fulfilled" ? rawContext.value : [];
+
+    logger.log(
+      "Voice",
+      `Voice context search completed for user ${userId}. Voice: ${voiceResults.length}, Context: ${contextResults.length}`
+    );
+
+    // Enhanced reranking with error handling
+    const [contextBody, voiceCtxBody] = await Promise.allSettled([
+      resultsReranked(contextResults, message, userId, true),
+      withVoice
+        ? resultsReranked(voiceResults, message, userId, false)
+        : Promise.resolve("- No additional voice conversations to supply."),
+    ]);
+
+    const finalContextBody =
+      contextBody.status === "fulfilled"
+        ? contextBody.value
+        : "- No additional context available due to processing error.";
+    const finalVoiceBody =
+      voiceCtxBody.status === "fulfilled"
+        ? voiceCtxBody.value
+        : "- No additional voice conversations to supply.";
+
+    const promptData = {
+      relChats: "- No additional chat content.",
+      relContext: finalContextBody,
+      relVoice: finalVoiceBody,
+      user: userObj.user_name,
+    };
+
+    logger.log(
+      "Voice",
+      `Generating voice response with expressions for user ${userId}`
+    );
+
+    // Use enhanced prompt generation
+    const body = await contextPromptChatWithExpressions(
+      promptData,
+      message,
+      userId,
+      availableExpressions
+    );
+    const chatTask = await sendChatCompletionRequest(
+      body,
+      await retrieveConfigValue("models.chat")
+    );
+
+    if (!chatTask.response) {
+      throw new Error("No response generated for voice interaction");
+    }
+
+    logger.log(
+      "Voice",
+      `Voice response generated for user ${userId}. Time to first token: ${chatTask.timeToFirstToken} seconds`
+    );
+
+    // Process response for expressions
+    const expressionResult = await processResponseWithExpressions(
+      chatTask.response,
+      availableExpressions,
+      { enableDebugLogging: true }
+    );
+
+    const finalText = expressionResult.success
+      ? expressionResult.cleanText
+      : await replyStripped(chatTask.response, userId);
+
+    // Store voice interaction in vectors
+    try {
+      const formattedDate = new Date().toLocaleString();
+      const summaryString = `On ${formattedDate}, ${userObj.user_name} said via voice: "${message}". You responded by saying: ${finalText}`;
+
+      addVoiceMessageAsVector(
+        summaryString,
+        message,
+        userObj.user_name,
+        formattedDate,
+        finalText,
+        userId
+      ).catch((err) =>
+        logger.error("Voice", `Error storing voice vector: ${err.message}`)
+      );
+    } catch (vectorError) {
+      logger.error(
+        "Voice",
+        `Error preparing voice vector: ${vectorError.message}`
+      );
+    }
+
+    if (withVoice) {
+      logger.log("Voice", `Generating TTS audio for user ${userId}`);
+      const audioUrl = await respondWithVoice(finalText, userId);
+
+      return {
+        response: finalText,
+        expressions: expressionResult.success
+          ? expressionResult.expressions
+          : [],
+        estimatedDuration: expressionResult.estimatedDuration || 0,
+        audio_url: audioUrl,
+        thoughtProcess: chatTask.thoughtProcess,
+        debug: expressionResult.debug,
+      };
+    } else {
+      return {
+        response: finalText,
+        expressions: expressionResult.success
+          ? expressionResult.expressions
+          : [],
+        estimatedDuration: expressionResult.estimatedDuration || 0,
+        thoughtProcess: chatTask.thoughtProcess,
+        debug: expressionResult.debug,
+      };
+    }
+  } catch (error) {
+    logger.error(
+      "Voice",
+      `Error in respondToDirectVoiceWithExpressions for user ${userId}: ${error.message}`
+    );
+    return {
+      response:
+        "I'm sorry, I'm having trouble processing voice interactions right now. Please try again.",
+      expressions: [],
       error: error.message,
     };
   }
@@ -2890,4 +3541,6 @@ export {
   findRelevantChats,
   upsertIntelligenceToMilvus,
   insertVoiceVectorsIntoMilvus,
+  respondWithContextAndExpressions,
+  contextPromptChatWithExpressions
 };
