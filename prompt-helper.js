@@ -3,19 +3,29 @@ import moment from "moment";
 import { socialMedias } from "./twitch-helper.js";
 import { interpretEmotions } from "./data-helper.js";
 import { returnAuthObject } from "./api-helper.js";
-import { tokenizedFromRemote, promptTokenizedFromRemote } from "./token-helper.js";
+import {
+  tokenizedFromRemote,
+  promptTokenizedFromRemote,
+} from "./token-helper.js";
 import { retrieveConfigValue } from "./config-helper.js";
 import { returnRecentChats } from "./ai-logic.js";
-import { ChatRequestBody, ChatRequestBodyCoT, ToolRequestBody, QueryRequestBody, ModerationRequestBody, SummaryRequestBody } from "./oai-requests.js";
-import { jsonrepair } from 'jsonrepair'
+import {
+  ChatRequestBody,
+  ChatRequestBodyCoT,
+  ToolRequestBody,
+  QueryRequestBody,
+  ModerationRequestBody,
+  SummaryRequestBody,
+} from "./oai-requests.js";
+import { jsonrepair } from "jsonrepair";
 import OpenAI from "openai";
 import { performance } from "node:perf_hooks";
-import { logger } from './create-global-logger.js';
-import { utils } from './utils/index.js';
+import { logger } from "./create-global-logger.js";
+import { utils } from "./utils/index.js";
 
 const { getTemplate } = utils.file;
-const { replacePlaceholders } = utils.string
-const { withErrorHandling } = utils.error
+const { replacePlaceholders } = utils.string;
+const { withErrorHandling } = utils.error;
 
 const templateCache = {};
 
@@ -30,32 +40,39 @@ async function getSocialMediaReplacements(userId) {
   try {
     // Get the complete socials string for {{socials}} replacement
     const allSocials = await socialMedias(userId);
-    
+
     // Create the base replacements object
     const replacements = {
-      "{{socials}}": allSocials || ""
+      "{{socials}}": allSocials || "",
     };
-    
+
     // Get all available platforms for the user
     const socialPlatforms = await socialMedias(userId, "all");
-    
+
     // Add individual platform replacements
     for (const [platform, value] of Object.entries(socialPlatforms)) {
       if (value && value.trim() !== "") {
         replacements[`{{socials.${platform}}}`] = value;
       }
     }
-    
+
     // Add specific commonly used platform shortcuts
     // These are kept for backward compatibility
-    replacements["{{soc_tiktok}}"] = await socialMedias(userId, "tiktok") || "";
-    replacements["{{soc_youtube}}"] = await socialMedias(userId, "youtube") || "";
-    replacements["{{soc_twitter}}"] = await socialMedias(userId, "twitter") || "";
-    replacements["{{soc_instagram}}"] = await socialMedias(userId, "instagram") || "";
-    
+    replacements["{{soc_tiktok}}"] =
+      (await socialMedias(userId, "tiktok")) || "";
+    replacements["{{soc_youtube}}"] =
+      (await socialMedias(userId, "youtube")) || "";
+    replacements["{{soc_twitter}}"] =
+      (await socialMedias(userId, "twitter")) || "";
+    replacements["{{soc_instagram}}"] =
+      (await socialMedias(userId, "instagram")) || "";
+
     return replacements;
   } catch (error) {
-    logger.log("System", `Error getting social media replacements: ${error.message}`);
+    logger.log(
+      "System",
+      `Error getting social media replacements: ${error.message}`
+    );
     return { "{{socials}}": "" };
   }
 }
@@ -63,7 +80,7 @@ async function getSocialMediaReplacements(userId) {
 /**
  * Sends a chat completion request for tool tasks like query writing and reranking.
  * Simplified version without reasoning or chain-of-thought features.
- * 
+ *
  * @param {object} requestBody - The request body for the completion.
  * @param {object} modelConfig - Configuration for the model.
  * @returns {Promise<object>} - The completion response.
@@ -89,67 +106,73 @@ export async function sendToolCompletionRequest(requestBody, modelConfig) {
       if (content) {
         // Add content to full response, but check size limit
         fullResponse += content;
-        
+
         // If exceeded max size, stop processing stream
         if (fullResponse.length > MAX_RESPONSE_SIZE) {
-          logger.log("API", `Tool response exceeded ${MAX_RESPONSE_SIZE/1000}KB limit, truncating`);
+          logger.log(
+            "API",
+            `Tool response exceeded ${MAX_RESPONSE_SIZE / 1000}KB limit, truncating`
+          );
           break; // Exit the loop to stop processing more tokens
         }
       }
     }
-    
+
     // Calculate total processing time
     const totalTime = (performance.now() - startTime) / 1000;
-    
+
     // For JSON responses, make sure we have valid JSON
     if (requestBody.response_format?.type === "json_schema") {
       // Check if the response is already an object
-      if (typeof fullResponse === 'object' && fullResponse !== null) {
+      if (typeof fullResponse === "object" && fullResponse !== null) {
         return {
           response: fullResponse,
           rawResponse: JSON.stringify(fullResponse),
-          processingTime: totalTime.toFixed(3)
+          processingTime: totalTime.toFixed(3),
         };
       }
-      
+
       try {
         // Try parsing the JSON response
         const jsonResponse = JSON.parse(fullResponse);
         return {
           response: jsonResponse,
           rawResponse: fullResponse,
-          processingTime: totalTime.toFixed(3)
+          processingTime: totalTime.toFixed(3),
         };
       } catch (jsonError) {
         // If JSON parsing fails, try to fix it using jsonrepair
         try {
           const fixedResponse = jsonrepair(fullResponse);
           const jsonResponse = JSON.parse(fixedResponse);
-          
+
           logger.log("API", "Fixed malformed JSON in tool response");
-          
+
           return {
             response: jsonResponse,
             rawResponse: fixedResponse,
             processingTime: totalTime.toFixed(3),
-            jsonFixed: true
+            jsonFixed: true,
           };
         } catch (repairError) {
           // If repair also fails, return error
-          logger.log("API", `Failed to parse JSON response: ${jsonError.message}`);
-          return { 
-            error: "JSON parsing failed", 
+          logger.log(
+            "API",
+            `Failed to parse JSON response: ${jsonError.message}`
+          );
+          return {
+            error: "JSON parsing failed",
             rawResponse: fullResponse.substring(0, 1000),
-            processingTime: totalTime.toFixed(3)
+            processingTime: totalTime.toFixed(3),
           };
         }
       }
     }
-    
+
     // For non-JSON responses, just return the content
     return {
       response: fullResponse,
-      processingTime: totalTime.toFixed(3)
+      processingTime: totalTime.toFixed(3),
     };
   } catch (error) {
     logger.log(
@@ -159,111 +182,354 @@ export async function sendToolCompletionRequest(requestBody, modelConfig) {
     return { error: error.message };
   }
 }
-export async function sendChatCompletionRequest(requestBody, modelConfig, userObj) {
-  const openai = new OpenAI({
-    baseURL: modelConfig.endpoint,
-    apiKey: modelConfig.apiKey,
-  });
+export async function sendChatCompletionRequest(
+  requestBody,
+  modelConfig,
+  userObj = null
+) {
+  const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-  const startTime = performance.now();
-  let firstTokenTimeElapsed = null;
-  let backendStartTime;
-  let fullResponse = "";
-  const MAX_RESPONSE_SIZE = 100000; // 100KB limit, adjust as needed
-  await fs.writeJSON('./chat-request.json', requestBody)
   try {
-    const stream = await openai.chat.completions.create({
-      ...requestBody,
-      stream: true,
+    // DIAGNOSTIC: Validate model configuration
+    logger.log("API", `[${requestId}] Starting chat completion request`);
+    logger.log("API", `[${requestId}] Model config validation:`, {
+      hasEndpoint: !!modelConfig?.endpoint,
+      hasApiKey: !!modelConfig?.apiKey,
+      hasModel: !!modelConfig?.model,
+      endpoint: modelConfig?.endpoint || "MISSING",
+      model: modelConfig?.model || "MISSING",
+      apiKeyLength: modelConfig?.apiKey?.length || 0,
     });
 
-    for await (const part of stream) {
-      const content = part.choices[0]?.delta?.content;
-      if (content) {
-        if (firstTokenTimeElapsed === null) {
-          // Calculate time to first token in seconds
-          firstTokenTimeElapsed = (performance.now() - startTime) / 1000;
-          // Start backend timer after first token arrives
-          backendStartTime = performance.now();
-        }
+    if (!modelConfig) {
+      throw new Error("Model configuration is null or undefined");
+    }
 
-        // Add content to full response, but check size limit
-        fullResponse += content;
+    if (!modelConfig.endpoint) {
+      throw new Error("Model endpoint is missing from configuration");
+    }
 
-        // Check if response is getting too large (warn at 50KB)
-        if (fullResponse.length > 50000 && fullResponse.length < 51000) {
-          logger.log("API", "Response size over 50KB, approaching limits");
-        }
+    if (!modelConfig.apiKey) {
+      throw new Error("Model API key is missing from configuration");
+    }
 
-        // If exceeded max size, stop processing stream - prevents memory issues
-        if (fullResponse.length > MAX_RESPONSE_SIZE) {
-          logger.log("API", `Response exceeded ${MAX_RESPONSE_SIZE / 1000}KB limit, truncating`);
-          fullResponse += "\n\n[Response truncated due to length limits]";
-          break; // Exit the loop to stop processing more tokens
+    if (!modelConfig.model) {
+      throw new Error("Model name is missing from configuration");
+    }
+
+    // DIAGNOSTIC: Validate request body
+    logger.log("API", `[${requestId}] Request body validation:`, {
+      hasMessages: !!requestBody?.messages,
+      messageCount: requestBody?.messages?.length || 0,
+      hasModel: !!requestBody?.model,
+      hasStream: requestBody?.stream !== undefined,
+      requestBodyKeys: Object.keys(requestBody || {}),
+    });
+
+    if (
+      !requestBody ||
+      !requestBody.messages ||
+      !Array.isArray(requestBody.messages)
+    ) {
+      throw new Error(
+        "Invalid request body: missing or invalid messages array"
+      );
+    }
+
+    if (requestBody.messages.length === 0) {
+      throw new Error("Request body has empty messages array");
+    }
+
+    // DIAGNOSTIC: Log the actual request that will be sent
+    logger.log("API", `[${requestId}] Request details:`, {
+      endpoint: modelConfig.endpoint,
+      model: requestBody.model || modelConfig.model,
+      messageCount: requestBody.messages.length,
+      stream: requestBody.stream,
+      temperature: requestBody.temperature,
+      max_tokens: requestBody.max_tokens,
+    });
+
+    // Create OpenAI client with enhanced configuration
+    const openaiConfig = {
+      baseURL: modelConfig.endpoint,
+      apiKey: modelConfig.apiKey,
+      timeout: 60000, // 60 second timeout
+      maxRetries: 0, // We'll handle retries manually
+    };
+
+    logger.log(
+      "API",
+      `[${requestId}] Creating OpenAI client with baseURL: ${modelConfig.endpoint}`
+    );
+
+    const openai = new OpenAI(openaiConfig);
+
+    const startTime = performance.now();
+    let firstTokenTimeElapsed = null;
+    let backendStartTime;
+    let fullResponse = "";
+    let thinkingStuff = "";
+    const MAX_RESPONSE_SIZE = 100000; // 100KB limit
+
+    // DIAGNOSTIC: Save request body for debugging
+    try {
+      await fs.writeJSON(
+        `./debug-chat-request-${requestId}.json`,
+        {
+          requestId,
+          timestamp: new Date().toISOString(),
+          requestBody,
+          modelConfig: {
+            endpoint: modelConfig.endpoint,
+            model: modelConfig.model,
+            hasApiKey: !!modelConfig.apiKey,
+            apiKeyLength: modelConfig.apiKey?.length,
+          },
+        },
+        { spaces: 2 }
+      );
+    } catch (debugError) {
+      logger.warn(
+        "API",
+        `[${requestId}] Could not save debug file: ${debugError.message}`
+      );
+    }
+
+    logger.log("API", `[${requestId}] Sending request to vLLM...`);
+
+    // ENHANCED: Create the completion request with better error handling
+    let stream;
+    try {
+      stream = await openai.chat.completions.create({
+        ...requestBody,
+        stream: true,
+      });
+
+      logger.log(
+        "API",
+        `[${requestId}] Successfully created stream connection to vLLM`
+      );
+    } catch (streamError) {
+      logger.error("API", `[${requestId}] Failed to create stream to vLLM:`, {
+        error: streamError.message,
+        code: streamError.code,
+        status: streamError.status,
+        type: streamError.type,
+      });
+
+      // Try to provide more specific error information
+      if (streamError.message.includes("ECONNREFUSED")) {
+        throw new Error(
+          `Cannot connect to vLLM at ${modelConfig.endpoint} - connection refused. Is vLLM running?`
+        );
+      } else if (streamError.message.includes("ENOTFOUND")) {
+        throw new Error(
+          `Cannot resolve hostname for vLLM endpoint: ${modelConfig.endpoint}`
+        );
+      } else if (streamError.message.includes("timeout")) {
+        throw new Error(
+          `Connection to vLLM timed out at ${modelConfig.endpoint}`
+        );
+      } else if (streamError.status === 401) {
+        throw new Error(`Authentication failed with vLLM - check your API key`);
+      } else if (streamError.status === 404) {
+        throw new Error(`vLLM endpoint not found: ${modelConfig.endpoint}`);
+      } else {
+        throw new Error(`vLLM connection error: ${streamError.message}`);
+      }
+    }
+
+    logger.log("API", `[${requestId}] Processing response stream...`);
+
+    // Process the stream
+    try {
+      for await (const part of stream) {
+        const content = part.choices[0]?.delta?.content;
+        const thinkContent = part.choices[0]?.delta?.reasoning_content
+        if (content) {
+          if (firstTokenTimeElapsed === null) {
+            // Calculate time to first token in seconds
+            firstTokenTimeElapsed = (performance.now() - startTime) / 1000;
+            // Start backend timer after first token arrives
+            backendStartTime = performance.now();
+            logger.log(
+              "API",
+              `[${requestId}] First token received after ${firstTokenTimeElapsed.toFixed(3)} seconds`
+            );
+          }
+
+          // Add content to full response, but check size limit
+          fullResponse += content;
+          // Check if response is getting too large (warn at 50KB)
+          if (fullResponse.length > 50000 && fullResponse.length < 51000) {
+            logger.log(
+              "API",
+              `[${requestId}] Response size over 50KB, approaching limits`
+            );
+          }
+
+          // If exceeded max size, stop processing stream - prevents memory issues
+          if (fullResponse.length > MAX_RESPONSE_SIZE) {
+            logger.log(
+              "API",
+              `[${requestId}] Response exceeded ${MAX_RESPONSE_SIZE / 1000}KB limit, truncating`
+            );
+            fullResponse += "\n\n[Response truncated due to length limits]";
+            break; // Exit the loop to stop processing more tokens
+          }
+        } else if (thinkContent) {
+          if (firstTokenTimeElapsed === null) {
+            // Calculate time to first token in seconds
+            firstTokenTimeElapsed = (performance.now() - startTime) / 1000;
+            // Start backend timer after first token arrives
+            backendStartTime = performance.now();
+            logger.log(
+              "API",
+              `[${requestId}] First thought token received after ${firstTokenTimeElapsed.toFixed(3)} seconds`
+            );
+          }
+
+          // Add content to full response, but check size limit
+          thinkingStuff += thinkContent;
+          // Check if response is getting too large (warn at 50KB)
+          if (thinkingStuff.length > 50000 && thinkingStuff.length < 51000) {
+            logger.log(
+              "API",
+              `[${requestId}] Response size over 50KB, approaching limits`
+            );
+          }
+
+          // If exceeded max size, stop processing stream - prevents memory issues
+          if (thinkingStuff.length > MAX_RESPONSE_SIZE) {
+            logger.log(
+              "API",
+              `[${requestId}] Response exceeded ${MAX_RESPONSE_SIZE / 1000}KB limit, truncating`
+            );
+            thinkingStuff += "\n\n[Response truncated due to length limits]";
+            break; // Exit the loop to stop processing more tokens
+          }
         }
+      }
+    } catch (streamProcessError) {
+      logger.error("API", `[${requestId}] Error processing stream:`, {
+        error: streamProcessError.message,
+        responseLength: fullResponse.length,
+      });
+
+      if (fullResponse.length === 0 || thinkingStuff.length === 0
+      ) {
+        throw new Error(
+          `Stream processing failed: ${streamProcessError.message}`
+        );
+      } else {
+        logger.warn(
+          "API",
+          `[${requestId}] Stream ended with error but got partial response (${fullResponse.length} chars)`
+        );
       }
     }
 
     // Calculate backend processing time in seconds
-    const backendTimeElapsed = (performance.now() - backendStartTime) / 1000;
+    const backendTimeElapsed = backendStartTime
+      ? (performance.now() - backendStartTime) / 1000
+      : 0;
+
+    logger.log("API", `[${requestId}] Response completed:`, {
+      responseLength: fullResponse.length,
+      thoughtResponseLength: thinkingStuff.length,
+      firstTokenTime: firstTokenTimeElapsed?.toFixed(3),
+      totalTime: ((performance.now() - startTime) / 1000).toFixed(3),
+      backendTime: backendTimeElapsed.toFixed(3),
+    });
+
+    // Validate we got a response
+    if (!fullResponse || fullResponse.trim() === "") {
+      throw new Error("Received empty response from vLLM");
+    }
 
     // Tokenize the full response (use simpler calculation if tokenization fails)
     let generatedTokens;
     try {
       generatedTokens = await tokenizedFromRemote(fullResponse);
     } catch (tokenizationError) {
+      logger.warn(
+        "API",
+        `[${requestId}] Tokenization failed: ${tokenizationError.message}`
+      );
       // Fallback to character-based estimation
       generatedTokens = Math.ceil(fullResponse.length / 4);
     }
 
     let backendTokensPerSecond = 0;
     if (backendTimeElapsed > 0 && generatedTokens > 0) {
-      backendTokensPerSecond = (generatedTokens / backendTimeElapsed).toFixed(2);
+      backendTokensPerSecond = (generatedTokens / backendTimeElapsed).toFixed(
+        2
+      );
     }
-
+    await fs.writeJSON(
+    `./cmp-chat-request-${requestId}.json`,
+    {
+      response: fullResponse,
+      thinking: thinkingStuff
+    })
     // Enhanced thought process extraction
     let thoughtProcess = "";
     let finalResponse = "";
 
     // Check for thought tags and determine pattern
     const startTag = "<think>";
-    const endTag = "</think>";
+    const endTag = " </think>";
     const startTagIndex = fullResponse.indexOf(startTag);
     const endTagIndex = fullResponse.indexOf(endTag);
-
+    
     // Case 1: Standard format with both <think> and </think>
-    if (startTagIndex !== -1 && endTagIndex !== -1 && endTagIndex > startTagIndex) {
-      thoughtProcess = fullResponse.substring(startTagIndex + startTag.length, endTagIndex).trim();
-      finalResponse = fullResponse.substring(endTagIndex + endTag.length).trim();
+    if (
+      startTagIndex !== -1 &&
+      endTagIndex !== -1 &&
+      endTagIndex > startTagIndex
+    ) {
+      thoughtProcess = fullResponse
+        .substring(startTagIndex + startTag.length, endTagIndex)
+        .trim();
+      finalResponse = fullResponse
+        .substring(endTagIndex + endTag.length)
+        .trim();
     }
     // Case 2: Only </think> exists (no opening tag)
     else if (startTagIndex === -1 && endTagIndex !== -1) {
       thoughtProcess = fullResponse.substring(0, endTagIndex).trim();
-      finalResponse = fullResponse.substring(endTagIndex + endTag.length).trim();
+      finalResponse = fullResponse
+        .substring(endTagIndex + endTag.length)
+        .trim();
     }
     // Case 3: Multiple thought segments or complex pattern
-    else if (fullResponse.includes("</think>")) {
+    else if (fullResponse.includes(" \n</think>")) {
       // Initialize markers
       let currentPos = 0;
       let thoughts = [];
       let lastEndTagPos = -1;
-      
+
       // Iterate through finding all segments
       while (true) {
         const nextStartTag = fullResponse.indexOf(startTag, currentPos);
         const nextEndTag = fullResponse.indexOf(endTag, currentPos);
-        
+
         // No more tags found
         if (nextEndTag === -1) break;
-        
+
         // Found a new segment
         lastEndTagPos = nextEndTag;
-        
+
         // If we found a start tag and it comes before the end tag
         if (nextStartTag !== -1 && nextStartTag < nextEndTag) {
-          thoughts.push(fullResponse.substring(nextStartTag + startTag.length, nextEndTag).trim());
+          thoughts.push(
+            fullResponse
+              .substring(nextStartTag + startTag.length, nextEndTag)
+              .trim()
+          );
           currentPos = nextEndTag + endTag.length;
-        } 
+        }
         // If we only found an end tag (or the end tag comes first)
         else {
           // If this is the first segment and there's no start tag, capture from beginning
@@ -271,39 +537,69 @@ export async function sendChatCompletionRequest(requestBody, modelConfig, userOb
             thoughts.push(fullResponse.substring(0, nextEndTag).trim());
           } else {
             // Otherwise capture from current position to end tag
-            thoughts.push(fullResponse.substring(currentPos, nextEndTag).trim());
+            thoughts.push(
+              fullResponse.substring(currentPos, nextEndTag).trim()
+            );
           }
           currentPos = nextEndTag + endTag.length;
         }
       }
-      
+
       // Combine all thought segments
       thoughtProcess = thoughts.join("\n");
-      
+
       // Final response is everything after the last </think>
       if (lastEndTagPos !== -1) {
-        finalResponse = fullResponse.substring(lastEndTagPos + endTag.length).trim();
+        finalResponse = fullResponse
+          .substring(lastEndTagPos + endTag.length)
+          .trim();
       } else {
         finalResponse = fullResponse; // Fallback to full response
       }
-    } 
+    }
     // Case 4: No think tags found
     else {
       finalResponse = fullResponse.trim();
     }
-    
+
+    logger.log("API", `[${requestId}] Request completed successfully:`, {
+      finalResponseLength: finalResponse.length,
+      thoughtProcessLength: thoughtProcess.length,
+      tokensPerSecond: backendTokensPerSecond,
+    });
+
     return {
       response: finalResponse,
       thoughtProcess,
-      timeToFirstToken: firstTokenTimeElapsed ? firstTokenTimeElapsed.toFixed(3) : null,
+      timeToFirstToken: firstTokenTimeElapsed
+        ? firstTokenTimeElapsed.toFixed(3)
+        : null,
       tokensPerSecond: backendTokensPerSecond,
+      requestId: requestId,
+      metadata: {
+        totalTokens: generatedTokens,
+        totalTime: ((performance.now() - startTime) / 1000).toFixed(3),
+        endpoint: modelConfig.endpoint,
+        model: requestBody.model || modelConfig.model,
+      },
     };
   } catch (error) {
-    logger.log(
-      "API",
-      `OpenAI chat completion error: ${error}; Model: ${modelConfig.model}`
-    );
-    return { error: error.message };
+    logger.error("API", `[${requestId}] OpenAI chat completion error:`, {
+      error: error.message,
+      model: modelConfig?.model || "unknown",
+      endpoint: modelConfig?.endpoint || "unknown",
+      stack: error.stack,
+    });
+
+    return {
+      error: error.message,
+      requestId: requestId,
+      details: {
+        endpoint: modelConfig?.endpoint,
+        model: modelConfig?.model,
+        hasApiKey: !!modelConfig?.apiKey,
+      },
+    };
   }
 }
 
@@ -321,7 +617,7 @@ export async function sendChatCompletionRequestCoT(requestBody, modelConfig) {
   try {
     const stream = await openai.chat.completions.create({
       ...requestBody,
-      stream: true
+      stream: true,
     });
 
     for await (const part of stream) {
@@ -335,7 +631,10 @@ export async function sendChatCompletionRequestCoT(requestBody, modelConfig) {
 
         // Early warning for large responses
         if (fullResponse.length > 50000) {
-          logger.log("API", "CoT response is becoming very large, may cause issues with API returns");
+          logger.log(
+            "API",
+            "CoT response is becoming very large, may cause issues with API returns"
+          );
         }
       }
     }
@@ -345,15 +644,23 @@ export async function sendChatCompletionRequestCoT(requestBody, modelConfig) {
     // Tokenize the full response
     let generatedTokens;
     try {
-      generatedTokens = await tokenizedFromRemote(fullResponse, modelConfig.modelType);
+      generatedTokens = await tokenizedFromRemote(
+        fullResponse,
+        modelConfig.modelType
+      );
     } catch (tokenizationError) {
-      logger.log("API", `Error tokenizing CoT response: ${tokenizationError}. Using character-based estimate.`);
+      logger.log(
+        "API",
+        `Error tokenizing CoT response: ${tokenizationError}. Using character-based estimate.`
+      );
       generatedTokens = Math.ceil(fullResponse.length / 4); // Rough estimate
     }
 
     let backendTokensPerSecond = 0;
     if (backendTimeElapsed > 0 && generatedTokens > 0) {
-      backendTokensPerSecond = (generatedTokens / backendTimeElapsed).toFixed(2);
+      backendTokensPerSecond = (generatedTokens / backendTimeElapsed).toFixed(
+        2
+      );
     }
 
     // Attempt to parse the JSON response with multiple fallback mechanisms
@@ -367,7 +674,10 @@ export async function sendChatCompletionRequestCoT(requestBody, modelConfig) {
         formattedResponse = JSON.parse(fullResponse);
       } catch (initialParseError) {
         // If that fails, try jsonrepair
-        logger.log("API", `Initial JSON parse failed, trying jsonrepair: ${initialParseError.message}`);
+        logger.log(
+          "API",
+          `Initial JSON parse failed, trying jsonrepair: ${initialParseError.message}`
+        );
         const fixedResponse = jsonrepair(fullResponse);
         formattedResponse = JSON.parse(fixedResponse);
       }
@@ -376,31 +686,43 @@ export async function sendChatCompletionRequestCoT(requestBody, modelConfig) {
       if (formattedResponse.thoughts) {
         // If thoughts is already an array of strings
         if (Array.isArray(formattedResponse.thoughts)) {
-          thoughtsArray = formattedResponse.thoughts.filter(thought => thought && thought !== "");
+          thoughtsArray = formattedResponse.thoughts.filter(
+            (thought) => thought && thought !== ""
+          );
         }
         // If thoughts is an array of objects with 'thought' property
-        else if (Array.isArray(formattedResponse.thoughts) &&
+        else if (
+          Array.isArray(formattedResponse.thoughts) &&
           formattedResponse.thoughts.length > 0 &&
-          formattedResponse.thoughts[0].thought) {
+          formattedResponse.thoughts[0].thought
+        ) {
           thoughtsArray = formattedResponse.thoughts
-            .map(t => t.thought)
-            .filter(thought => thought && thought !== "");
+            .map((t) => t.thought)
+            .filter((thought) => thought && thought !== "");
         } else {
           // Invalid format for thoughts, create a default
-          logger.log("API", "Invalid thoughts format in response, using empty array");
+          logger.log(
+            "API",
+            "Invalid thoughts format in response, using empty array"
+          );
           thoughtsArray = [];
         }
       }
 
       // Extract final response safely
-      fullOutput = formattedResponse.final_response || formattedResponse.response || "";
+      fullOutput =
+        formattedResponse.final_response || formattedResponse.response || "";
 
       // Truncate if too long
       if (fullOutput && fullOutput.length > 100000) {
-        logger.log("API", `CoT response too large (${fullOutput.length} bytes), truncating`);
-        fullOutput = fullOutput.substring(0, 100000) + "\n[Response truncated due to length...]";
+        logger.log(
+          "API",
+          `CoT response too large (${fullOutput.length} bytes), truncating`
+        );
+        fullOutput =
+          fullOutput.substring(0, 100000) +
+          "\n[Response truncated due to length...]";
       }
-
     } catch (parseError) {
       logger.log(
         "API",
@@ -411,21 +733,30 @@ export async function sendChatCompletionRequestCoT(requestBody, modelConfig) {
       // Last resort emergency parsing attempt
       try {
         // Try to extract anything that looks like a final response
-        const finalResponseMatch = fullResponse.match(/"final_response"\s*:\s*"([^"]+)"/);
+        const finalResponseMatch = fullResponse.match(
+          /"final_response"\s*:\s*"([^"]+)"/
+        );
         if (finalResponseMatch && finalResponseMatch[1]) {
           fullOutput = finalResponseMatch[1];
         } else {
-          fullOutput = "I apologize, but I encountered an error processing your message.";
+          fullOutput =
+            "I apologize, but I encountered an error processing your message.";
         }
 
         // Log the parse failure
-        logger.error("API", `All JSON parsing attempts failed. Constructed basic response.`);
+        logger.error(
+          "API",
+          `All JSON parsing attempts failed. Constructed basic response.`
+        );
         thoughtsArray = ["Error parsing JSON response"];
       } catch (emergencyError) {
-        logger.error("API", `Emergency parsing also failed: ${emergencyError.message}`);
+        logger.error(
+          "API",
+          `Emergency parsing also failed: ${emergencyError.message}`
+        );
         return {
           error: `Error parsing JSON: ${parseError.message}`,
-          rawResponse: fullResponse.substring(0, 1000)
+          rawResponse: fullResponse.substring(0, 1000),
         };
       }
     }
@@ -433,7 +764,9 @@ export async function sendChatCompletionRequestCoT(requestBody, modelConfig) {
     return {
       response: fullOutput,
       thoughtProcess: thoughtsArray,
-      timeToFirstToken: firstTokenTimeElapsed ? firstTokenTimeElapsed.toFixed(2) : null,
+      timeToFirstToken: firstTokenTimeElapsed
+        ? firstTokenTimeElapsed.toFixed(2)
+        : null,
       tokensPerSecond: backendTokensPerSecond,
     };
   } catch (error) {
@@ -450,12 +783,12 @@ const moderatorPrompt = async (message, userId) => {
   const userObject = await returnAuthObject(userId);
   const instructTemplate = await withErrorHandling(
     () => getTemplate(`./instructs/helpers/moderation.prompt`),
-    { 
-      context: 'Templates', 
-      defaultValue: '', 
-      logError: true 
+    {
+      context: "Templates",
+      defaultValue: "",
+      logError: true,
     }
-  ); 
+  );
   // Get social media replacements with enhanced platform-specific support
   const socialReplacements = await getSocialMediaReplacements(userId);
 
@@ -465,20 +798,23 @@ const moderatorPrompt = async (message, userId) => {
     "{{twitch}}": userObject.twitch_name,
     "{{modlist}}": userObject.mod_list.join("\n- "),
     "{{sites}}": userObject.approved_sites.join("\n- "),
-    ...socialReplacements
+    ...socialReplacements,
   };
 
-  const instructionTemplate = replacePlaceholders(instructTemplate, replacements);
+  const instructionTemplate = replacePlaceholders(
+    instructTemplate,
+    replacements
+  );
   const promptWithSamplers = await ModerationRequestBody.create(
     instructionTemplate,
     await retrieveConfigValue("models.moderator.model"),
     message
   );
-  
+
   logger.log(
     "LLM",
     `Moderation prompt is using ${await promptTokenizedFromRemote(
-      promptWithSamplers.messages,
+      promptWithSamplers.messages
     )} of your available ${await retrieveConfigValue("models.moderator.maxTokens")} tokens.`
   );
   return promptWithSamplers;
@@ -497,13 +833,13 @@ const contextPromptChat = async (promptData, message, userID) => {
   const currentAuthObject = await returnAuthObject(userID);
   const instructTemplate = await withErrorHandling(
     () => getTemplate(`./instructs/system.prompt`),
-    { 
-      context: 'Templates', 
-      defaultValue: '', 
-      logError: true 
+    {
+      context: "Templates",
+      defaultValue: "",
+      logError: true,
     }
-  );  
-  
+  );
+
   const timeStamp = moment().format("dddd, MMMM Do YYYY, [at] hh:mm A");
 
   // Load all necessary files in parallel for better performance
@@ -534,70 +870,85 @@ const contextPromptChat = async (promptData, message, userID) => {
     "{{model_author}}": await retrieveConfigValue("models.chat.author"),
     "{{model_org}}": await retrieveConfigValue("models.chat.organization"),
     // Add all social media replacements
-    ...socialReplacements
+    ...socialReplacements,
   };
 
   // Process system prompt
-  const systemPrompt = replacePlaceholders(instructTemplate, commonReplacements);
+  const systemPrompt = replacePlaceholders(
+    instructTemplate,
+    commonReplacements
+  );
 
   // Structure the prompt data in the format expected by the new ChatRequestBody
   const structuredPromptData = {
     systemPrompt: systemPrompt,
-    
+
     // Character information
-    characterDescription: fileContents.character_card ? 
-      `# ${currentAuthObject.bot_name}'s Description:\n${replacePlaceholders(fileContents.character_card, commonReplacements)}` : null,
-      
-    characterPersonality: fileContents.character_personality ? 
-      `# ${currentAuthObject.bot_name}'s Personality:\n${replacePlaceholders(fileContents.character_personality, commonReplacements)}` : null,
-    
+    characterDescription: fileContents.character_card
+      ? `# ${currentAuthObject.bot_name}'s Description:\n${replacePlaceholders(fileContents.character_card, commonReplacements)}`
+      : null,
+
+    characterPersonality: fileContents.character_personality
+      ? `# ${currentAuthObject.bot_name}'s Personality:\n${replacePlaceholders(fileContents.character_personality, commonReplacements)}`
+      : null,
+
     // World information
-    worldInfo: fileContents.world_lore ? 
-      `# World Information:\nUse this information to reflect the world and context around ${currentAuthObject.bot_name}:\n${replacePlaceholders(fileContents.world_lore, commonReplacements)}` : null,
-    
+    worldInfo: fileContents.world_lore
+      ? `# World Information:\nUse this information to reflect the world and context around ${currentAuthObject.bot_name}:\n${replacePlaceholders(fileContents.world_lore, commonReplacements)}`
+      : null,
+
     // Scenario
-    scenario: fileContents.scenario ? 
-      `# Scenario:\n${replacePlaceholders(fileContents.scenario, commonReplacements)}` : null,
-    
+    scenario: fileContents.scenario
+      ? `# Scenario:\n${replacePlaceholders(fileContents.scenario, commonReplacements)}`
+      : null,
+
     // Player information
-    playerInfo: fileContents.player_info ? 
-      `# Information about ${currentAuthObject.user_name}:\nThis is pertinent information regarding ${currentAuthObject.user_name} that you should always remember.\n${replacePlaceholders(fileContents.player_info, commonReplacements)}` : null,
-    
+    playerInfo: fileContents.player_info
+      ? `# Information about ${currentAuthObject.user_name}:\nThis is pertinent information regarding ${currentAuthObject.user_name} that you should always remember.\n${replacePlaceholders(fileContents.player_info, commonReplacements)}`
+      : null,
+
     // Current chat messages
     recentChat: `# Current Messages from Chat:\nUp to the last ${await retrieveConfigValue("twitch.maxChatsToSave")} messages are provided to you from ${currentAuthObject.user_name}'s Twitch chat. Use these messages to keep up with the current conversation:\n${await returnRecentChats(userID)}`,
-    
+
     // Weather information
-    weatherInfo: currentAuthObject.weather && fileContents.weather ? 
-      `# Current Weather:\n${replacePlaceholders(fileContents.weather, commonReplacements)}` : null,
-    
+    weatherInfo:
+      currentAuthObject.weather && fileContents.weather
+        ? `# Current Weather:\n${replacePlaceholders(fileContents.weather, commonReplacements)}`
+        : null,
+
     // Additional context elements
     additionalContext: {
       // Relevant context search results if available
-      contextResults: promptData.relContext ? 
-        `# Additional Information:\nExternal context relevant to the conversation:\n${promptData.relContext}` : null,
-      
+      contextResults: promptData.relContext
+        ? `# Additional Information:\nExternal context relevant to the conversation:\n${promptData.relContext}`
+        : null,
+
       // Relevant chat history if available
-      chatHistory: promptData.relChats ? 
-        `# Other Relevant Chat Context:\nBelow are potentially relevant chat messages sent previously, that may be relevant to the conversation:\n${promptData.relChats}` : null,
-      
+      chatHistory: promptData.relChats
+        ? `# Other Relevant Chat Context:\nBelow are potentially relevant chat messages sent previously, that may be relevant to the conversation:\n${promptData.relChats}`
+        : null,
+
       // Voice interactions if available
-      voiceInteractions: promptData.relVoice ? 
-        `# Previous Voice Interactions:\nNon-exhaustive list of prior vocal interactions you've had with ${currentAuthObject.user_name}:\n${promptData.relVoice}` : null,
-      
+      voiceInteractions: promptData.relVoice
+        ? `# Previous Voice Interactions:\nNon-exhaustive list of prior vocal interactions you've had with ${currentAuthObject.user_name}:\n${promptData.relVoice}`
+        : null,
+
       // Recent voice messages if available
-      recentVoice: fileContents.voice_messages ? 
-        `# Current Voice Conversations with ${currentAuthObject.user_name}:\nUp to the last ${await retrieveConfigValue("twitch.maxChatsToSave")} voice messages are provided to you. Use these voice messages to help you keep up with the current conversation:\n${fileContents.voice_messages}` : null,
-      
+      recentVoice: fileContents.voice_messages
+        ? `# Current Voice Conversations with ${currentAuthObject.user_name}:\nUp to the last ${await retrieveConfigValue("twitch.maxChatsToSave")} voice messages are provided to you. Use these voice messages to help you keep up with the current conversation:\n${fileContents.voice_messages}`
+        : null,
+
       // Emotional assessment
-      emotionalAssessment: sentiment ? 
-        `# Current Emotional Assessment of Message:\n- ${sentiment}` : null,
-      
+      emotionalAssessment: sentiment
+        ? `# Current Emotional Assessment of Message:\n- ${sentiment}`
+        : null,
+
       // Current date/time
-      dateTime: `# Current Date and Time:\n- The date and time where you and ${currentAuthObject.user_name} live is currently: ${timeStamp}`
+      dateTime: `# Current Date and Time:\n- The date and time where you and ${currentAuthObject.user_name} live is currently: ${timeStamp}`,
     },
-    
+
     // The actual user message
-    userMessage: `${promptData.chat_user} says: "${message}"`
+    userMessage: `${promptData.chat_user} says: "${message}"`,
   };
 
   // Create the chat request body with our structured prompt data
@@ -611,21 +962,21 @@ const contextPromptChat = async (promptData, message, userID) => {
       "models.chat.maxTokens"
     )} tokens.`
   );
-  
+
   return promptWithSamplers;
 };
-
 
 const contextPromptChatCoT = async (promptData, message, userID) => {
   const currentAuthObject = await returnAuthObject(userID);
   const instructTemplate = await withErrorHandling(
     () => getTemplate(`./instructs/system_cot.prompt`),
-    { 
-      context: 'Templates', 
-      defaultValue: '', 
-      logError: true 
+    {
+      context: "Templates",
+      defaultValue: "",
+      logError: true,
     }
-  );    const timeStamp = moment().format("dddd, MMMM Do YYYY, [at] hh:mm A");
+  );
+  const timeStamp = moment().format("dddd, MMMM Do YYYY, [at] hh:mm A");
 
   // Load all necessary files in parallel for better performance
   const fileContents = await readPromptFiles(userID, [
@@ -654,7 +1005,7 @@ const contextPromptChatCoT = async (promptData, message, userID) => {
     "{{model_author}}": await retrieveConfigValue("models.chat.author"),
     "{{model_org}}": await retrieveConfigValue("models.chat.organization"),
     // Add all social media replacements
-    ...socialReplacements
+    ...socialReplacements,
   };
 
   // Process system prompt and add CoT instructions
@@ -663,68 +1014,81 @@ const contextPromptChatCoT = async (promptData, message, userID) => {
   // Structure the prompt data in the format expected by the ChatRequestBodyCoT
   const structuredPromptData = {
     systemPrompt: systemPrompt,
-    
+
     // Character information
-    characterDescription: fileContents.character_card ? 
-      `# ${currentAuthObject.bot_name}'s Description:\n${replacePlaceholders(fileContents.character_card, commonReplacements)}` : null,
-      
-    characterPersonality: fileContents.character_personality ? 
-      `# ${currentAuthObject.bot_name}'s Personality:\n${replacePlaceholders(fileContents.character_personality, commonReplacements)}` : null,
-    
+    characterDescription: fileContents.character_card
+      ? `# ${currentAuthObject.bot_name}'s Description:\n${replacePlaceholders(fileContents.character_card, commonReplacements)}`
+      : null,
+
+    characterPersonality: fileContents.character_personality
+      ? `# ${currentAuthObject.bot_name}'s Personality:\n${replacePlaceholders(fileContents.character_personality, commonReplacements)}`
+      : null,
+
     // World information
-    worldInfo: fileContents.world_lore ? 
-      `# World Information:\nUse this information to reflect the world and context around ${currentAuthObject.bot_name}:\n${replacePlaceholders(fileContents.world_lore, commonReplacements)}` : null,
-    
+    worldInfo: fileContents.world_lore
+      ? `# World Information:\nUse this information to reflect the world and context around ${currentAuthObject.bot_name}:\n${replacePlaceholders(fileContents.world_lore, commonReplacements)}`
+      : null,
+
     // Scenario
-    scenario: fileContents.scenario ? 
-      `# Scenario:\n${replacePlaceholders(fileContents.scenario, commonReplacements)}` : null,
-    
+    scenario: fileContents.scenario
+      ? `# Scenario:\n${replacePlaceholders(fileContents.scenario, commonReplacements)}`
+      : null,
+
     // Player information
-    playerInfo: fileContents.player_info ? 
-      `# Information about ${currentAuthObject.user_name}:\nThis is pertinent information regarding ${currentAuthObject.user_name} that you should always remember.\n${replacePlaceholders(fileContents.player_info, commonReplacements)}` : null,
-    
+    playerInfo: fileContents.player_info
+      ? `# Information about ${currentAuthObject.user_name}:\nThis is pertinent information regarding ${currentAuthObject.user_name} that you should always remember.\n${replacePlaceholders(fileContents.player_info, commonReplacements)}`
+      : null,
+
     // Current chat messages
     recentChat: `# Current Messages from Chat:\nUp to the last ${await retrieveConfigValue("twitch.maxChatsToSave")} messages are provided to you from ${currentAuthObject.user_name}'s Twitch chat. Use these messages to keep up with the current conversation:\n${await returnRecentChats(userID)}`,
-    
+
     // Weather information
-    weatherInfo: currentAuthObject.weather && fileContents.weather ? 
-      `# Current Weather:\n${replacePlaceholders(fileContents.weather, commonReplacements)}` : null,
-    
+    weatherInfo:
+      currentAuthObject.weather && fileContents.weather
+        ? `# Current Weather:\n${replacePlaceholders(fileContents.weather, commonReplacements)}`
+        : null,
+
     // Additional context elements
     additionalContext: {
       // Relevant context search results if available
-      contextResults: promptData.relContext ? 
-        `# Additional Information:\nExternal context relevant to the conversation:\n${promptData.relContext}` : null,
-      
+      contextResults: promptData.relContext
+        ? `# Additional Information:\nExternal context relevant to the conversation:\n${promptData.relContext}`
+        : null,
+
       // Relevant chat history if available
-      chatHistory: promptData.relChats ? 
-        `# Other Relevant Chat Context:\nBelow are potentially relevant chat messages sent previously, that may be relevant to the conversation:\n${promptData.relChats}` : null,
-      
+      chatHistory: promptData.relChats
+        ? `# Other Relevant Chat Context:\nBelow are potentially relevant chat messages sent previously, that may be relevant to the conversation:\n${promptData.relChats}`
+        : null,
+
       // Voice interactions if available
-      voiceInteractions: promptData.relVoice ? 
-        `# Previous Voice Interactions:\nNon-exhaustive list of prior vocal interactions you've had with ${currentAuthObject.user_name}:\n${promptData.relVoice}` : null,
-      
+      voiceInteractions: promptData.relVoice
+        ? `# Previous Voice Interactions:\nNon-exhaustive list of prior vocal interactions you've had with ${currentAuthObject.user_name}:\n${promptData.relVoice}`
+        : null,
+
       // Recent voice messages if available
-      recentVoice: fileContents.voice_messages ? 
-        `# Current Voice Conversations with ${currentAuthObject.user_name}:\nUp to the last ${await retrieveConfigValue("twitch.maxChatsToSave")} voice messages are provided to you. Use these voice messages to help you keep up with the current conversation:\n${fileContents.voice_messages}` : null,
-      
+      recentVoice: fileContents.voice_messages
+        ? `# Current Voice Conversations with ${currentAuthObject.user_name}:\nUp to the last ${await retrieveConfigValue("twitch.maxChatsToSave")} voice messages are provided to you. Use these voice messages to help you keep up with the current conversation:\n${fileContents.voice_messages}`
+        : null,
+
       // Emotional assessment
-      emotionalAssessment: sentiment ? 
-        `# Current Emotional Assessment of Message:\n- ${sentiment}` : null,
-      
+      emotionalAssessment: sentiment
+        ? `# Current Emotional Assessment of Message:\n- ${sentiment}`
+        : null,
+
       // Current date/time
-      dateTime: `# Current Date and Time:\n- The date and time where you and ${currentAuthObject.user_name} live is currently: ${timeStamp}`
+      dateTime: `# Current Date and Time:\n- The date and time where you and ${currentAuthObject.user_name} live is currently: ${timeStamp}`,
     },
-    
+
     // The actual user message
     userMessage: `${promptData.chat_user} says: "message"`,
-    
+
     // Flag for chain-of-thought processing
-    isChainOfThought: true
+    isChainOfThought: true,
   };
 
   // Create the chat request body with our structured prompt data
-  const promptWithSamplers = await ChatRequestBodyCoT.create(structuredPromptData);
+  const promptWithSamplers =
+    await ChatRequestBodyCoT.create(structuredPromptData);
 
   logger.log(
     "LLM",
@@ -734,7 +1098,7 @@ const contextPromptChatCoT = async (promptData, message, userID) => {
       "models.chat.maxTokens"
     )} tokens.`
   );
-  
+
   return promptWithSamplers;
 };
 
@@ -755,13 +1119,13 @@ const eventPromptChat = async (message, userId) => {
 
   const instructTemplate = await withErrorHandling(
     () => getTemplate(`./instructs/system.prompt`),
-    { 
-      context: 'Templates', 
-      defaultValue: '', 
-      logError: true 
+    {
+      context: "Templates",
+      defaultValue: "",
+      logError: true,
     }
-  );    
-  
+  );
+
   const timeStamp = moment().format("dddd, MMMM Do YYYY, [at] hh:mm A");
 
   // Load all necessary files in parallel for better performance
@@ -785,50 +1149,60 @@ const eventPromptChat = async (message, userId) => {
     "{{model_author}}": await retrieveConfigValue("models.chat.author"),
     "{{model_org}}": await retrieveConfigValue("models.chat.organization"),
     // Add all social media replacements
-    ...socialReplacements
+    ...socialReplacements,
   };
 
   // Process system prompt
-  const systemPrompt = replacePlaceholders(instructTemplate, commonReplacements);
+  const systemPrompt = replacePlaceholders(
+    instructTemplate,
+    commonReplacements
+  );
 
   // Structure the prompt data in the format expected by the new ChatRequestBody
   const structuredPromptData = {
     systemPrompt: systemPrompt,
-    
+
     // Character information
-    characterDescription: fileContents.character_card ? 
-      `# ${userObject.bot_name}'s Description:\n${replacePlaceholders(fileContents.character_card, commonReplacements)}` : null,
-      
-    characterPersonality: fileContents.character_personality ? 
-      `# ${userObject.bot_name}'s Personality:\n${replacePlaceholders(fileContents.character_personality, commonReplacements)}` : null,
-    
+    characterDescription: fileContents.character_card
+      ? `# ${userObject.bot_name}'s Description:\n${replacePlaceholders(fileContents.character_card, commonReplacements)}`
+      : null,
+
+    characterPersonality: fileContents.character_personality
+      ? `# ${userObject.bot_name}'s Personality:\n${replacePlaceholders(fileContents.character_personality, commonReplacements)}`
+      : null,
+
     // World information
-    worldInfo: fileContents.world_lore ? 
-      `# World Information:\nUse this information to reflect the world and context around ${userObject.bot_name}:\n${replacePlaceholders(fileContents.world_lore, commonReplacements)}` : null,
-    
+    worldInfo: fileContents.world_lore
+      ? `# World Information:\nUse this information to reflect the world and context around ${userObject.bot_name}:\n${replacePlaceholders(fileContents.world_lore, commonReplacements)}`
+      : null,
+
     // Scenario
-    scenario: fileContents.scenario ? 
-      `# Scenario:\n${replacePlaceholders(fileContents.scenario, commonReplacements)}` : null,
-    
+    scenario: fileContents.scenario
+      ? `# Scenario:\n${replacePlaceholders(fileContents.scenario, commonReplacements)}`
+      : null,
+
     // Player information
-    playerInfo: fileContents.player_info ? 
-      `# Information about ${userObject.user_name}:\nThis is pertinent information regarding ${userObject.user_name} that you should always remember.\n${replacePlaceholders(fileContents.player_info, commonReplacements)}` : null,
-    
+    playerInfo: fileContents.player_info
+      ? `# Information about ${userObject.user_name}:\nThis is pertinent information regarding ${userObject.user_name} that you should always remember.\n${replacePlaceholders(fileContents.player_info, commonReplacements)}`
+      : null,
+
     // Current chat messages
     recentChat: `# Current Messages from Chat:\nUp to the last ${await retrieveConfigValue("twitch.maxChatsToSave")} messages are provided to you from ${userObject.user_name}'s Twitch chat. Use these messages to keep up with the current conversation:\n${await returnRecentChats(userId)}`,
-    
+
     // Weather information
-    weatherInfo: userObject.weather && fileContents.weather ? 
-      `# Current Weather:\n${replacePlaceholders(fileContents.weather, commonReplacements)}` : null,
+    weatherInfo:
+      userObject.weather && fileContents.weather
+        ? `# Current Weather:\n${replacePlaceholders(fileContents.weather, commonReplacements)}`
+        : null,
 
     // Additional context elements
     additionalContext: {
       // Current date/time
-      dateTime: `# Current Date and Time:\n- The date and time where you and ${userObject.user_name} live is currently: ${timeStamp}`
+      dateTime: `# Current Date and Time:\n- The date and time where you and ${userObject.user_name} live is currently: ${timeStamp}`,
     },
-    
+
     // The actual user message
-    userMessage: message
+    userMessage: message,
   };
 
   // Create the chat request body with our structured prompt data
@@ -842,7 +1216,7 @@ const eventPromptChat = async (message, userId) => {
       "models.chat.maxTokens"
     )} tokens.`
   );
-  
+
   return promptWithSamplers;
 };
 
@@ -857,12 +1231,13 @@ const queryPrompt = async (message, userId) => {
   const userObject = await returnAuthObject(userId);
   const instructTemplate = await withErrorHandling(
     () => getTemplate(`./instructs/helpers/query.prompt`),
-    { 
-      context: 'Templates', 
-      defaultValue: '', 
-      logError: true 
+    {
+      context: "Templates",
+      defaultValue: "",
+      logError: true,
     }
-  );   const timeStamp = moment().format("MM/DD/YY [at] HH:mm");
+  );
+  const timeStamp = moment().format("MM/DD/YY [at] HH:mm");
   const [dateString, timeString] = timeStamp.split(" at ");
 
   // Get social media replacements with enhanced platform-specific support
@@ -873,15 +1248,18 @@ const queryPrompt = async (message, userId) => {
     "{{query}}": message,
     "{{user}}": userObject.user_name,
     "{{char}}": userObject.bot_name,
-    ...socialReplacements
+    ...socialReplacements,
   };
 
-  const instructionTemplate = replacePlaceholders(instructTemplate, replacements);
+  const instructionTemplate = replacePlaceholders(
+    instructTemplate,
+    replacements
+  );
   const promptWithSamplers = await QueryRequestBody.create(
     instructionTemplate,
     await retrieveConfigValue("models.query.model"),
-    message
-  )
+    message + "\n/no_think"
+  );
 
   logger.log(
     "LLM",
@@ -904,26 +1282,29 @@ const rerankPrompt = async (message, userId) => {
   const userObject = await returnAuthObject(userId);
   const instructTemplate = await withErrorHandling(
     () => getTemplate(`./instructs/helpers/rerank.prompt`),
-    { 
-      context: 'Templates', 
-      defaultValue: '', 
-      logError: true 
+    {
+      context: "Templates",
+      defaultValue: "",
+      logError: true,
     }
-  ); 
+  );
   // Get social media replacements with enhanced platform-specific support
   const socialReplacements = await getSocialMediaReplacements(userId);
 
   const replacements = {
     "{{user}}": userObject.user_name,
-    ...socialReplacements
+    ...socialReplacements,
   };
 
-  const instructionTemplate = replacePlaceholders(instructTemplate, replacements);
+  const instructionTemplate = replacePlaceholders(
+    instructTemplate,
+    replacements
+  );
   const promptWithSamplers = await ToolRequestBody.create(
     instructionTemplate,
     await retrieveConfigValue("models.rerankTransform.model"),
     message
-  )
+  );
 
   logger.log(
     "LLM",
@@ -937,17 +1318,17 @@ const rerankPrompt = async (message, userId) => {
 const summaryPrompt = async (textContent) => {
   const instructTemplate = await withErrorHandling(
     () => getTemplate(`./instructs/helpers/summary.prompt`),
-    { 
-      context: 'Templates', 
-      defaultValue: '', 
-      logError: true 
+    {
+      context: "Templates",
+      defaultValue: "",
+      logError: true,
     }
-  ); 
+  );
   const promptWithSamplers = await SummaryRequestBody.create(
     instructTemplate,
     await retrieveConfigValue("models.summary.model"),
     textContent
-  )
+  );
 
   logger.log(
     "LLM",
@@ -997,7 +1378,7 @@ const replyStripped = async (message, userId) => {
     .replace(/\\/g, "") // Remove backslashes
     .replace(/\p{Emoji_Presentation}|\p{Extended_Pictographic}/gu, "") // Remove only graphical emojis
     .replace(/\s+/g, " ") // Replace multiple spaces with a single space
-    .replace("shoutout", "shout out")
+    .replace("shoutout", "shout out");
   // Remove unmatched quotes ONLY at the beginning or end of the string
   formatted = formatted.replace(/^['"]|['"]$/g, ""); // Trim unmatched quotes at start and end
 
@@ -1042,7 +1423,6 @@ const fixTTSString = async (inputString) => {
   return { fixedString: transformedString, acronymCount, jsCount };
 };
 
-
 /**
  * Filters out character names from a message based on a regular expression.
  *
@@ -1070,7 +1450,7 @@ const filterCharacterFromMessage = async (str, userId) => {
  * @returns {string} - Escaped string safe for regex
  */
 function escapeRegExp(string) {
-  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /**
@@ -1084,81 +1464,102 @@ function escapeRegExp(string) {
 async function containsCharacterName(message, userId) {
   try {
     const userObj = await returnAuthObject(userId);
-    
-    if (!message || typeof message !== 'string') {
+
+    if (!message || typeof message !== "string") {
       return false;
     }
 
     const normalizedMessage = message.toLowerCase().trim();
-    
+
     // Get all possible name variations
     const namesToCheck = new Set();
-    
+
     // Add character/bot name
     if (userObj.bot_name) {
       namesToCheck.add(userObj.bot_name.toLowerCase());
     }
-    
+
     // Add Twitch bot username variations
     if (userObj.bot_twitch) {
       const botTwitch = userObj.bot_twitch.toLowerCase();
       namesToCheck.add(botTwitch);
       // Remove @ if present and add both versions
-      const cleanBotTwitch = botTwitch.startsWith('@') ? botTwitch.slice(1) : botTwitch;
+      const cleanBotTwitch = botTwitch.startsWith("@")
+        ? botTwitch.slice(1)
+        : botTwitch;
       namesToCheck.add(cleanBotTwitch);
-      namesToCheck.add('@' + cleanBotTwitch);
+      namesToCheck.add("@" + cleanBotTwitch);
     }
-    
+
     // Add the actual bot account username from tokens if available
     if (userObj.twitch_tokens?.bot?.twitch_login) {
       const botLogin = userObj.twitch_tokens.bot.twitch_login.toLowerCase();
       namesToCheck.add(botLogin);
-      namesToCheck.add('@' + botLogin);
+      namesToCheck.add("@" + botLogin);
     }
-    
+
     if (userObj.twitch_tokens?.bot?.twitch_display_name) {
-      const botDisplayName = userObj.twitch_tokens.bot.twitch_display_name.toLowerCase();
+      const botDisplayName =
+        userObj.twitch_tokens.bot.twitch_display_name.toLowerCase();
       namesToCheck.add(botDisplayName);
-      namesToCheck.add('@' + botDisplayName);
+      namesToCheck.add("@" + botDisplayName);
     }
-    
+
     // Also check against streamer account in case bot_twitch points to streamer
     if (userObj.twitch_tokens?.streamer?.twitch_login) {
-      const streamerLogin = userObj.twitch_tokens.streamer.twitch_login.toLowerCase();
+      const streamerLogin =
+        userObj.twitch_tokens.streamer.twitch_login.toLowerCase();
       namesToCheck.add(streamerLogin);
-      namesToCheck.add('@' + streamerLogin);
+      namesToCheck.add("@" + streamerLogin);
     }
-    
+
     // Remove empty/undefined entries
-    const validNames = Array.from(namesToCheck).filter(name => name && name.length > 0);
-    
+    const validNames = Array.from(namesToCheck).filter(
+      (name) => name && name.length > 0
+    );
+
     if (validNames.length === 0) {
-      logger.warn("Twitch", `No valid bot names found for user ${userId} when checking mentions`);
+      logger.warn(
+        "Twitch",
+        `No valid bot names found for user ${userId} when checking mentions`
+      );
       return false;
     }
-    
+
     // Check each name variation
     for (const nameToCheck of validNames) {
       // Exact word match (handles @mentions and regular mentions)
-      const wordBoundaryRegex = new RegExp(`\\b${escapeRegExp(nameToCheck)}\\b`, 'i');
+      const wordBoundaryRegex = new RegExp(
+        `\\b${escapeRegExp(nameToCheck)}\\b`,
+        "i"
+      );
       if (wordBoundaryRegex.test(normalizedMessage)) {
-        logger.log("Twitch", `Character name detected: "${nameToCheck}" in message: "${message}"`);
+        logger.log(
+          "Twitch",
+          `Character name detected: "${nameToCheck}" in message: "${message}"`
+        );
         return true;
       }
-      
+
       // Also check for @ mentions without word boundaries (for usernames with special chars)
-      if (nameToCheck.startsWith('@')) {
-        const atMentionRegex = new RegExp(`${escapeRegExp(nameToCheck)}`, 'i');
+      if (nameToCheck.startsWith("@")) {
+        const atMentionRegex = new RegExp(`${escapeRegExp(nameToCheck)}`, "i");
         if (atMentionRegex.test(normalizedMessage)) {
-          logger.log("Twitch", `@ mention detected: "${nameToCheck}" in message: "${message}"`);
+          logger.log(
+            "Twitch",
+            `@ mention detected: "${nameToCheck}" in message: "${message}"`
+          );
           return true;
         }
       }
     }
-    
+
     return false;
   } catch (error) {
-    logger.error("Twitch", `Error checking character name in message: ${error.message}`);
+    logger.error(
+      "Twitch",
+      `Error checking character name in message: ${error.message}`
+    );
     return false;
   }
 }
@@ -1187,35 +1588,51 @@ async function containsPlayerSocials(message, userId) {
 async function containsAuxBotName(message, userId) {
   try {
     const userObj = await returnAuthObject(userId);
-    
-    if (!message || typeof message !== 'string' || !Array.isArray(userObj.aux_bots)) {
+
+    if (
+      !message ||
+      typeof message !== "string" ||
+      !Array.isArray(userObj.aux_bots)
+    ) {
       return false;
     }
-    
+
     const normalizedMessage = message.toLowerCase();
-    
+
     // Check each aux bot name
     for (const botName of userObj.aux_bots) {
-      if (!botName || typeof botName !== 'string') continue;
-      
+      if (!botName || typeof botName !== "string") continue;
+
       const normalizedBotName = botName.toLowerCase();
-      
+
       // Check for exact word match
-      const wordBoundaryRegex = new RegExp(`\\b${escapeRegExp(normalizedBotName)}\\b`, 'i');
+      const wordBoundaryRegex = new RegExp(
+        `\\b${escapeRegExp(normalizedBotName)}\\b`,
+        "i"
+      );
       if (wordBoundaryRegex.test(normalizedMessage)) {
-        logger.log("Twitch", `Aux bot name detected: "${botName}" in message, ignoring`);
+        logger.log(
+          "Twitch",
+          `Aux bot name detected: "${botName}" in message, ignoring`
+        );
         return true;
       }
-      
+
       // Also check with @ prefix
-      const atBotName = '@' + normalizedBotName;
-      const atMentionRegex = new RegExp(`\\b${escapeRegExp(atBotName)}\\b`, 'i');
+      const atBotName = "@" + normalizedBotName;
+      const atMentionRegex = new RegExp(
+        `\\b${escapeRegExp(atBotName)}\\b`,
+        "i"
+      );
       if (atMentionRegex.test(normalizedMessage)) {
-        logger.log("Twitch", `Aux bot @ mention detected: "${atBotName}" in message, ignoring`);
+        logger.log(
+          "Twitch",
+          `Aux bot @ mention detected: "${atBotName}" in message, ignoring`
+        );
         return true;
       }
     }
-    
+
     return false;
   } catch (error) {
     logger.error("Twitch", `Error checking aux bot names: ${error.message}`);
@@ -1236,5 +1653,5 @@ export {
   fixTTSString,
   rerankPrompt,
   eventPromptChat,
-  containsCharacterName
+  containsCharacterName,
 };

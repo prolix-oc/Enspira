@@ -11,7 +11,9 @@ let connectionEstablished = false;
 let connectionRetries = 0;
 const MAX_RETRIES = 5;
 
-// Define user schema with essential fields
+// mongodb-client.js - Updated schema with alternateSpell field
+// Add this to the userSchema definition in mongodb-client.js
+
 const userSchema = new mongoose.Schema(
   {
     // Required unique identifier
@@ -32,6 +34,24 @@ const userSchema = new mongoose.Schema(
     twitch_name: String,
     bot_name: String,
     bot_twitch: String,
+
+    // FIXED: Add alternateSpell field for vocal interaction name replacements
+    alternateSpell: {
+      type: Array,
+      default: [],
+      validate: {
+        validator: function (arr) {
+          // Validate that each item is either a string or an object with from/to
+          return arr.every(
+            (item) =>
+              typeof item === "string" ||
+              (typeof item === "object" && item.from && item.to)
+          );
+        },
+        message:
+          "alternateSpell items must be strings or objects with from/to properties",
+      },
+    },
 
     // Token and integration data
     twitch_tokens: {
@@ -109,6 +129,251 @@ const userSchema = new mongoose.Schema(
     minimize: false, // Store empty objects
   }
 );
+
+// FIXED: Migration script to add alternateSpell field to existing users
+async function migrateAlternateSpellField() {
+  try {
+    logger.log("MongoDB", "Starting migration for alternateSpell field...");
+
+    // Update all users that don't have the alternateSpell field
+    const result = await User.updateMany(
+      { alternateSpell: { $exists: false } },
+      { $set: { alternateSpell: [] } }
+    );
+
+    logger.log(
+      "MongoDB",
+      `Updated ${result.modifiedCount} users with alternateSpell field`
+    );
+
+    // For users with bot_name "Layla", add common alternate spellings
+    const laylaUsers = await User.find({ bot_name: "Layla" });
+    for (const user of laylaUsers) {
+      if (!user.alternateSpell || user.alternateSpell.length === 0) {
+        await User.updateOne(
+          { user_id: user.user_id },
+          {
+            $set: {
+              alternateSpell: ["Leila", "Lila", "Laila", "Leyla"],
+            },
+          }
+        );
+        logger.log(
+          "MongoDB",
+          `Added default alternate spellings for Layla user: ${user.user_id}`
+        );
+      }
+    }
+
+    return true;
+  } catch (error) {
+    logger.error(
+      "MongoDB",
+      `Error during alternateSpell migration: ${error.message}`
+    );
+    return false;
+  }
+}
+
+// FIXED: Helper function to add alternate spelling to a user
+export async function addAlternateSpelling(userId, alternateSpelling) {
+  try {
+    if (!connectionEstablished) {
+      const connected = await connectToMongoDB();
+      if (!connected) {
+        logger.error(
+          "MongoDB",
+          "Cannot add alternate spelling: Database not connected"
+        );
+        return false;
+      }
+    }
+
+    // Validate input
+    if (
+      typeof alternateSpelling !== "string" &&
+      !(
+        typeof alternateSpelling === "object" &&
+        alternateSpelling.from &&
+        alternateSpelling.to
+      )
+    ) {
+      logger.error("MongoDB", "Invalid alternateSpelling format");
+      return false;
+    }
+
+    // Add to user's alternateSpell array
+    const result = await User.updateOne(
+      { user_id: userId },
+      { $addToSet: { alternateSpell: alternateSpelling } }
+    );
+
+    if (result.modifiedCount > 0) {
+      // Update cache if user is cached
+      if (userCache.has(userId)) {
+        const cachedUser = userCache.get(userId);
+        if (!cachedUser.data.alternateSpell) {
+          cachedUser.data.alternateSpell = [];
+        }
+        cachedUser.data.alternateSpell.push(alternateSpelling);
+        userCache.set(userId, {
+          ...cachedUser,
+          lastModified: Date.now(),
+        });
+      }
+
+      logger.log(
+        "MongoDB",
+        `Added alternate spelling "${JSON.stringify(alternateSpelling)}" for user ${userId}`
+      );
+      return true;
+    }
+
+    return false;
+  } catch (error) {
+    logger.error(
+      "MongoDB",
+      `Error adding alternate spelling: ${error.message}`
+    );
+    return false;
+  }
+}
+
+// FIXED: Helper function to remove alternate spelling from a user
+export async function removeAlternateSpelling(userId, alternateSpelling) {
+  try {
+    if (!connectionEstablished) {
+      const connected = await connectToMongoDB();
+      if (!connected) {
+        logger.error(
+          "MongoDB",
+          "Cannot remove alternate spelling: Database not connected"
+        );
+        return false;
+      }
+    }
+
+    // Remove from user's alternateSpell array
+    const result = await User.updateOne(
+      { user_id: userId },
+      { $pull: { alternateSpell: alternateSpelling } }
+    );
+
+    if (result.modifiedCount > 0) {
+      // Update cache if user is cached
+      if (userCache.has(userId)) {
+        const cachedUser = userCache.get(userId);
+        if (cachedUser.data.alternateSpell) {
+          cachedUser.data.alternateSpell =
+            cachedUser.data.alternateSpell.filter(
+              (item) =>
+                JSON.stringify(item) !== JSON.stringify(alternateSpelling)
+            );
+          userCache.set(userId, {
+            ...cachedUser,
+            lastModified: Date.now(),
+          });
+        }
+      }
+
+      logger.log(
+        "MongoDB",
+        `Removed alternate spelling "${JSON.stringify(alternateSpelling)}" for user ${userId}`
+      );
+      return true;
+    }
+
+    return false;
+  } catch (error) {
+    logger.error(
+      "MongoDB",
+      `Error removing alternate spelling: ${error.message}`
+    );
+    return false;
+  }
+}
+
+async function migrateFromFileIfNeeded() {
+  try {
+    const count = await User.countDocuments({});
+    if (count === 0) {
+      logger.log("MongoDB", "Collection is empty, migrating from file...");
+
+      const authFilePath = await retrieveConfigValue("server.authFilePath");
+      if (fs.existsSync(authFilePath)) {
+        const fileData = await fs.readJSON(authFilePath);
+
+        if (Array.isArray(fileData) && fileData.length > 0) {
+          // Transform the data before inserting
+          const transformedData = fileData.map((user) => {
+            // Create a clean copy of the user object
+            const transformedUser = { ...user };
+
+            // FIXED: Add alternateSpell field if it doesn't exist
+            if (!transformedUser.alternateSpell) {
+              transformedUser.alternateSpell = [];
+
+              // Add default alternate spellings for common names
+              if (transformedUser.bot_name === "Layla") {
+                transformedUser.alternateSpell = [
+                  "Leila",
+                  "Lila",
+                  "Laila",
+                  "Leyla",
+                ];
+              }
+            }
+
+            // Fix stream_status if it exists but isn't in the right format
+            if (
+              transformedUser.stream_status &&
+              typeof transformedUser.stream_status !== "object"
+            ) {
+              transformedUser.stream_status = {
+                online: false,
+                updated_at: new Date().toISOString(),
+              };
+            } else if (transformedUser.stream_status) {
+              // Ensure it has the expected structure
+              transformedUser.stream_status = {
+                online: transformedUser.stream_status.online || false,
+                started_at: transformedUser.stream_status.started_at || null,
+                type: transformedUser.stream_status.type || null,
+                title: transformedUser.stream_status.title || null,
+                viewer_count: transformedUser.stream_status.viewer_count || 0,
+                updated_at:
+                  transformedUser.stream_status.updated_at ||
+                  new Date().toISOString(),
+              };
+            }
+
+            return transformedUser;
+          });
+
+          // Insert transformed data
+          await User.insertMany(transformedData, { validateBeforeSave: false });
+          logger.log(
+            "MongoDB",
+            `Migrated ${transformedData.length} users from file to MongoDB`
+          );
+
+          // Create backup of original file
+          const backupPath = `${authFilePath}.bak.${Date.now()}`;
+          await fs.copy(authFilePath, backupPath);
+          logger.log(
+            "MongoDB",
+            `Created backup of original auth file at ${backupPath}`
+          );
+        }
+      }
+    } else {
+      // FIXED: Run the alternateSpell migration for existing users
+      await migrateAlternateSpellField();
+    }
+  } catch (error) {
+    logger.error("MongoDB", `Migration error: ${error.message}`);
+  }
+}
 
 const chatMessageSchema = new mongoose.Schema(
   {
@@ -220,74 +485,9 @@ function handleConnectionError(err) {
   }
 }
 
-// Migrate data from auth_keys.json if collection is empty
-async function migrateFromFileIfNeeded() {
-  try {
-    const count = await User.countDocuments({});
-    if (count === 0) {
-      logger.log("MongoDB", "Collection is empty, migrating from file...");
-
-      const authFilePath = await retrieveConfigValue("server.authFilePath");
-      if (fs.existsSync(authFilePath)) {
-        const fileData = await fs.readJSON(authFilePath);
-
-        if (Array.isArray(fileData) && fileData.length > 0) {
-          // Transform the data before inserting
-          const transformedData = fileData.map((user) => {
-            // Create a clean copy of the user object
-            const transformedUser = { ...user };
-
-            // Fix stream_status if it exists but isn't in the right format
-            if (
-              transformedUser.stream_status &&
-              typeof transformedUser.stream_status !== "object"
-            ) {
-              transformedUser.stream_status = {
-                online: false,
-                updated_at: new Date().toISOString(),
-              };
-            } else if (transformedUser.stream_status) {
-              // Ensure it has the expected structure
-              transformedUser.stream_status = {
-                online: transformedUser.stream_status.online || false,
-                started_at: transformedUser.stream_status.started_at || null,
-                type: transformedUser.stream_status.type || null,
-                title: transformedUser.stream_status.title || null,
-                viewer_count: transformedUser.stream_status.viewer_count || 0,
-                updated_at:
-                  transformedUser.stream_status.updated_at ||
-                  new Date().toISOString(),
-              };
-            }
-
-            return transformedUser;
-          });
-
-          // Insert transformed data
-          await User.insertMany(transformedData, { validateBeforeSave: false });
-          logger.log(
-            "MongoDB",
-            `Migrated ${transformedData.length} users from file to MongoDB`
-          );
-
-          // Create backup of original file
-          const backupPath = `${authFilePath}.bak.${Date.now()}`;
-          await fs.copy(authFilePath, backupPath);
-          logger.log(
-            "MongoDB",
-            `Created backup of original auth file at ${backupPath}`
-          );
-        }
-      }
-    }
-  } catch (error) {
-    logger.error("MongoDB", `Migration error: ${error.message}`);
-  }
-}
-
 async function withCaching(key, fetchFn, options = {}) {
   const { ttl = 60000, forceFresh = false } = options;
-  
+
   // Check cache first unless forceFresh is true
   if (!forceFresh && userCache.has(key)) {
     const cachedData = userCache.get(key);
@@ -296,7 +496,7 @@ async function withCaching(key, fetchFn, options = {}) {
     }
     userCache.delete(key);
   }
-  
+
   // Try DB connection if needed
   if (!connectionEstablished) {
     const connected = await connectToMongoDB();
@@ -305,20 +505,20 @@ async function withCaching(key, fetchFn, options = {}) {
       return null;
     }
   }
-  
+
   // Fetch from database
   try {
     const data = await fetchFn();
-    
+
     if (data) {
       // Cache for specified time
       userCache.set(key, {
         data,
         expiry: Date.now() + ttl,
-        lastModified: Date.now()
+        lastModified: Date.now(),
       });
     }
-    
+
     return data;
   } catch (error) {
     logger.error("MongoDB", `Error fetching data for ${key}: ${error.message}`);
@@ -329,9 +529,7 @@ async function withCaching(key, fetchFn, options = {}) {
 // Get user by ID with caching
 export async function getUserById(userId) {
   try {
-    return withCaching(userId, 
-      () => User.findOne({ user_id: userId }).lean()
-    );
+    return withCaching(userId, () => User.findOne({ user_id: userId }).lean());
   } catch (error) {
     logger.error("MongoDB", `Error fetching user ${userId}: ${error.message}`);
     return null;
@@ -715,7 +913,7 @@ export async function storeChatMessage(
 export async function getChatCount(userId) {
   try {
     const numChats = await ChatMessage.countDocuments({ user_id: userId });
-    logger.log("Mongo", `Getting ${numChats} for ${userId}`)
+    logger.log("Mongo", `Getting ${numChats} for ${userId}`);
   } catch (error) {
     logger.error("MongoDB", `Error counting chats: ${error.message}`);
     return 0;

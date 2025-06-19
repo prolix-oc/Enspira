@@ -168,14 +168,29 @@ export const tokenizedFromRemote = async (message) => {
 }
 
 export const promptTokenizedFromRemote = async (message) => {
-  const tokenizerUrl = await retrieveConfigValue("models.chat.endpoint") + "/tokenize"
+  const baseURL = await retrieveConfigValue("models.chat.endpoint")
+  const isVllm = await retrieveConfigValue("models.chat.isVllm")
   const modelName = await retrieveConfigValue("models.chat.model")
+  let fullUrl = ""
+  let reqBody = {}
+  if (isVllm) {
+    fullUrl = baseURL + "/tokenize"
+    fullUrl = fullUrl.replace("/v1", "")
+    reqBody = {
+      messages: message,
+      model: modelName
+    }
+  } else {
+    fullUrl = baseURL + "/tokenize"
+    reqBody = {
+      messages: message,
+      model: modelName
+    }  
+  }
+
   try {
-    const response = await axios.post(tokenizerUrl,
-      {
-        model: `${modelName}`,
-        messages: message
-      },
+    const response = await axios.post(fullUrl,
+      reqBody,
       { 
         headers: {
           'Content-Type': 'application/json',

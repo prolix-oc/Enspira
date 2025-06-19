@@ -216,147 +216,204 @@ async function routes(fastify, options) {
 
   // Voice file upload endpoint
   // Updated server route to use the new JSON endpoint on the helper API
-  fastify.post('/character/voice-upload', { preHandler: requireAuth }, async (request, reply) => {
-    try {
-      const user = request.user;
-
-      // Debug logging
-      logger.log("Audio", `Voice upload request received for user ${user.user_id}`);
-
-      // Extract file data from the request body
-      const fileData = request.body.files || [];
-
-      logger.log("Audio", `Received ${fileData.length} files in Base64 format`);
-
-      if (fileData.length === 0) {
-        logger.error("Audio", "No files received in request");
-        return reply.redirect('/web/character?error=No+files+uploaded');
-      }
-
-      // Validate file count
-      if (fileData.length > 4) {
-        logger.error("Audio", `Too many files: ${fileData.length}`);
-        return reply.redirect('/web/character?error=Maximum+4+files+allowed');
-      }
-
-      // Process each file
-      const processedFiles = [];
-
-      for (const file of fileData) {
-        try {
-          // Validate the file data
-          if (!file.name || !file.data) {
-            logger.error("Audio", "Invalid file data: missing name or data");
-            continue;
-          }
-
-          // Check file name
-          if (!file.name.toLowerCase().endsWith('.wav')) {
-            logger.error("Audio", `File ${file.name} is not a WAV file`);
-            return reply.redirect('/web/character?error=Only+WAV+files+are+accepted');
-          }
-
-          // Decode Base64 data
-          const base64Data = file.data.split(';base64,').pop();
-          const buffer = Buffer.from(base64Data, 'base64');
-
-          // Check file size
-          if (buffer.length > 3 * 1024 * 1024) {
-            logger.error("Audio", `File ${file.name} exceeds 3MB limit (${buffer.length} bytes)`);
-            return reply.redirect('/web/character?error=File+exceeds+3MB+limit');
-          }
-
-          logger.log("Audio", `Decoded ${file.name}: ${buffer.length} bytes`);
-
-          // Validate audio file - now using our lightweight parser
-          const validationResult = await validateWavBuffer(buffer);
-
-          if (!validationResult.valid) {
-            logger.error("Audio", `Audio validation failed for ${file.name}: ${validationResult.reason}`);
-            return reply.redirect(`/web/character?error=${encodeURIComponent(validationResult.reason)}`);
-          }
-
-          // Add to processed files - we'll pass along the Base64 data directly
-          processedFiles.push({
-            name: file.name,
-            data: file.data
-          });
-
-          logger.log("Audio", `Validated ${file.name}: sampleRate=${validationResult.sampleRate}Hz, duration=${validationResult.duration.toFixed(1)}s`);
-        } catch (fileError) {
-          logger.error("Audio", `Error processing file ${file.name}: ${fileError.message}`);
-          return reply.redirect('/web/character?error=Error+processing+file');
-        }
-      }
-
-      // Check if we have any valid files
-      if (processedFiles.length === 0) {
-        logger.error("Audio", "No valid files found in request");
-        return reply.redirect('/web/character?error=No+valid+files+uploaded');
-      }
-
-      // Get the base URL for the helper API
-      const helperApiBase = await retrieveConfigValue("voiceHelper.endpoint") || 'http://localhost:3500';
-
-      // Construct the JSON endpoint URL - now using the new create-json endpoint
-      const helperApiEndpoint = `${helperApiBase}/voice/create-json`;
-
-      // Log that we're sending files to the helper API
-      logger.log("Audio", `Sending ${processedFiles.length} files to voice helper API at ${helperApiEndpoint}`);
-
-      // Send to helper API using JSON
+  fastify.post(
+    "/character/voice-upload",
+    { preHandler: requireAuth },
+    async (request, reply) => {
       try {
-        const axios = (await import('axios')).default;
+        const user = request.user;
 
-        // Create the JSON payload
-        const jsonPayload = {
-          files: processedFiles
-        };
-
-        // Send the request with JSON payload
-        const response = await axios.post(
-          `${helperApiEndpoint}?userID=${user.user_id}&characterName=${encodeURIComponent(user.bot_name || 'character')}`,
-          jsonPayload,
-          {
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            timeout: 60000, // 60 second timeout
-            maxContentLength: Infinity,
-            maxBodyLength: Infinity
-          }
+        // Debug logging
+        logger.log(
+          "Audio",
+          `Voice upload request received for user ${user.user_id}`
         );
 
-        // Check response
-        if (response.data && response.data.success && response.data.filename) {
-          // Update user's speaker_file with the returned filename
-          await updateUserParameter(user.user_id, "speaker_file", response.data.filename);
+        // Extract file data from the request body
+        const fileData = request.body.files || [];
 
-          logger.log("Audio", `Successfully processed voice files for user ${user.user_id}, saved as ${response.data.filename}`);
+        logger.log(
+          "Audio",
+          `Received ${fileData.length} files in Base64 format`
+        );
 
-          // Redirect with success message
-          return reply.redirect('/web/character?success=Voice+files+uploaded+successfully');
-        } else {
-          logger.error("Audio", `Helper API error: ${JSON.stringify(response.data)}`);
-          return reply.redirect('/web/character?error=Failed+to+process+voice+files');
-        }
-      } catch (apiError) {
-        logger.error("Audio", `Helper API request failed: ${apiError.message}`);
-
-        let errorMessage = 'Upload+failed';
-        if (apiError.code === 'ECONNREFUSED' || apiError.code === 'ECONNABORTED') {
-          errorMessage = 'Voice+processing+service+unavailable';
-        } else if (apiError.response && apiError.response.status) {
-          errorMessage = `Server+error+${apiError.response.status}`;
+        if (fileData.length === 0) {
+          logger.error("Audio", "No files received in request");
+          return reply.redirect("/web/character?error=No+files+uploaded");
         }
 
-        return reply.redirect(`/web/character?error=${errorMessage}`);
+        // Validate file count
+        if (fileData.length > 4) {
+          logger.error("Audio", `Too many files: ${fileData.length}`);
+          return reply.redirect("/web/character?error=Maximum+4+files+allowed");
+        }
+
+        // Process each file
+        const processedFiles = [];
+
+        for (const file of fileData) {
+          try {
+            // Validate the file data
+            if (!file.name || !file.data) {
+              logger.error("Audio", "Invalid file data: missing name or data");
+              continue;
+            }
+
+            // Check file name
+            if (!file.name.toLowerCase().endsWith(".wav")) {
+              logger.error("Audio", `File ${file.name} is not a WAV file`);
+              return reply.redirect(
+                "/web/character?error=Only+WAV+files+are+accepted"
+              );
+            }
+
+            // Decode Base64 data
+            const base64Data = file.data.split(";base64,").pop();
+            const buffer = Buffer.from(base64Data, "base64");
+
+            // Check file size
+            if (buffer.length > 3 * 1024 * 1024) {
+              logger.error(
+                "Audio",
+                `File ${file.name} exceeds 3MB limit (${buffer.length} bytes)`
+              );
+              return reply.redirect(
+                "/web/character?error=File+exceeds+3MB+limit"
+              );
+            }
+
+            logger.log("Audio", `Decoded ${file.name}: ${buffer.length} bytes`);
+
+            // Validate audio file - now using our lightweight parser
+            const validationResult = await validateWavBuffer(buffer);
+
+            if (!validationResult.valid) {
+              logger.error(
+                "Audio",
+                `Audio validation failed for ${file.name}: ${validationResult.reason}`
+              );
+              return reply.redirect(
+                `/web/character?error=${encodeURIComponent(validationResult.reason)}`
+              );
+            }
+
+            // Add to processed files - we'll pass along the Base64 data directly
+            processedFiles.push({
+              name: file.name,
+              data: file.data,
+            });
+
+            logger.log(
+              "Audio",
+              `Validated ${file.name}: sampleRate=${validationResult.sampleRate}Hz, duration=${validationResult.duration.toFixed(1)}s`
+            );
+          } catch (fileError) {
+            logger.error(
+              "Audio",
+              `Error processing file ${file.name}: ${fileError.message}`
+            );
+            return reply.redirect("/web/character?error=Error+processing+file");
+          }
+        }
+
+        // Check if we have any valid files
+        if (processedFiles.length === 0) {
+          logger.error("Audio", "No valid files found in request");
+          return reply.redirect("/web/character?error=No+valid+files+uploaded");
+        }
+
+        // Get the base URL for the helper API
+        const helperApiBase =
+          (await retrieveConfigValue("voiceHelper.endpoint")) ||
+          "http://localhost:3500";
+
+        // Construct the JSON endpoint URL - now using the new create-json endpoint
+        const helperApiEndpoint = `${helperApiBase}/voice/create-json`;
+
+        // Log that we're sending files to the helper API
+        logger.log(
+          "Audio",
+          `Sending ${processedFiles.length} files to voice helper API at ${helperApiEndpoint}`
+        );
+
+        // Send to helper API using JSON
+        try {
+          const axios = (await import("axios")).default;
+
+          // Create the JSON payload
+          const jsonPayload = {
+            files: processedFiles,
+          };
+
+          // Send the request with JSON payload
+          const response = await axios.post(
+            `${helperApiEndpoint}?userID=${user.user_id}&characterName=${encodeURIComponent(user.bot_name || "character")}`,
+            jsonPayload,
+            {
+              headers: {
+                "Content-Type": "application/json",
+              },
+              timeout: 60000, // 60 second timeout
+              maxContentLength: Infinity,
+              maxBodyLength: Infinity,
+            }
+          );
+
+          // Check response
+          if (
+            response.data &&
+            response.data.success &&
+            response.data.filename
+          ) {
+            // Update user's speaker_file with the returned filename
+            await updateUserParameter(
+              user.user_id,
+              "speaker_file",
+              response.data.filename
+            );
+
+            logger.log(
+              "Audio",
+              `Successfully processed voice files for user ${user.user_id}, saved as ${response.data.filename}`
+            );
+
+            // Redirect with success message
+            return reply.redirect(
+              "/web/character?success=Voice+files+uploaded+successfully"
+            );
+          } else {
+            logger.error(
+              "Audio",
+              `Helper API error: ${JSON.stringify(response.data)}`
+            );
+            return reply.redirect(
+              "/web/character?error=Failed+to+process+voice+files"
+            );
+          }
+        } catch (apiError) {
+          logger.error(
+            "Audio",
+            `Helper API request failed: ${apiError.message}`
+          );
+
+          let errorMessage = "Upload+failed";
+          if (
+            apiError.code === "ECONNREFUSED" ||
+            apiError.code === "ECONNABORTED"
+          ) {
+            errorMessage = "Voice+processing+service+unavailable";
+          } else if (apiError.response && apiError.response.status) {
+            errorMessage = `Server+error+${apiError.response.status}`;
+          }
+
+          return reply.redirect(`/web/character?error=${errorMessage}`);
+        }
+      } catch (error) {
+        logger.error("Audio", `Error in voice upload route: ${error.message}`);
+        return reply.redirect("/web/character?error=Internal+server+error");
       }
-    } catch (error) {
-      logger.error("Audio", `Error in voice upload route: ${error.message}`);
-      return reply.redirect('/web/character?error=Internal+server+error');
     }
-  });
+  );
 
   // Logout route
   fastify.get("/auth/logout", async (request, reply) => {
@@ -1029,6 +1086,265 @@ async function routes(fastify, options) {
     }
   );
 
+  fastify.post(
+    "/alternate-spellings",
+    {
+      preHandler: fastify.authenticate,
+      schema: {
+        body: {
+          type: "object",
+          properties: {
+            spelling: {
+              oneOf: [
+                { type: "string" },
+                {
+                  type: "object",
+                  properties: {
+                    from: { type: "string" },
+                    to: { type: "string" },
+                  },
+                  required: ["from", "to"],
+                },
+              ],
+            },
+          },
+          required: ["spelling"],
+        },
+      },
+    },
+    async (request, reply) => {
+      try {
+        const userId = request.user.user_id;
+        const { spelling } = request.body;
+
+        // Import the function from mongodb-client
+        const { addAlternateSpelling } = await import("../mongodb-client.js");
+
+        const success = await addAlternateSpelling(userId, spelling);
+
+        if (success) {
+          return reply.send({
+            success: true,
+            message: "Alternate spelling added successfully",
+            data: { spelling },
+          });
+        } else {
+          return reply.code(400).send({
+            success: false,
+            error: "Failed to add alternate spelling",
+          });
+        }
+      } catch (error) {
+        logger.error(
+          "API",
+          `Error adding alternate spelling: ${error.message}`
+        );
+        return reply.code(500).send({
+          success: false,
+          error: "Internal server error",
+        });
+      }
+    }
+  );
+
+  fastify.delete(
+    "/alternate-spellings",
+    {
+      preHandler: fastify.authenticate,
+      schema: {
+        body: {
+          type: "object",
+          properties: {
+            spelling: {
+              oneOf: [
+                { type: "string" },
+                {
+                  type: "object",
+                  properties: {
+                    from: { type: "string" },
+                    to: { type: "string" },
+                  },
+                  required: ["from", "to"],
+                },
+              ],
+            },
+          },
+          required: ["spelling"],
+        },
+      },
+    },
+    async (request, reply) => {
+      try {
+        const userId = request.user.user_id;
+        const { spelling } = request.body;
+
+        // Import the function from mongodb-client
+        const { removeAlternateSpelling } = await import(
+          "../mongodb-client.js"
+        );
+
+        const success = await removeAlternateSpelling(userId, spelling);
+
+        if (success) {
+          return reply.send({
+            success: true,
+            message: "Alternate spelling removed successfully",
+            data: { spelling },
+          });
+        } else {
+          return reply.code(400).send({
+            success: false,
+            error: "Failed to remove alternate spelling",
+          });
+        }
+      } catch (error) {
+        logger.error(
+          "API",
+          `Error removing alternate spelling: ${error.message}`
+        );
+        return reply.code(500).send({
+          success: false,
+          error: "Internal server error",
+        });
+      }
+    }
+  );
+
+  // Test alternate spelling replacement
+  fastify.post(
+    "/alternate-spellings/test",
+    {
+      preHandler: fastify.authenticate,
+      schema: {
+        body: {
+          type: "object",
+          properties: {
+            text: { type: "string" },
+          },
+          required: ["text"],
+        },
+      },
+    },
+    async (request, reply) => {
+      try {
+        const userId = request.user.user_id;
+        const { text } = request.body;
+        const userObj = await returnAuthObject(userId);
+
+        if (!userObj) {
+          return reply.code(404).send({
+            success: false,
+            error: "User not found",
+          });
+        }
+
+        // Apply alternate spelling logic
+        let processedText = text;
+        const alternateSpellings = userObj.alternateSpell || [];
+
+        function escapeRegExp(string) {
+          return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        }
+
+        const replacements = [];
+
+        for (const alternateEntry of alternateSpellings) {
+          if (typeof alternateEntry === "string") {
+            const regex = new RegExp(
+              `\\b${escapeRegExp(alternateEntry)}\\b`,
+              "gi"
+            );
+            const matches = text.match(regex);
+            if (matches) {
+              processedText = processedText.replace(regex, userObj.bot_name);
+              replacements.push({
+                from: alternateEntry,
+                to: userObj.bot_name,
+                occurrences: matches.length,
+              });
+            }
+          } else if (
+            typeof alternateEntry === "object" &&
+            alternateEntry.from &&
+            alternateEntry.to
+          ) {
+            const regex = new RegExp(
+              `\\b${escapeRegExp(alternateEntry.from)}\\b`,
+              "gi"
+            );
+            const matches = text.match(regex);
+            if (matches) {
+              processedText = processedText.replace(regex, alternateEntry.to);
+              replacements.push({
+                from: alternateEntry.from,
+                to: alternateEntry.to,
+                occurrences: matches.length,
+              });
+            }
+          }
+        }
+
+        return reply.send({
+          success: true,
+          data: {
+            original_text: text,
+            processed_text: processedText,
+            replacements: replacements,
+            bot_name: userObj.bot_name,
+            alternate_spellings_used: alternateSpellings,
+          },
+        });
+      } catch (error) {
+        logger.error(
+          "API",
+          `Error testing alternate spellings: ${error.message}`
+        );
+        return reply.code(500).send({
+          success: false,
+          error: "Internal server error",
+        });
+      }
+    }
+  );
+
+  fastify.get(
+    "/alternate-spellings",
+    {
+      preHandler: fastify.authenticate,
+    },
+    async (request, reply) => {
+      try {
+        const userId = request.user.user_id;
+        const userObj = await returnAuthObject(userId);
+
+        if (!userObj) {
+          return reply.code(404).send({
+            success: false,
+            error: "User not found",
+          });
+        }
+
+        return reply.send({
+          success: true,
+          data: {
+            bot_name: userObj.bot_name,
+            alternate_spellings: userObj.alternateSpell || [],
+            count: (userObj.alternateSpell || []).length,
+          },
+        });
+      } catch (error) {
+        logger.error(
+          "API",
+          `Error fetching alternate spellings: ${error.message}`
+        );
+        return reply.code(500).send({
+          success: false,
+          error: "Internal server error",
+        });
+      }
+    }
+  );
+
   // Bot configuration update endpoint
   fastify.post(
     "/world/bot-config",
@@ -1216,19 +1532,22 @@ async function validateWavBuffer(buffer) {
     if (!buffer || buffer.length < 44) {
       return {
         valid: false,
-        reason: "Invalid WAV file: too small or corrupted"
+        reason: "Invalid WAV file: too small or corrupted",
       };
     }
 
     // Check WAV header magic bytes (RIFF....WAVE)
-    const isRiff = buffer.slice(0, 4).toString() === 'RIFF';
-    const isWave = buffer.slice(8, 12).toString() === 'WAVE';
+    const isRiff = buffer.slice(0, 4).toString() === "RIFF";
+    const isWave = buffer.slice(8, 12).toString() === "WAVE";
 
     if (!isRiff || !isWave) {
-      logger.error("Audio", `Invalid WAV header: RIFF=${isRiff}, WAVE=${isWave}`);
+      logger.error(
+        "Audio",
+        `Invalid WAV header: RIFF=${isRiff}, WAVE=${isWave}`
+      );
       return {
         valid: false,
-        reason: "Invalid WAV file: incorrect format"
+        reason: "Invalid WAV file: incorrect format",
       };
     }
 
@@ -1241,7 +1560,7 @@ async function validateWavBuffer(buffer) {
       const chunkId = buffer.slice(offset, offset + 4).toString();
       const chunkSize = buffer.readUInt32LE(offset + 4);
 
-      if (chunkId === 'fmt ') {
+      if (chunkId === "fmt ") {
         fmtChunkFound = true;
         break;
       }
@@ -1253,7 +1572,7 @@ async function validateWavBuffer(buffer) {
       logger.error("Audio", "WAV file missing 'fmt ' chunk");
       return {
         valid: false,
-        reason: "Invalid WAV file: missing format information"
+        reason: "Invalid WAV file: missing format information",
       };
     }
 
@@ -1283,7 +1602,7 @@ async function validateWavBuffer(buffer) {
       const chunkId = buffer.slice(offset, offset + 4).toString();
       const chunkSize = buffer.readUInt32LE(offset + 4);
 
-      if (chunkId === 'data') {
+      if (chunkId === "data") {
         dataSize = chunkSize;
         break;
       }
@@ -1297,32 +1616,38 @@ async function validateWavBuffer(buffer) {
     const duration = totalSamples / sampleRate;
 
     // Log the results
-    logger.log("Audio", `WAV analysis: format=${audioFormat}, channels=${numChannels}, sampleRate=${sampleRate}Hz, bitsPerSample=${bitsPerSample}, duration=${duration.toFixed(2)}s`);
+    logger.log(
+      "Audio",
+      `WAV analysis: format=${audioFormat}, channels=${numChannels}, sampleRate=${sampleRate}Hz, bitsPerSample=${bitsPerSample}, duration=${duration.toFixed(2)}s`
+    );
 
     // Validate requirements
     if (numChannels !== 1) {
       return {
         valid: false,
-        reason: `Audio must be mono (found ${numChannels} channels)`
+        reason: `Audio must be mono (found ${numChannels} channels)`,
       };
     }
 
     // Accept common sample rates: 22050Hz, 44100Hz, 48000Hz
     const acceptableSampleRates = [22050, 44100, 48000];
     const closestRate = acceptableSampleRates.reduce((prev, curr) =>
-      (Math.abs(curr - sampleRate) < Math.abs(prev - sampleRate) ? curr : prev)
+      Math.abs(curr - sampleRate) < Math.abs(prev - sampleRate) ? curr : prev
     );
 
     // Allow more variance (within 10% of target rate)
     if (Math.abs(sampleRate - closestRate) / closestRate > 0.1) {
-      logger.warn("Audio", `Unusual sample rate detected: ${sampleRate}Hz, closest standard rate: ${closestRate}Hz`);
+      logger.warn(
+        "Audio",
+        `Unusual sample rate detected: ${sampleRate}Hz, closest standard rate: ${closestRate}Hz`
+      );
       // We'll still accept it and let the voice API handle resampling
     }
 
     if (duration > 20) {
       return {
         valid: false,
-        reason: `Duration exceeds 20 seconds (${duration.toFixed(1)}s)`
+        reason: `Duration exceeds 20 seconds (${duration.toFixed(1)}s)`,
       };
     }
 
@@ -1334,13 +1659,13 @@ async function validateWavBuffer(buffer) {
       bitsPerSample,
       duration,
       format: audioFormat === 1 ? "PCM" : "Non-PCM",
-      closestStandardRate: closestRate
+      closestStandardRate: closestRate,
     };
   } catch (error) {
     logger.error("Audio", `Error analyzing WAV file: ${error.message}`);
     return {
       valid: false,
-      reason: `Failed to analyze WAV file: ${error.message}`
+      reason: `Failed to analyze WAV file: ${error.message}`,
     };
   }
 }

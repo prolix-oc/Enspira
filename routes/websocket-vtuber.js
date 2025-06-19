@@ -1,16 +1,31 @@
 import fastifyWebsocket from '@fastify/websocket';
 import { checkForAuth } from '../api-helper.js';
 import { respondToChat, respondWithVoice } from '../ai-logic.js';
-import { logger } from '../create-global-logger.js';
 import { retrieveConfigValue } from '../config-helper.js';
+
+// Import logger with fallback
+let logger;
+try {
+  const loggerModule = await import('../create-global-logger.js');
+  logger = loggerModule.logger;
+} catch (error) {
+  // Fallback logger if import fails
+  logger = {
+    log: (category, message) => console.log(`[${category}] ${message}`),
+    error: (category, message) => console.error(`[${category}] ${message}`),
+    warn: (category, message) => console.warn(`[${category}] ${message}`)
+  };
+}
 
 /**
  * WebSocket route for VTuber application integration
  * Provides real-time bidirectional communication for AI chat and TTS
  */
 async function websocketVTuberRoute(fastify, options) {
-  // Register WebSocket support
-  await fastify.register(fastifyWebsocket);
+  // Log that we're starting registration
+  logger.log('WebSocket', 'Starting VTuber WebSocket route registration...');
+  
+  // Note: WebSocket plugin should be registered in main index.js, not here
 
   // Connection state management
   const connections = new Map();
@@ -61,134 +76,133 @@ async function websocketVTuberRoute(fastify, options) {
     return `resp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   }
 
-  /**
-   * Main WebSocket route handler
-   */
-  fastify.register(async function (fastify) {
-    fastify.get('/ws-client', { websocket: true }, async (connection, request) => {
-      const { socket } = connection;
-      const clientId = `client_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
-      
-      logger.log('WebSocket', `New client connected: ${clientId}`);
+  // Define the WebSocket route AFTER registering the plugin
+  fastify.get('/ws-client', { websocket: true }, async (connection, request) => {
+    const { socket } = connection;
+    const clientId = `client_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+    
+    logger.log('WebSocket', `New client connected: ${clientId}`);
 
-      // Initialize connection state
-      const connectionState = {
-        id: clientId,
-        socket,
-        user: null,
-        isAuthenticated: false,
-        lastPingTime: Date.now(),
-        modelInfo: null,
-        currentResponseId: null
-      };
+    // Initialize connection state
+    const connectionState = {
+      id: clientId,
+      socket,
+      user: null,
+      isAuthenticated: false,
+      lastPingTime: Date.now(),
+      modelInfo: null,
+      currentResponseId: null
+    };
 
-      connections.set(clientId, connectionState);
+    connections.set(clientId, connectionState);
 
-      // Setup heartbeat for this connection
-      const heartbeat = setInterval(() => {
-        if (socket.readyState === socket.OPEN) {
-          sendMessage(socket, { type: 'ping' });
-          
-          // Check for stale connections (no pong response in 60 seconds)
-          if (Date.now() - connectionState.lastPingTime > 60000) {
-            logger.warn('WebSocket', `Connection ${clientId} appears stale, closing`);
-            socket.close(1000, 'Connection timeout');
-          }
-        } else {
-          clearInterval(heartbeat);
+    // Setup heartbeat for this connection
+    const heartbeat = setInterval(() => {
+      if (socket.readyState === socket.OPEN) {
+        sendMessage(socket, { type: 'ping' });
+        
+        // Check for stale connections (no pong response in 60 seconds)
+        if (Date.now() - connectionState.lastPingTime > 60000) {
+          logger.warn('WebSocket', `Connection ${clientId} appears stale, closing`);
+          socket.close(1000, 'Connection timeout');
         }
-      }, heartbeatInterval);
+      } else {
+        clearInterval(heartbeat);
+      }
+    }, heartbeatInterval);
 
-      // Request authentication immediately
-      sendMessage(socket, { type: 'auth-required' });
+    // Request authentication immediately
+    sendMessage(socket, { type: 'auth-required' });
 
-      // Handle incoming messages
-      socket.on('message', async (data) => {
-        try {
-          const message = JSON.parse(data.toString());
+    // Handle incoming messages
+    socket.on('message', async (data) => {
+      try {
+        const message = JSON.parse(data.toString());
+        
+        logger.log('WebSocket', `Received message type: ${message.type} from ${clientId}`);
+
+        // Handle authentication for all message types
+        if (!connectionState.isAuthenticated && message.type !== 'ping' && message.type !== 'pong') {
+          const user = await authenticateMessage(message);
           
-          logger.log('WebSocket', `Received message type: ${message.type} from ${clientId}`);
-
-          // Handle authentication for all message types
-          if (!connectionState.isAuthenticated && message.type !== 'ping' && message.type !== 'pong') {
-            const user = await authenticateMessage(message);
-            
-            if (!user) {
-              sendMessage(socket, { 
-                type: 'auth-failed',
-                message: 'Invalid or missing authentication token'
-              });
-              return;
-            }
-
-            connectionState.user = user;
-            connectionState.isAuthenticated = true;
-            
+          if (!user) {
             sendMessage(socket, { 
-              type: 'auth-success',
-              message: 'Authentication successful'
+              type: 'auth-failed',
+              message: 'Invalid or missing authentication token'
             });
-            
-            logger.log('WebSocket', `Client ${clientId} authenticated as user: ${user.user_id}`);
+            return;
           }
 
-          // Process different message types
-          switch (message.type) {
-            case 'ping':
-              sendMessage(socket, { type: 'pong' });
-              break;
-
-            case 'pong':
-              connectionState.lastPingTime = Date.now();
-              break;
-
-            case 'model-info':
-              if (connectionState.isAuthenticated && message.model_info) {
-                connectionState.modelInfo = message.model_info;
-                logger.log('WebSocket', `Model info received for ${clientId}: ${message.model_info.name}`);
-              }
-              break;
-
-            case 'text-input':
-              await handleTextInput(connectionState, message);
-              break;
-
-            case 'interrupt':
-              handleInterrupt(connectionState);
-              break;
-
-            default:
-              logger.warn('WebSocket', `Unknown message type: ${message.type} from ${clientId}`);
-              sendMessage(socket, {
-                type: 'error',
-                message: `Unknown message type: ${message.type}`
-              });
-          }
-
-        } catch (error) {
-          logger.error('WebSocket', `Error processing message from ${clientId}: ${error.message}`);
-          sendMessage(socket, {
-            type: 'error',
-            message: 'Failed to process message'
+          connectionState.user = user;
+          connectionState.isAuthenticated = true;
+          
+          sendMessage(socket, { 
+            type: 'auth-success',
+            message: 'Authentication successful'
           });
+          
+          logger.log('WebSocket', `Client ${clientId} authenticated as user: ${user.user_id}`);
         }
-      });
 
-      // Handle connection close
-      socket.on('close', (code, reason) => {
-        logger.log('WebSocket', `Client ${clientId} disconnected: ${code} - ${reason}`);
-        clearInterval(heartbeat);
-        connections.delete(clientId);
-      });
+        // Process different message types
+        switch (message.type) {
+          case 'ping':
+            sendMessage(socket, { type: 'pong' });
+            break;
 
-      // Handle connection errors
-      socket.on('error', (error) => {
-        logger.error('WebSocket', `Socket error for ${clientId}: ${error.message}`);
-        clearInterval(heartbeat);
-        connections.delete(clientId);
-      });
+          case 'pong':
+            connectionState.lastPingTime = Date.now();
+            break;
+
+          case 'model-info':
+            if (connectionState.isAuthenticated && message.model_info) {
+              connectionState.modelInfo = message.model_info;
+              logger.log('WebSocket', `Model info received for ${clientId}: ${message.model_info.name}`);
+            }
+            break;
+
+          case 'text-input':
+            await handleTextInput(connectionState, message);
+            break;
+
+          case 'interrupt':
+            handleInterrupt(connectionState);
+            break;
+
+          default:
+            logger.warn('WebSocket', `Unknown message type: ${message.type} from ${clientId}`);
+            sendMessage(socket, {
+              type: 'error',
+              message: `Unknown message type: ${message.type}`
+            });
+        }
+
+      } catch (error) {
+        logger.error('WebSocket', `Error processing message from ${clientId}: ${error.message}`);
+        sendMessage(socket, {
+          type: 'error',
+          message: 'Failed to process message'
+        });
+      }
+    });
+
+    // Handle connection close
+    socket.on('close', (code, reason) => {
+      logger.log('WebSocket', `Client ${clientId} disconnected: ${code} - ${reason}`);
+      clearInterval(heartbeat);
+      connections.delete(clientId);
+    });
+
+    // Handle connection errors
+    socket.on('error', (error) => {
+      logger.error('WebSocket', `Socket error for ${clientId}: ${error.message}`);
+      clearInterval(heartbeat);
+      connections.delete(clientId);
     });
   });
+
+  // Log successful registration
+  logger.log('WebSocket', 'VTuber WebSocket route registered successfully at /ws-client');
 
   /**
    * Handles text input messages and generates AI responses

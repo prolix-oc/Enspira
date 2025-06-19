@@ -154,7 +154,6 @@ export class ChatRequestBody {
     this.temperature = parseFloat(temperature);
     this.max_tokens = parseInt(maxTokens);
     this.generate_window = parseInt(generateWindow);
-    
     // Add dynamic temperature settings if enabled
     if (dynTemp) {
       this.dynatemp = dynTemp;
