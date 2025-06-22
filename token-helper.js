@@ -142,31 +142,6 @@ export const getOutputTokens = async (
   }
 };
 
-export const tokenizedFromRemote = async (message) => {
-  const tokenizerUrl = await retrieveConfigValue("models.chat.endpoint") + "/tokenize"
-  const modelName = await retrieveConfigValue("models.chat.model")
-  try {
-    const response = await axios.post(tokenizerUrl,
-      {
-        model: `${modelName}`,
-        prompt: `${message}`
-      },
-      { 
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept-Encoding': 'gzip, deflate, br'
-        },
-      }
-    )
-    return response.data.count;
-  } catch (error) {
-    logger.log(
-      "error",
-      `Error during tokenization for model ${await retrieveConfigValue("models.chat.model")}: ${error.message}`,
-    );
-  }
-}
-
 export const promptTokenizedFromRemote = async (message) => {
   const baseURL = await retrieveConfigValue("models.chat.endpoint")
   const isVllm = await retrieveConfigValue("models.chat.isVllm")

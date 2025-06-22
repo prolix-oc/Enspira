@@ -118,55 +118,348 @@ const createServer = async () => {
     },
   });
 
-  // Enhanced WebSocket connection tracking with proper state management
-  // Enhanced WebSocket connection tracking with correct API
+  // MEMORY OPTIMIZATION: Enhanced connection management with resource limits
+  const CONNECTION_LIMITS = {
+    MAX_CONNECTIONS: 1000,
+    MAX_CONNECTIONS_PER_IP: 10,
+    MAX_MESSAGE_RATE: 30, // messages per minute
+    CONNECTION_TIMEOUT: 300000, // 5 minutes
+    HEARTBEAT_INTERVAL: 30000, // 30 seconds
+    CLEANUP_INTERVAL: 60000, // 1 minute
+    MAX_MESSAGE_SIZE: 10240, // 10KB
+    AUTH_TIMEOUT: 30000, // 30 seconds
+  };
+
   const activeConnections = new Map();
-  const connectionCleanupQueue = new Set();
+  const connectionsByIP = new Map();
+  const cleanupQueue = new Set();
+  const messageRateLimits = new Map(); // Track message rates per connection
 
-  // Helper function to safely get connection state
-  function getConnectionState(clientId) {
-    const state = activeConnections.get(clientId);
-    if (!state) {
-      logger.warn("WebSocket", `Connection state not found for ${clientId}`);
-      return null;
+  // MEMORY OPTIMIZATION: Periodic cleanup of stale connections and rate limits
+  const cleanupInterval = setInterval(() => {
+    cleanupStaleConnections();
+    cleanupStaleRateLimits();
+  }, CONNECTION_LIMITS.CLEANUP_INTERVAL);
+
+  // MEMORY OPTIMIZATION: Cleanup stale connections
+  function cleanupStaleConnections() {
+    const now = Date.now();
+    let cleanedUp = 0;
+
+    for (const [clientId, state] of activeConnections) {
+      const timeSinceActivity = now - state.lastActivity;
+      const timeSinceConnection = now - state.connectedAt.getTime();
+
+      if (
+        state.isDestroyed ||
+        timeSinceActivity > CONNECTION_LIMITS.CONNECTION_TIMEOUT ||
+        timeSinceConnection > CONNECTION_LIMITS.CONNECTION_TIMEOUT * 2 ||
+        (state.socket && state.socket.readyState >= 2) // CLOSING or CLOSED
+      ) {
+        logger.log(
+          "WebSocket",
+          `Cleaning up stale connection ${clientId} (inactive: ${timeSinceActivity}ms)`
+        );
+        forceCleanupConnection(clientId, "stale_cleanup");
+        cleanedUp++;
+      }
     }
 
-    if (state.isDestroyed) {
-      logger.warn("WebSocket", `Connection ${clientId} is marked as destroyed`);
-      return null;
+    if (cleanedUp > 0) {
+      logger.log("WebSocket", `Cleaned up ${cleanedUp} stale connections`);
     }
-
-    return state;
   }
 
-  // Socket validation function
-  function validateSocket(socket, clientId) {
-    if (!socket) {
-      logger.warn("WebSocket", `Socket is null/undefined for ${clientId}`);
-      return false;
+  // MEMORY OPTIMIZATION: Cleanup stale rate limit entries
+  function cleanupStaleRateLimits() {
+    const now = Date.now();
+    let cleaned = 0;
+
+    for (const [key, data] of messageRateLimits) {
+      if (now - data.lastReset > 120000) { // 2 minutes
+        messageRateLimits.delete(key);
+        cleaned++;
+      }
     }
 
-    if (typeof socket.send !== "function") {
-      logger.error(
-        "WebSocket",
-        `Socket for ${clientId} is not a valid WebSocket - missing send method`
-      );
-      return false;
+    if (cleaned > 0) {
+      logger.log("WebSocket", `Cleaned up ${cleaned} stale rate limit entries`);
+    }
+  }
+
+  // MEMORY OPTIMIZATION: Rate limiting for message processing
+  function checkMessageRateLimit(clientId) {
+    const now = Date.now();
+    const key = clientId;
+
+    if (!messageRateLimits.has(key)) {
+      messageRateLimits.set(key, {
+        count: 1,
+        lastReset: now,
+        blocked: false
+      });
+      return true;
     }
 
-    const readyState = socket.readyState;
-    if (readyState === undefined || readyState === null) {
-      logger.warn(
-        "WebSocket",
-        `Socket for ${clientId} has invalid readyState: ${readyState}`
-      );
+    const rateData = messageRateLimits.get(key);
+    const timeSinceReset = now - rateData.lastReset;
+
+    // Reset every minute
+    if (timeSinceReset > 60000) {
+      rateData.count = 1;
+      rateData.lastReset = now;
+      rateData.blocked = false;
+      return true;
+    }
+
+    rateData.count++;
+
+    if (rateData.count > CONNECTION_LIMITS.MAX_MESSAGE_RATE) {
+      if (!rateData.blocked) {
+        logger.warn("WebSocket", `Rate limit exceeded for ${clientId}`);
+        rateData.blocked = true;
+      }
       return false;
     }
 
     return true;
   }
 
-  // FIXED: WebSocket route using the correct API pattern
+  // MEMORY OPTIMIZATION: Enhanced connection state class with proper cleanup
+  class ConnectionState {
+    constructor(clientId, socket, clientIP) {
+      this.id = clientId;
+      this.socket = socket;
+      this.user = null;
+      this.isAuthenticated = false;
+      this.lastPingTime = Date.now();
+      this.modelInfo = null;
+      this.currentResponseId = null;
+      this.connectedAt = new Date();
+      this.isDestroyed = false;
+      this.processingMessage = false;
+      this.sendInProgress = false;
+      this.connectionIP = clientIP;
+      this.messageCount = 0;
+      this.lastActivity = Date.now();
+      this.authAttempts = 0;
+      this.maxAuthAttempts = 3;
+      
+      // MEMORY OPTIMIZATION: AbortController for cancelling async operations
+      this.abortController = new AbortController();
+      this.heartbeatInterval = null;
+      this.authTimeout = null;
+      this.eventListeners = new Set(); // Track event listeners for cleanup
+      
+      // MEMORY OPTIMIZATION: Weak references to avoid circular dependencies
+      this.socketRef = new WeakRef(socket);
+    }
+
+    // MEMORY OPTIMIZATION: Get socket with validation
+    getSocket() {
+      const socket = this.socketRef.deref();
+      if (!socket) {
+        logger.warn("WebSocket", `Socket has been garbage collected for ${this.id}`);
+        return null;
+      }
+      return socket;
+    }
+
+    // MEMORY OPTIMIZATION: Complete cleanup of all resources
+    destroy() {
+      if (this.isDestroyed) return;
+      
+      this.isDestroyed = true;
+      
+      // Cancel all pending async operations
+      this.abortController.abort();
+      
+      // Clear timeouts/intervals
+      if (this.heartbeatInterval) {
+        clearInterval(this.heartbeatInterval);
+        this.heartbeatInterval = null;
+      }
+      
+      if (this.authTimeout) {
+        clearTimeout(this.authTimeout);
+        this.authTimeout = null;
+      }
+
+      // Remove all event listeners
+      const socket = this.getSocket();
+      if (socket) {
+        this.eventListeners.forEach(({ event, handler }) => {
+          try {
+            socket.removeListener(event, handler);
+          } catch (error) {
+            logger.warn("WebSocket", `Error removing listener: ${error.message}`);
+          }
+        });
+      }
+      this.eventListeners.clear();
+
+      // Clear object references
+      this.socket = null;
+      this.user = null;
+      this.modelInfo = null;
+      
+      logger.log("WebSocket", `Connection state destroyed for ${this.id}`);
+    }
+
+    // MEMORY OPTIMIZATION: Add event listener with tracking
+    addEventListenerTracked(event, handler) {
+      const socket = this.getSocket();
+      if (!socket) return false;
+
+      socket.on(event, handler);
+      this.eventListeners.add({ event, handler });
+      return true;
+    }
+  }
+
+  // MEMORY OPTIMIZATION: Connection validation with IP limits
+  function validateNewConnection(clientIP) {
+    // Check global connection limit
+    if (activeConnections.size >= CONNECTION_LIMITS.MAX_CONNECTIONS) {
+      logger.warn("WebSocket", `Global connection limit reached (${CONNECTION_LIMITS.MAX_CONNECTIONS})`);
+      return { valid: false, reason: "Global connection limit reached" };
+    }
+
+    // Check per-IP limit
+    const ipConnections = connectionsByIP.get(clientIP) || new Set();
+    if (ipConnections.size >= CONNECTION_LIMITS.MAX_CONNECTIONS_PER_IP) {
+      logger.warn("WebSocket", `IP connection limit reached for ${clientIP} (${CONNECTION_LIMITS.MAX_CONNECTIONS_PER_IP})`);
+      return { valid: false, reason: "IP connection limit reached" };
+    }
+
+    return { valid: true };
+  }
+
+  // MEMORY OPTIMIZATION: Enhanced connection cleanup with proper resource management
+  function forceCleanupConnection(clientId, reason = "unknown") {
+    if (cleanupQueue.has(clientId)) {
+      return; // Already being cleaned up
+    }
+
+    cleanupQueue.add(clientId);
+    
+    try {
+      const state = activeConnections.get(clientId);
+      if (state) {
+        // Update IP tracking
+        const ipConnections = connectionsByIP.get(state.connectionIP);
+        if (ipConnections) {
+          ipConnections.delete(clientId);
+          if (ipConnections.size === 0) {
+            connectionsByIP.delete(state.connectionIP);
+          }
+        }
+
+        // Destroy connection state (handles all cleanup)
+        state.destroy();
+        
+        logger.log(
+          "WebSocket",
+          `Connection ${clientId} cleanup completed - reason: ${reason}, remaining: ${activeConnections.size - 1}`
+        );
+      }
+
+      // Remove from active connections
+      activeConnections.delete(clientId);
+      
+      // Clean up rate limiting data
+      messageRateLimits.delete(clientId);
+      
+    } catch (error) {
+      logger.error("WebSocket", `Error during cleanup for ${clientId}: ${error.message}`);
+    } finally {
+      cleanupQueue.delete(clientId);
+    }
+  }
+
+  // MEMORY OPTIMIZATION: Enhanced message sending with timeout and proper error handling
+  async function sendMessageToConnection(connectionState, message, timeout = 5000) {
+    if (connectionState.isDestroyed || cleanupQueue.has(connectionState.id)) {
+      return { success: false, reason: "connection_destroyed" };
+    }
+
+    if (connectionState.sendInProgress) {
+      return { success: false, reason: "send_in_progress" };
+    }
+
+    connectionState.sendInProgress = true;
+
+    try {
+      const socket = connectionState.getSocket();
+      if (!socket || socket.readyState !== 1) {
+        return { success: false, reason: "socket_not_ready" };
+      }
+
+      // MEMORY OPTIMIZATION: Create message with timeout
+      const messageToSend = JSON.stringify({
+        timestamp: new Date().toISOString(),
+        client_id: connectionState.id,
+        server_time: new Date().toISOString(),
+        ...message,
+      });
+
+      // Check message size
+      if (messageToSend.length > CONNECTION_LIMITS.MAX_MESSAGE_SIZE) {
+        logger.warn("WebSocket", `Message too large for ${connectionState.id}: ${messageToSend.length} bytes`);
+        return { success: false, reason: "message_too_large" };
+      }
+
+      // MEMORY OPTIMIZATION: Send with timeout using AbortController
+      const timeoutController = new AbortController();
+      const timeoutId = setTimeout(() => timeoutController.abort(), timeout);
+
+      try {
+        if (connectionState.abortController.signal.aborted) {
+          return { success: false, reason: "operation_aborted" };
+        }
+
+        await new Promise((resolve, reject) => {
+          const cleanup = () => {
+            clearTimeout(timeoutId);
+            timeoutController.signal.removeEventListener('abort', onAbort);
+          };
+
+          const onAbort = () => {
+            cleanup();
+            reject(new Error('Send operation timed out'));
+          };
+
+          timeoutController.signal.addEventListener('abort', onAbort);
+
+          try {
+            socket.send(messageToSend);
+            cleanup();
+            resolve();
+          } catch (error) {
+            cleanup();
+            reject(error);
+          }
+        });
+
+        // Update activity tracking
+        connectionState.lastActivity = Date.now();
+        connectionState.messageCount++;
+
+        return { success: true };
+
+      } finally {
+        clearTimeout(timeoutId);
+      }
+
+    } catch (error) {
+      logger.error("WebSocket", `Send failed for ${connectionState.id}: ${error.message}`);
+      return { success: false, reason: "send_error", error: error.message };
+    } finally {
+      connectionState.sendInProgress = false;
+    }
+  }
+
+  // MEMORY OPTIMIZATION: WebSocket route with enhanced resource management
   fastify.register(async function (fastify) {
     fastify.get(
       "/ws-client",
@@ -184,851 +477,156 @@ const createServer = async () => {
           );
         },
       },
-      // FIXED: Correct handler signature - socket is the first parameter
       async (socket, request) => {
         const clientId = `client_${Date.now()}_${Math.random().toString(36).substr(2, 8)}`;
-        const clientIP =
-          request.ip || request.socket.remoteAddress || "unknown";
+        const clientIP = request.ip || request.socket.remoteAddress || "unknown";
 
-        logger.log(
-          "WebSocket",
-          `New client connecting: ${clientId} from ${clientIP}`
-        );
-
-        // FIXED: Direct socket validation - no connection object
-        if (!validateSocket(socket, clientId)) {
-          logger.error("WebSocket", `Socket validation failed for ${clientId}`);
+        // MEMORY OPTIMIZATION: Validate connection limits
+        const validation = validateNewConnection(clientIP);
+        if (!validation.valid) {
+          logger.warn("WebSocket", `Connection rejected for ${clientIP}: ${validation.reason}`);
           try {
-            socket.close(1003, "Socket validation failed");
-          } catch (closeError) {
-            logger.error(
-              "WebSocket",
-              `Error closing invalid socket: ${closeError.message}`
-            );
+            socket.close(1013, validation.reason);
+          } catch (error) {
+            logger.error("WebSocket", `Error closing rejected connection: ${error.message}`);
           }
           return;
         }
 
-        logger.log(
-          "WebSocket",
-          `Socket validation passed for ${clientId} - readyState: ${socket.readyState}`
-        );
+        logger.log("WebSocket", `New client connecting: ${clientId} from ${clientIP}`);
 
-        // FIXED: Enhanced connection state with direct socket reference
-        const connectionState = {
-          id: clientId,
-          socket: socket, // Direct socket reference
-          user: null,
-          isAuthenticated: false,
-          lastPingTime: Date.now(),
-          modelInfo: null,
-          currentResponseId: null,
-          connectedAt: new Date(),
-          isDestroyed: false,
-          processingMessage: false,
-          sendInProgress: false,
-          connectionIP: clientIP,
-          messageCount: 0,
-          lastActivity: Date.now(),
-          authAttempts: 0,
-          maxAuthAttempts: 3,
-        };
+        // MEMORY OPTIMIZATION: Create enhanced connection state
+        const connectionState = new ConnectionState(clientId, socket, clientIP);
+
+        // Track connection by IP
+        if (!connectionsByIP.has(clientIP)) {
+          connectionsByIP.set(clientIP, new Set());
+        }
+        connectionsByIP.get(clientIP).add(clientId);
 
         // Store connection
         activeConnections.set(clientId, connectionState);
-        logger.log(
-          "WebSocket",
-          `Connection ${clientId} stored - Active connections: ${activeConnections.size}`
-        );
 
-        // Enhanced message sending function
-        function sendMessage(message, retryCount = 0) {
-          const maxRetries = 2;
+        // MEMORY OPTIMIZATION: Authentication timeout
+        connectionState.authTimeout = setTimeout(() => {
+          if (!connectionState.isAuthenticated && !connectionState.isDestroyed) {
+            logger.warn("WebSocket", `Authentication timeout for ${clientId}`);
+            forceCleanupConnection(clientId, "auth_timeout");
+          }
+        }, CONNECTION_LIMITS.AUTH_TIMEOUT);
 
+        // MEMORY OPTIMIZATION: Enhanced message handler with rate limiting and async operations control
+        const messageHandler = async (data) => {
           try {
-            const state = getConnectionState(clientId);
-            if (!state) {
-              logger.error(
-                "WebSocket",
-                `Cannot send message - connection state not found for ${clientId}`
-              );
-              return false;
-            }
-
-            if (connectionCleanupQueue.has(clientId)) {
-              logger.warn(
-                "WebSocket",
-                `Cannot send message - ${clientId} is being cleaned up`
-              );
-              return false;
-            }
-
-            if (state.sendInProgress) {
-              if (retryCount < maxRetries) {
-                setTimeout(
-                  () => sendMessage(message, retryCount + 1),
-                  100 * (retryCount + 1)
-                );
-                return true;
-              } else {
-                logger.warn(
-                  "WebSocket",
-                  `Send still in progress for ${clientId} after retries, dropping message`
-                );
-                return false;
-              }
-            }
-
-            state.sendInProgress = true;
-
-            const currentSocket = state.socket;
-            if (!validateSocket(currentSocket, clientId)) {
-              logger.warn(
-                "WebSocket",
-                `Socket validation failed during send for ${clientId}`
-              );
-              state.sendInProgress = false;
-              return false;
-            }
-
-            // Check socket state
-            const WebSocketStates = {
-              CONNECTING: 0,
-              OPEN: 1,
-              CLOSING: 2,
-              CLOSED: 3,
-            };
-
-            if (currentSocket.readyState !== WebSocketStates.OPEN) {
-              logger.warn(
-                "WebSocket",
-                `Cannot send to ${clientId} - socket not open (state: ${currentSocket.readyState})`
-              );
-              state.sendInProgress = false;
-              return false;
-            }
-
-            // Create and send message
-            const messageToSend = JSON.stringify({
-              timestamp: new Date().toISOString(),
-              client_id: clientId,
-              server_time: new Date().toISOString(),
-              ...message,
-            });
-
-            try {
-              currentSocket.send(messageToSend);
-
-              // Update activity tracking
-              state.lastActivity = Date.now();
-              state.messageCount++;
-
-              logger.log(
-                "WebSocket",
-                `Message sent successfully to ${clientId}: ${message.type} (total: ${state.messageCount})`
-              );
-
-              state.sendInProgress = false;
-              return true;
-            } catch (sendError) {
-              logger.error(
-                "WebSocket",
-                `Send operation failed for ${clientId}: ${sendError.message}`
-              );
-              state.sendInProgress = false;
-
-              if (
-                retryCount < maxRetries &&
-                !sendError.message.includes("ENOTCONN")
-              ) {
-                logger.log(
-                  "WebSocket",
-                  `Retrying send for ${clientId} (attempt ${retryCount + 1})`
-                );
-                setTimeout(
-                  () => sendMessage(message, retryCount + 1),
-                  200 * (retryCount + 1)
-                );
-                return true;
-              }
-
-              return false;
-            }
-          } catch (error) {
-            const state = getConnectionState(clientId);
-            if (state) {
-              state.sendInProgress = false;
-            }
-
-            logger.error(
-              "WebSocket",
-              `Failed to send message to ${clientId}: ${error.message}`
-            );
-            return false;
-          }
-        }
-
-        // Authentication function
-        async function authenticateMessage(message) {
-          const state = getConnectionState(clientId);
-          if (!state) return null;
-
-          state.authAttempts++;
-          if (state.authAttempts > state.maxAuthAttempts) {
-            logger.warn(
-              "WebSocket",
-              `Too many auth attempts for ${clientId}, blocking`
-            );
-            return null;
-          }
-
-          logger.log(
-            "WebSocket",
-            `Authentication attempt ${state.authAttempts}/${state.maxAuthAttempts} for ${clientId}:`,
-            {
-              hasAuthToken: !!message.auth_token,
-              tokenLength: message.auth_token?.length || 0,
-              messageType: message.type,
-            }
-          );
-
-          if (!message.auth_token) {
-            logger.warn(
-              "WebSocket",
-              `No auth_token in message from ${clientId}`
-            );
-            return null;
-          }
-
-          try {
-            const { checkForAuth } = await import("./api-helper.js");
-            const authResult = await checkForAuth(message.auth_token);
-
-            if (authResult && authResult.valid) {
-              logger.log(
-                "WebSocket",
-                `Authentication successful for ${clientId}: user ${authResult.user_id}`
-              );
-              state.authAttempts = 0;
-              return authResult;
-            } else {
-              logger.warn(
-                "WebSocket",
-                `Authentication failed for ${clientId}: invalid token`
-              );
-              return null;
-            }
-          } catch (error) {
-            logger.error(
-              "WebSocket",
-              `Authentication error for ${clientId}: ${error.message}`
-            );
-            return null;
-          }
-        }
-
-        // Connection cleanup function
-        function cleanupConnection(reason = "unknown") {
-          if (connectionCleanupQueue.has(clientId)) {
-            logger.log(
-              "WebSocket",
-              `Cleanup already in progress for ${clientId}`
-            );
-            return;
-          }
-
-          connectionCleanupQueue.add(clientId);
-          logger.log(
-            "WebSocket",
-            `Starting cleanup for ${clientId} - reason: ${reason}`
-          );
-
-          try {
-            const state = activeConnections.get(clientId);
-            if (state) {
-              state.isDestroyed = true;
-              state.socket = null;
-
-              logger.log(
-                "WebSocket",
-                `Connection ${clientId} stats: ${state.messageCount} messages, active for ${Date.now() - state.connectedAt.getTime()}ms`
-              );
-            }
-
-            if (heartbeatInterval) {
-              clearInterval(heartbeatInterval);
-            }
-
-            activeConnections.delete(clientId);
-
-            logger.log(
-              "WebSocket",
-              `Cleanup completed for ${clientId} - Active connections: ${activeConnections.size}`
-            );
-          } catch (error) {
-            logger.error(
-              "WebSocket",
-              `Error during cleanup for ${clientId}: ${error.message}`
-            );
-          } finally {
-            connectionCleanupQueue.delete(clientId);
-          }
-        }
-
-        // Heartbeat with proper socket validation
-        const heartbeatInterval = setInterval(() => {
-          try {
-            const state = getConnectionState(clientId);
-            if (!state) {
-              logger.log(
-                "WebSocket",
-                `No valid state for ${clientId} in heartbeat, cleaning up`
-              );
-              clearInterval(heartbeatInterval);
+            if (connectionState.isDestroyed || cleanupQueue.has(clientId)) {
               return;
             }
 
-            if (connectionCleanupQueue.has(clientId)) {
-              logger.log(
-                "WebSocket",
-                `Connection ${clientId} is being cleaned up, stopping heartbeat`
-              );
-              clearInterval(heartbeatInterval);
+            // Rate limiting
+            if (!checkMessageRateLimit(clientId)) {
+              await sendMessageToConnection(connectionState, {
+                type: "error",
+                message: "Rate limit exceeded"
+              });
               return;
             }
 
-            const currentSocket = state.socket;
-            if (
-              !validateSocket(currentSocket, clientId) ||
-              currentSocket.readyState !== 1
-            ) {
-              logger.log(
-                "WebSocket",
-                `Socket not available for ${clientId} in heartbeat, cleaning up`
-              );
-              clearInterval(heartbeatInterval);
-              cleanupConnection("heartbeat_socket_unavailable");
-              return;
-            }
-
-            const pingSuccess = sendMessage({ type: "ping" });
-            if (!pingSuccess) {
-              logger.warn("WebSocket", `Failed to send ping to ${clientId}`);
-            }
-
-            // Check for stale connections
-            const timeSinceLastPing = Date.now() - state.lastPingTime;
-            const timeSinceLastActivity = Date.now() - state.lastActivity;
-
-            if (timeSinceLastPing > 90000 || timeSinceLastActivity > 120000) {
-              logger.warn(
-                "WebSocket",
-                `Connection ${clientId} is stale, closing`
-              );
-              try {
-                currentSocket.close(1000, "Connection timeout");
-              } catch (error) {
-                logger.error(
-                  "WebSocket",
-                  `Error closing stale connection ${clientId}: ${error.message}`
-                );
-              }
-              cleanupConnection("stale_connection");
-            }
-          } catch (error) {
-            logger.error(
-              "WebSocket",
-              `Error in heartbeat for ${clientId}: ${error.message}`
-            );
-            clearInterval(heartbeatInterval);
-            cleanupConnection("heartbeat_error");
-          }
-        }, 30000);
-
-        // FIXED: Message handler using direct socket API
-        socket.on("message", async (data) => {
-          try {
-            const state = getConnectionState(clientId);
-            if (!state) {
-              logger.warn(
-                "WebSocket",
-                `Received message for invalid connection ${clientId}`
-              );
-              return;
-            }
-
-            if (connectionCleanupQueue.has(clientId)) {
-              logger.warn(
-                "WebSocket",
-                `Ignoring message for ${clientId} - cleanup in progress`
-              );
-              return;
-            }
-
-            state.processingMessage = true;
-            state.lastActivity = Date.now();
+            connectionState.lastActivity = Date.now();
 
             let message;
             try {
-              message = JSON.parse(data.toString());
+              const messageStr = data.toString();
+              if (messageStr.length > CONNECTION_LIMITS.MAX_MESSAGE_SIZE) {
+                throw new Error("Message too large");
+              }
+              message = JSON.parse(messageStr);
             } catch (parseError) {
-              logger.error(
-                "WebSocket",
-                `Failed to parse message from ${clientId}: ${parseError.message}`
-              );
-              sendMessage({
+              logger.error("WebSocket", `Parse error for ${clientId}: ${parseError.message}`);
+              await sendMessageToConnection(connectionState, {
                 type: "error",
-                message: "Invalid message format",
+                message: "Invalid message format"
               });
-              state.processingMessage = false;
               return;
             }
 
-            logger.log(
-              "WebSocket",
-              `Processing ${message.type} from ${clientId} (msg #${state.messageCount + 1})`
-            );
+            // Process message with timeout
+            const processingTimeout = setTimeout(() => {
+              logger.warn("WebSocket", `Message processing timeout for ${clientId}`);
+              connectionState.abortController.abort();
+            }, 30000);
 
-            // Handle authentication for non-system messages
-            if (
-              !state.isAuthenticated &&
-              message.type !== "ping" &&
-              message.type !== "pong"
-            ) {
-              const user = await authenticateMessage(message);
-
-              if (!user) {
-                sendMessage({
-                  type: "auth-failed",
-                  message: "Invalid or missing authentication token",
-                });
-                state.processingMessage = false;
-                return;
-              }
-
-              state.user = user;
-              state.isAuthenticated = true;
-
-              sendMessage({
-                type: "auth-success",
-                message: "Authentication successful",
-                user_id: user.user_id,
-              });
-
-              logger.log(
-                "WebSocket",
-                `Client ${clientId} authenticated as user: ${user.user_id}`
-              );
+            try {
+              await processMessage(connectionState, message);
+            } finally {
+              clearTimeout(processingTimeout);
             }
 
-            // Process message types
-            switch (message.type) {
-              case "ping":
-                sendMessage({ type: "pong" });
-                break;
-
-              case "pong":
-                state.lastPingTime = Date.now();
-                break;
-
-              case "model-info":
-                if (state.isAuthenticated && message.model_info) {
-                  state.modelInfo = message.model_info;
-                  logger.log(
-                    "WebSocket",
-                    `Model info received for ${clientId}: ${message.model_info.name || "Unknown"}`
-                  );
-                  sendMessage({
-                    type: "model-info-received",
-                    message: "Model information updated successfully",
-                  });
-                }
-                break;
-
-              case "text-input":
-                if (state.isAuthenticated) {
-                  await handleTextInput(state, message);
-                } else {
-                  sendMessage({
-                    type: "error",
-                    message: "Authentication required for text input",
-                  });
-                }
-                break;
-
-              case "interrupt":
-                if (state.isAuthenticated) {
-                  handleInterrupt(state);
-                }
-                break;
-
-              case "connection-test":
-                sendMessage({
-                  type: "connection-test-response",
-                  message: "Connection is working properly",
-                  client_id: clientId,
-                  connection_stats: {
-                    messages_processed: state.messageCount,
-                    connected_duration:
-                      Date.now() - state.connectedAt.getTime(),
-                    last_activity: state.lastActivity,
-                  },
-                });
-                break;
-
-              default:
-                logger.warn(
-                  "WebSocket",
-                  `Unknown message type: ${message.type} from ${clientId}`
-                );
-                sendMessage({
-                  type: "error",
-                  message: `Unknown message type: ${message.type}`,
-                });
-            }
           } catch (error) {
-            logger.error(
-              "WebSocket",
-              `Error processing message from ${clientId}: ${error.message}`
-            );
-            sendMessage({
-              type: "error",
-              message: "Failed to process message",
-            });
-          } finally {
-            const state = getConnectionState(clientId);
-            if (state) {
-              state.processingMessage = false;
-            }
+            logger.error("WebSocket", `Message handler error for ${clientId}: ${error.message}`);
           }
-        });
+        };
 
-        // Text input handler
-        async function handleTextInput(connectionState, message) {
-          const { user } = connectionState;
+        // MEMORY OPTIMIZATION: Connection close handler
+        const closeHandler = (code, reason) => {
+          logger.log("WebSocket", `Client ${clientId} disconnected: ${code} - ${reason || "no reason"}`);
+          forceCleanupConnection(clientId, `close_${code}`);
+        };
 
-          if (!message.text || !message.text.trim()) {
-            sendMessage({
-              type: "error",
-              message: "Empty text input received",
-            });
-            return;
-          }
+        // MEMORY OPTIMIZATION: Error handler
+        const errorHandler = (error) => {
+          logger.error("WebSocket", `Socket error for ${clientId}: ${error.message}`);
+          forceCleanupConnection(clientId, `error_${error.code || 'unknown'}`);
+        };
 
-          const responseId = `resp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-          connectionState.currentResponseId = responseId;
+        // MEMORY OPTIMIZATION: Add tracked event listeners
+        connectionState.addEventListenerTracked('message', messageHandler);
+        connectionState.addEventListenerTracked('close', closeHandler);
+        connectionState.addEventListenerTracked('error', errorHandler);
 
+        // MEMORY OPTIMIZATION: Enhanced heartbeat with resource cleanup
+        connectionState.heartbeatInterval = setInterval(async () => {
           try {
-            sendMessage({
-              type: "response-queued",
-              response_id: responseId,
-            });
-
-            // FIXED: Apply alternateSpell replacements for vocal inputs
-            let processedText = await applyAlternateSpelling(
-              message.text,
-              user.user_id
-            );
-
-            logger.log(
-              "WebSocket",
-              `Processing text input for user ${user.user_id}: "${processedText.substring(0, 50)}..."`
-            );
-
-            // FIXED: Enhanced chat response with better error handling and logging
-            const chatResponse = await aiHelper.respondToChat(
-              {
-                message: processedText,
-                user: user.user_name || "User",
-              },
-              user.user_id
-            );
-
-            // FIXED: Better error handling and response validation
-            if (!chatResponse) {
-              logger.error(
-                "WebSocket",
-                `No response object returned for user ${user.user_id}`
-              );
-              throw new Error("No response generated from AI system");
+            if (connectionState.isDestroyed || cleanupQueue.has(clientId)) {
+              clearInterval(connectionState.heartbeatInterval);
+              return;
             }
 
-            if (!chatResponse.success) {
-              logger.error(
-                "WebSocket",
-                `AI response failed for user ${user.user_id}: ${chatResponse.error}`
-              );
-              throw new Error(
-                chatResponse.error || "Failed to generate response"
-              );
+            const socket = connectionState.getSocket();
+            if (!socket || socket.readyState !== 1) {
+              logger.log("WebSocket", `Socket not available for heartbeat ${clientId}`);
+              forceCleanupConnection(clientId, "heartbeat_socket_unavailable");
+              return;
             }
 
-            if (!chatResponse.text || chatResponse.text.trim() === "") {
-              logger.error(
-                "WebSocket",
-                `Empty response text for user ${user.user_id}`
-              );
-              throw new Error("AI generated empty response");
-            }
-
-            // FIXED: Send the text response immediately
-            sendMessage({
-              type: "full-text",
-              text: chatResponse.text,
-              response_id: responseId,
-            });
-
-            logger.log(
-              "WebSocket",
-              `Text response sent for user ${user.user_id}: "${chatResponse.text.substring(0, 50)}..."`
-            );
-
-            // FIXED: Enhanced TTS generation with better error handling
-            if (user.tts_enabled) {
-              await generateAndSendAudio(
-                connectionState,
-                chatResponse.text,
-                responseId
-              );
-            } else {
-              logger.log(
-                "WebSocket",
-                `TTS disabled for user ${user.user_id}, skipping audio generation`
-              );
-              // Still mark the response as complete
-              sendMessage({
-                type: "synthesis-complete",
-                response_id: responseId,
-              });
-            }
-
-            logger.log(
-              "WebSocket",
-              `Response completed successfully for user ${user.user_id} (${clientId})`
-            );
-          } catch (error) {
-            logger.error(
-              "WebSocket",
-              `Error processing text input for ${clientId}: ${error.message}`
-            );
-
-            // FIXED: Send proper error response
-            sendMessage({
-              type: "error",
-              message: "Failed to generate response: " + error.message,
-              response_id: responseId,
-            });
-
-            // Reset AI state if this was set
-            connectionState.currentResponseId = null;
-          }
-        }
-
-        /**
-         * FIXED: Apply alternate spelling replacements for vocal inputs
-         * @param {string} text - The original text from speech recognition
-         * @param {string} userId - User ID for getting alternate spellings
-         * @returns {Promise<string>} - Text with alternate spellings replaced
-         */
-        async function applyAlternateSpelling(text, userId) {
-          try {
-            const userObj = await import("./api-helper.js").then((m) =>
-              m.returnAuthObject(userId)
-            );
-
-            if (
-              !userObj ||
-              !userObj.alternateSpell ||
-              !Array.isArray(userObj.alternateSpell)
-            ) {
-              // No alternate spellings configured, return original text
-              return text;
-            }
-
-            let processedText = text;
-
-            // Apply each alternate spelling replacement
-            for (const alternateEntry of userObj.alternateSpell) {
-              if (typeof alternateEntry === "string") {
-                // Simple string replacement - replace with bot name
-                const regex = new RegExp(
-                  `\\b${escapeRegExp(alternateEntry)}\\b`,
-                  "gi"
-                );
-                processedText = processedText.replace(regex, userObj.bot_name);
-
-                logger.log(
-                  "WebSocket",
-                  `Replaced "${alternateEntry}" with "${userObj.bot_name}" in vocal input`
-                );
-              } else if (
-                typeof alternateEntry === "object" &&
-                alternateEntry.from &&
-                alternateEntry.to
-              ) {
-                // Object with from/to mapping
-                const regex = new RegExp(
-                  `\\b${escapeRegExp(alternateEntry.from)}\\b`,
-                  "gi"
-                );
-                processedText = processedText.replace(regex, alternateEntry.to);
-
-                logger.log(
-                  "WebSocket",
-                  `Replaced "${alternateEntry.from}" with "${alternateEntry.to}" in vocal input`
-                );
+            const result = await sendMessageToConnection(connectionState, { type: "ping" });
+            if (!result.success) {
+              logger.warn("WebSocket", `Heartbeat failed for ${clientId}: ${result.reason}`);
+              if (result.reason !== "send_in_progress") {
+                forceCleanupConnection(clientId, "heartbeat_failed");
               }
             }
 
-            return processedText;
-          } catch (error) {
-            logger.error(
-              "WebSocket",
-              `Error applying alternate spelling: ${error.message}`
-            );
-            return text; // Return original text if replacement fails
-          }
-        }
+            // Check for stale connections
+            const now = Date.now();
+            const timeSinceLastPing = now - connectionState.lastPingTime;
+            const timeSinceLastActivity = now - connectionState.lastActivity;
 
-        /**
-         * Escape special regex characters
-         * @param {string} string - String to escape
-         * @returns {string} - Escaped string
-         */
-        function escapeRegExp(string) {
-          return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        }
-
-        // Audio generation
-        async function generateAndSendAudio(connectionState, text, responseId) {
-          const { user, modelInfo } = connectionState;
-
-          try {
-            sendMessage({
-              type: "synthesis-started",
-              response_id: responseId,
-            });
-
-            logger.log(
-              "WebSocket",
-              `Generating TTS audio for user ${user.user_id} (${clientId})`
-            );
-
-            const audioResult = await aiHelper.respondWithVoice(
-              text,
-              user.user_id
-            );
-
-            if (audioResult.error) {
-              throw new Error(audioResult.error);
+            if (timeSinceLastPing > 90000 || timeSinceLastActivity > 120000) {
+              logger.warn("WebSocket", `Connection ${clientId} is stale, closing`);
+              forceCleanupConnection(clientId, "stale_connection");
             }
 
-            // FIXED: Send audio URL directly instead of converting to base64
-            sendMessage({
-              type: "synthesis-complete",
-              response_id: responseId,
-            });
-
-            const displayText = {
-              text: text,
-              name: user.bot_name || "Assistant",
-              avatar: user.avatar_url || "",
-            };
-
-            const actions = {};
-            if (
-              modelInfo &&
-              modelInfo.expressions &&
-              Array.isArray(modelInfo.expressions)
-            ) {
-              actions.expressions = selectExpressions(
-                text,
-                modelInfo.expressions
-              );
-            }
-
-            // UPDATED: Send audio URL instead of base64 data
-            sendMessage({
-              type: "audio-url", // Changed message type to indicate URL format
-              audio_url: audioResult, // Direct URL instead of base64
-              display_text: displayText,
-              actions: Object.keys(actions).length > 0 ? actions : undefined,
-              response_id: responseId,
-              audio_format: "wav", // Additional metadata for client
-              sample_rate: 22050, // TTS output format info
-              bit_depth: 16, // TTS output format info
-            });
-
-            logger.log(
-              "WebSocket",
-              `Audio URL sent for user ${user.user_id} (${clientId}): ${audioResult}`
-            );
           } catch (error) {
-            logger.error(
-              "WebSocket",
-              `Error generating audio for ${user.user_id} (${clientId}): ${error.message}`
-            );
-            sendMessage({
-              type: "error",
-              message: "Failed to generate audio response",
-              response_id: responseId,
-              error_details: error.message,
-            });
+            logger.error("WebSocket", `Heartbeat error for ${clientId}: ${error.message}`);
+            forceCleanupConnection(clientId, "heartbeat_error");
           }
-        }
+        }, CONNECTION_LIMITS.HEARTBEAT_INTERVAL);
 
-        function handleInterrupt(connectionState) {
-          const { user } = connectionState;
-          logger.log(
-            "WebSocket",
-            `Interrupt received from user ${user?.user_id || "unknown"} (${clientId})`
-          );
-          connectionState.currentResponseId = null;
-          sendMessage({
-            type: "interrupt",
-            message: "Response interrupted",
-          });
-        }
+        // MEMORY OPTIMIZATION: Send initial messages with timeout
+        setTimeout(async () => {
+          if (connectionState.isDestroyed) return;
 
-        // FIXED: Connection close handler using direct socket API
-        socket.on("close", (code, reason) => {
-          logger.log(
-            "WebSocket",
-            `Client ${clientId} disconnected: ${code} - ${reason || "no reason"}`
-          );
-          cleanupConnection(`close_${code}`);
-        });
-
-        // FIXED: Error handler using direct socket API
-        socket.on("error", (error) => {
-          logger.error(
-            "WebSocket",
-            `Socket error for ${clientId}: ${error.message}`
-          );
-          cleanupConnection(`error_${error.message}`);
-        });
-
-        // Send initial messages with proper timing
-        setTimeout(() => {
-          const state = getConnectionState(clientId);
-          if (!state) {
-            logger.error(
-              "WebSocket",
-              `Connection ${clientId} not available for initial messages`
-            );
-            return;
-          }
-
-          if (!validateSocket(state.socket, clientId)) {
-            logger.error(
-              "WebSocket",
-              `Socket invalid for initial messages ${clientId}`
-            );
-            cleanupConnection("invalid_socket_initial");
-            return;
-          }
-
-          const establishmentSuccess = sendMessage({
+          const establishResult = await sendMessageToConnection(connectionState, {
             type: "connection-established",
             client_id: clientId,
             server_time: new Date().toISOString(),
@@ -1038,14 +636,10 @@ const createServer = async () => {
             },
           });
 
-          if (establishmentSuccess) {
-            setTimeout(() => {
-              const currentState = getConnectionState(clientId);
-              if (
-                currentState &&
-                validateSocket(currentState.socket, clientId)
-              ) {
-                sendMessage({
+          if (establishResult.success) {
+            setTimeout(async () => {
+              if (!connectionState.isDestroyed) {
+                await sendMessageToConnection(connectionState, {
                   type: "auth-required",
                   message: "Please provide authentication token",
                 });
@@ -1054,25 +648,373 @@ const createServer = async () => {
           }
         }, 300);
 
-        logger.log(
-          "WebSocket",
-          `Client ${clientId} setup completed successfully`
-        );
+        logger.log("WebSocket", `Client ${clientId} setup completed successfully`);
       }
     );
   });
 
-  // Enhanced status endpoint
+  // MEMORY OPTIMIZATION: Enhanced message processing with timeout and cancellation
+  async function processMessage(connectionState, message) {
+    if (connectionState.abortController.signal.aborted) {
+      return;
+    }
+
+    logger.log("WebSocket", `Processing ${message.type} from ${connectionState.id}`);
+
+    // Handle authentication for non-system messages
+    if (
+      !connectionState.isAuthenticated &&
+      message.type !== "ping" &&
+      message.type !== "pong"
+    ) {
+      const user = await authenticateMessage(connectionState, message);
+
+      if (!user) {
+        await sendMessageToConnection(connectionState, {
+          type: "auth-failed",
+          message: "Invalid or missing authentication token",
+        });
+        return;
+      }
+
+      connectionState.user = user;
+      connectionState.isAuthenticated = true;
+
+      // Clear auth timeout
+      if (connectionState.authTimeout) {
+        clearTimeout(connectionState.authTimeout);
+        connectionState.authTimeout = null;
+      }
+
+      await sendMessageToConnection(connectionState, {
+        type: "auth-success",
+        message: "Authentication successful",
+        user_id: user.user_id,
+      });
+
+      logger.log("WebSocket", `Client ${connectionState.id} authenticated as user: ${user.user_id}`);
+    }
+
+    // Process message types
+    switch (message.type) {
+      case "ping":
+        await sendMessageToConnection(connectionState, { type: "pong" });
+        break;
+
+      case "pong":
+        connectionState.lastPingTime = Date.now();
+        break;
+
+      case "model-info":
+        if (connectionState.isAuthenticated && message.model_info) {
+          connectionState.modelInfo = message.model_info;
+          logger.log("WebSocket", `Model info received for ${connectionState.id}`);
+          await sendMessageToConnection(connectionState, {
+            type: "model-info-received",
+            message: "Model information updated successfully",
+          });
+        }
+        break;
+
+      case "text-input":
+        if (connectionState.isAuthenticated) {
+          await handleTextInput(connectionState, message);
+        } else {
+          await sendMessageToConnection(connectionState, {
+            type: "error",
+            message: "Authentication required for text input",
+          });
+        }
+        break;
+
+      case "interrupt":
+        if (connectionState.isAuthenticated) {
+          handleInterrupt(connectionState);
+        }
+        break;
+
+      case "connection-test":
+        await sendMessageToConnection(connectionState, {
+          type: "connection-test-response",
+          message: "Connection is working properly",
+          client_id: connectionState.id,
+          connection_stats: {
+            messages_processed: connectionState.messageCount,
+            connected_duration: Date.now() - connectionState.connectedAt.getTime(),
+            last_activity: connectionState.lastActivity,
+          },
+        });
+        break;
+
+      default:
+        logger.warn("WebSocket", `Unknown message type: ${message.type} from ${connectionState.id}`);
+        await sendMessageToConnection(connectionState, {
+          type: "error",
+          message: `Unknown message type: ${message.type}`,
+        });
+    }
+  }
+
+  // MEMORY OPTIMIZATION: Authentication with timeout and abort support
+  async function authenticateMessage(connectionState, message) {
+    connectionState.authAttempts++;
+    if (connectionState.authAttempts > connectionState.maxAuthAttempts) {
+      logger.warn("WebSocket", `Too many auth attempts for ${connectionState.id}`);
+      forceCleanupConnection(connectionState.id, "too_many_auth_attempts");
+      return null;
+    }
+
+    if (!message.auth_token) {
+      logger.warn("WebSocket", `No auth_token for ${connectionState.id}`);
+      return null;
+    }
+
+    try {
+      // MEMORY OPTIMIZATION: Add timeout to auth check
+      const authPromise = import("./api-helper.js").then((m) =>
+        m.checkForAuth(message.auth_token)
+      );
+      
+      const authResult = await Promise.race([
+        authPromise,
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Auth timeout')), 10000)
+        )
+      ]);
+
+      if (authResult && authResult.valid) {
+        logger.log("WebSocket", `Authentication successful for ${connectionState.id}`);
+        connectionState.authAttempts = 0;
+        return authResult;
+      } else {
+        logger.warn("WebSocket", `Authentication failed for ${connectionState.id}`);
+        return null;
+      }
+    } catch (error) {
+      logger.error("WebSocket", `Authentication error for ${connectionState.id}: ${error.message}`);
+      return null;
+    }
+  }
+
+  // MEMORY OPTIMIZATION: Text input handler with timeout and abort support
+  async function handleTextInput(connectionState, message) {
+    if (connectionState.abortController.signal.aborted) {
+      return;
+    }
+
+    const { user } = connectionState;
+
+    if (!message.text || !message.text.trim()) {
+      await sendMessageToConnection(connectionState, {
+        type: "error",
+        message: "Empty text input received",
+      });
+      return;
+    }
+
+    const responseId = `resp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    connectionState.currentResponseId = responseId;
+
+    try {
+      await sendMessageToConnection(connectionState, {
+        type: "response-queued",
+        response_id: responseId,
+      });
+
+      // Apply alternate spelling replacements
+      let processedText = await applyAlternateSpelling(message.text, user.user_id);
+
+      logger.log("WebSocket", `Processing text input for user ${user.user_id}`);
+
+      // MEMORY OPTIMIZATION: Add timeout to AI response
+      const chatPromise = aiHelper.respondToChat(
+        {
+          message: processedText,
+          user: user.user_name || "User",
+        },
+        user.user_id
+      );
+
+      const chatResponse = await Promise.race([
+        chatPromise,
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('AI response timeout')), 60000)
+        )
+      ]);
+
+      if (!chatResponse || !chatResponse.success || !chatResponse.text) {
+        throw new Error(chatResponse?.error || "Failed to generate response");
+      }
+
+      // Send text response
+      await sendMessageToConnection(connectionState, {
+        type: "full-text",
+        text: chatResponse.text,
+        response_id: responseId,
+      });
+
+      logger.log("WebSocket", `Text response sent for user ${user.user_id}`);
+
+      // Generate audio if enabled
+      if (user.tts_enabled) {
+        await generateAndSendAudio(connectionState, chatResponse.text, responseId);
+      } else {
+        await sendMessageToConnection(connectionState, {
+          type: "synthesis-complete",
+          response_id: responseId,
+        });
+      }
+
+    } catch (error) {
+      logger.error("WebSocket", `Error processing text input for ${connectionState.id}: ${error.message}`);
+      await sendMessageToConnection(connectionState, {
+        type: "error",
+        message: "Failed to generate response: " + error.message,
+        response_id: responseId,
+      });
+      connectionState.currentResponseId = null;
+    }
+  }
+
+  // Apply alternate spelling replacements for vocal inputs
+  async function applyAlternateSpelling(text, userId) {
+    try {
+      const userObj = await import("./api-helper.js").then((m) =>
+        m.returnAuthObject(userId)
+      );
+
+      if (
+        !userObj ||
+        !userObj.alternateSpell ||
+        !Array.isArray(userObj.alternateSpell)
+      ) {
+        return text;
+      }
+
+      let processedText = text;
+
+      for (const alternateEntry of userObj.alternateSpell) {
+        if (typeof alternateEntry === "string") {
+          const regex = new RegExp(
+            `\\b${escapeRegExp(alternateEntry)}\\b`,
+            "gi"
+          );
+          processedText = processedText.replace(regex, userObj.bot_name);
+        } else if (
+          typeof alternateEntry === "object" &&
+          alternateEntry.from &&
+          alternateEntry.to
+        ) {
+          const regex = new RegExp(
+            `\\b${escapeRegExp(alternateEntry.from)}\\b`,
+            "gi"
+          );
+          processedText = processedText.replace(regex, alternateEntry.to);
+        }
+      }
+
+      return processedText;
+    } catch (error) {
+      logger.error("WebSocket", `Error applying alternate spelling: ${error.message}`);
+      return text;
+    }
+  }
+
+  function escapeRegExp(string) {
+    return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  // MEMORY OPTIMIZATION: Audio generation with timeout and abort support
+  async function generateAndSendAudio(connectionState, text, responseId) {
+    if (connectionState.abortController.signal.aborted) {
+      return;
+    }
+
+    const { user, modelInfo } = connectionState;
+
+    try {
+      await sendMessageToConnection(connectionState, {
+        type: "synthesis-started",
+        response_id: responseId,
+      });
+
+      logger.log("WebSocket", `Generating TTS audio for user ${user.user_id}`);
+
+      // MEMORY OPTIMIZATION: Add timeout to audio generation
+      const audioPromise = aiHelper.respondWithVoice(text, user.user_id);
+      const audioResult = await Promise.race([
+        audioPromise,
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Audio generation timeout')), 30000)
+        )
+      ]);
+
+      if (audioResult.error) {
+        throw new Error(audioResult.error);
+      }
+
+      await sendMessageToConnection(connectionState, {
+        type: "synthesis-complete",
+        response_id: responseId,
+      });
+
+      const displayText = {
+        text: text,
+        name: user.bot_name || "Assistant",
+        avatar: user.avatar_url || "",
+      };
+
+      const actions = {};
+      if (
+        modelInfo &&
+        modelInfo.expressions &&
+        Array.isArray(modelInfo.expressions)
+      ) {
+        actions.expressions = selectExpressions(text, modelInfo.expressions);
+      }
+
+      await sendMessageToConnection(connectionState, {
+        type: "audio-url",
+        audio_url: audioResult,
+        display_text: displayText,
+        actions: Object.keys(actions).length > 0 ? actions : undefined,
+        response_id: responseId,
+        audio_format: "wav",
+        sample_rate: 22050,
+        bit_depth: 16,
+      });
+
+      logger.log("WebSocket", `Audio URL sent for user ${user.user_id}`);
+    } catch (error) {
+      logger.error("WebSocket", `Error generating audio for ${user.user_id}: ${error.message}`);
+      await sendMessageToConnection(connectionState, {
+        type: "error",
+        message: "Failed to generate audio response",
+        response_id: responseId,
+        error_details: error.message,
+      });
+    }
+  }
+
+  function handleInterrupt(connectionState) {
+    const { user } = connectionState;
+    logger.log("WebSocket", `Interrupt received from user ${user?.user_id || "unknown"}`);
+    connectionState.currentResponseId = null;
+    connectionState.abortController.abort(); // Cancel any ongoing operations
+    sendMessageToConnection(connectionState, {
+      type: "interrupt",
+      message: "Response interrupted",
+    });
+  }
+
+  // Enhanced status endpoint with memory information
   fastify.get("/ws-status", async (request, reply) => {
     const connections = Array.from(activeConnections.values()).map((conn) => ({
       id: conn.id,
       authenticated: conn.isAuthenticated,
       user_id: conn.user?.user_id || null,
       connected_at: conn.connectedAt,
-      socket_state:
-        conn.socket?.readyState !== undefined
-          ? conn.socket.readyState
-          : "unknown",
+      socket_state: conn.getSocket()?.readyState ?? "destroyed",
       is_destroyed: conn.isDestroyed,
       processing_message: conn.processingMessage,
       send_in_progress: conn.sendInProgress,
@@ -1082,60 +1024,58 @@ const createServer = async () => {
       auth_attempts: conn.authAttempts,
     }));
 
+    const memoryUsage = process.memoryUsage();
+
     return {
       websocket_enabled: true,
       active_connections: activeConnections.size,
-      cleanup_queue_size: connectionCleanupQueue.size,
+      cleanup_queue_size: cleanupQueue.size,
+      rate_limit_entries: messageRateLimits.size,
+      ip_tracking_entries: connectionsByIP.size,
       connections: connections,
+      memory_info: {
+        heap_used: `${Math.round(memoryUsage.heapUsed / 1024 / 1024)}MB`,
+        heap_total: `${Math.round(memoryUsage.heapTotal / 1024 / 1024)}MB`,
+        external: `${Math.round(memoryUsage.external / 1024 / 1024)}MB`,
+        rss: `${Math.round(memoryUsage.rss / 1024 / 1024)}MB`,
+      },
       system_info: {
         uptime: process.uptime(),
-        memory_usage: process.memoryUsage(),
         timestamp: new Date().toISOString(),
       },
     };
   });
 
-  logger.log(
-    "WebSocket",
-    "Fixed VTuber WebSocket route registered at /ws-client"
-  );
+  // MEMORY OPTIMIZATION: Graceful shutdown cleanup
+  const gracefulShutdown = () => {
+    logger.log("WebSocket", "Starting graceful shutdown...");
+    
+    // Clear cleanup interval
+    clearInterval(cleanupInterval);
+    
+    // Cleanup all active connections
+    for (const [clientId] of activeConnections) {
+      forceCleanupConnection(clientId, "server_shutdown");
+    }
+    
+    // Clear tracking maps
+    activeConnections.clear();
+    connectionsByIP.clear();
+    messageRateLimits.clear();
+    cleanupQueue.clear();
+    
+    logger.log("WebSocket", "Graceful shutdown completed");
+  };
 
-  /**
-   * Expression selection utility
-   */
+  process.on('SIGTERM', gracefulShutdown);
+  process.on('SIGINT', gracefulShutdown);
+
+  // Expression selection utility (unchanged for brevity)
   function selectExpressions(text, availableExpressions) {
     const emotionKeywords = {
-      happy: [
-        "happy",
-        "joy",
-        "excited",
-        "great",
-        "awesome",
-        "wonderful",
-        "amazing",
-        "!",
-        "😊",
-        "😄",
-      ],
-      sad: [
-        "sad",
-        "sorry",
-        "disappointed",
-        "unfortunate",
-        "regret",
-        "😢",
-        "😞",
-      ],
-      surprised: [
-        "wow",
-        "amazing",
-        "incredible",
-        "unbelievable",
-        "surprise",
-        "!",
-        "😮",
-        "😲",
-      ],
+      happy: ["happy", "joy", "excited", "great", "awesome", "wonderful", "amazing", "!", "😊", "😄"],
+      sad: ["sad", "sorry", "disappointed", "unfortunate", "regret", "😢", "😞"],
+      surprised: ["wow", "amazing", "incredible", "unbelievable", "surprise", "!", "😮", "😲"],
       angry: ["angry", "frustrated", "annoyed", "mad", "irritated", "😠", "😡"],
       neutral: ["hello", "hi", "okay", "alright", "yes", "no", "maybe"],
     };
@@ -1145,9 +1085,7 @@ const createServer = async () => {
     let maxMatches = 0;
 
     for (const [emotion, keywords] of Object.entries(emotionKeywords)) {
-      const matches = keywords.filter((keyword) =>
-        textLower.includes(keyword)
-      ).length;
+      const matches = keywords.filter((keyword) => textLower.includes(keyword)).length;
       if (matches > maxMatches) {
         maxMatches = matches;
         detectedEmotion = emotion;
@@ -1162,8 +1100,7 @@ const createServer = async () => {
       neutral: ["neutral", "default", "calm", 8, 9],
     };
 
-    const possibleExpressions =
-      expressionMapping[detectedEmotion] || expressionMapping.neutral;
+    const possibleExpressions = expressionMapping[detectedEmotion] || expressionMapping.neutral;
     const selectedExpressions = [];
 
     for (const expr of possibleExpressions) {
@@ -1180,7 +1117,7 @@ const createServer = async () => {
     return selectedExpressions;
   }
 
-  logger.log("WebSocket", "VTuber WebSocket route registered at /ws-client");
+  logger.log("WebSocket", "Memory-optimized WebSocket route registered at /ws-client");
 
   // Register other routes
   await fastify.register(routes, { prefix: "/api/v1" });
@@ -1195,9 +1132,7 @@ const createServer = async () => {
   return fastify;
 };
 
-/**
- * Preflight checks
- */
+// Rest of the code remains the same (preflightChecks, launchRest, initializeApp functions)
 export async function preflightChecks() {
   try {
     const axios = (await import("axios")).default;
@@ -1281,9 +1216,6 @@ export async function preflightChecks() {
   }
 }
 
-/**
- * Server launch
- */
 export async function launchRest(fastify) {
   const portNum = await retrieveConfigValue("server.port");
   const internalHost = await retrieveConfigValue("server.endpoints.internal");
@@ -1316,9 +1248,6 @@ export async function launchRest(fastify) {
   }
 }
 
-/**
- * Application initialization
- */
 export async function initializeApp() {
   try {
     const allUsers = await returnAPIKeys();
@@ -1403,7 +1332,7 @@ export async function initializeApp() {
     logger.log("System", "Enspira is fully initialized and ready!");
     logger.log(
       "WebSocket",
-      "VTuber WebSocket integration is active and ready for connections!"
+      "Memory-optimized VTuber WebSocket integration is active and ready for connections!"
     );
 
     return { server, status };

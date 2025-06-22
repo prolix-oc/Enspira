@@ -4,7 +4,6 @@ import { socialMedias } from "./twitch-helper.js";
 import { interpretEmotions } from "./data-helper.js";
 import { returnAuthObject } from "./api-helper.js";
 import {
-  tokenizedFromRemote,
   promptTokenizedFromRemote,
 } from "./token-helper.js";
 import { retrieveConfigValue } from "./config-helper.js";
@@ -451,7 +450,7 @@ export async function sendChatCompletionRequest(
     // Tokenize the full response (use simpler calculation if tokenization fails)
     let generatedTokens;
     try {
-      generatedTokens = await tokenizedFromRemote(fullResponse);
+      generatedTokens = await promptTokenizedFromRemote(fullResponse);
     } catch (tokenizationError) {
       logger.warn(
         "API",
@@ -644,7 +643,7 @@ export async function sendChatCompletionRequestCoT(requestBody, modelConfig) {
     // Tokenize the full response
     let generatedTokens;
     try {
-      generatedTokens = await tokenizedFromRemote(
+      generatedTokens = await promptTokenizedFromRemote(
         fullResponse,
         modelConfig.modelType
       );
