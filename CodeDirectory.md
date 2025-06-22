@@ -1,3 +1,7 @@
+## Enspira (Server)
+
+This is the backend server responsible for handling AI logic, Twitch integration, and API endpoints.
+
 .
 ├── auth/
 │   └── auth_keys.example.json  # An example file showing the data structure for user authentication, including API tokens and Twitch credentials.
@@ -28,6 +32,7 @@
 │   ├── layout.njk  # The base layout template that provides the common HTML structure, navigation, and styling for all web pages.
 │   ├── login.njk  # A simple template for the user login page.
 │   ├── settings.njk  # The user settings page template, where users can configure their profile, social media, and security.
+│   ├── twitch-health.njk  # A template for displaying the health and status of the Twitch integration services.
 │   └── world.njk  # The world editor template, allowing users to define the context, scenario, and environment for their AI.
 │
 ├── .cache_ggshield  # A cache file used by the GitGuardian shield tool to avoid re-reporting previously found secrets.
@@ -39,7 +44,8 @@
 ├── config-helper.js  # A utility for loading and accessing values from the `config.json` file using a simple dot-notation path.
 ├── create-global-logger.js  # Sets up and exports a global, shared logger instance to ensure consistent logging across the application.
 ├── data-helper.js  # A module for retrieving and processing data from external sources, like scraping web pages to augment AI context.
-├── error.txt  # A simple text file used to log a specific error output, likely for debugging a startup or runtime issue.
+├── debug-mention-detection.js # A utility script for testing and debugging the logic that detects character name mentions in chat messages.
+├── expression-parser.js  # Handles parsing of expression tags within AI responses to control the character's facial expressions.
 ├── index.js  # The main entry point for the application, responsible for initializing the Fastify server and registering all routes.
 ├── logger.js  # A module that creates a flexible logger capable of outputting to both a terminal UI and dedicated log files.
 ├── main.js  # The primary application file that sets up a terminal-based UI using `neo-blessed` to display logs and handle commands.
@@ -49,6 +55,7 @@
 ├── prompt-helper.js  # A key module for building and formatting the prompts sent to the LLM by combining instructions, context, and user messages.
 ├── response-monitor.js  # A utility for monitoring and recording statistics about API responses to track performance and detect issues.
 ├── restart-helper.js  # A small utility script that runs in a detached process to handle application restarts gracefully.
+├── setup-alternate-spelling.js # A utility script to configure alternate spellings for character names in the database, improving voice interaction.
 ├── start.bat  # A simple batch script to start the application on Windows by executing `node main.js`.
 ├── template-engine.js  # Sets up the Nunjucks templating engine used for rendering the HTML of the web dashboard.
 ├── token-helper.js  # A utility that handles tokenization tasks, providing functions to count tokens in prompts and responses.
