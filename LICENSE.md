@@ -45,6 +45,7 @@ Subject to your compliance with **all** terms and conditions of this License, th
   d) **Code Snippets:** You may include small excerpts of the Software's code (not to exceed 100 lines) in your publications for the sole purpose of explaining or discussing specific technical features or methods relevant to your research.
 
   e) **Limitations:**
+  
     i) This right to publish does not override Your obligation to contribute back Improvements as outlined in Section 3.
     
     ii) You may not publish the entire source code or substantial portions of it.
