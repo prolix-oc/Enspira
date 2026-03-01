@@ -1,0 +1,25 @@
+# Bun configuration for Enspira TypeScript migration
+# https://bun.sh/docs/runtime/bunfig
+
+[install]
+# Use exact versions for reproducible builds
+exact = true
+
+[run]
+# Enable source maps for better debugging
+sourcemap = "external"
+
+[test]
+# Test configuration (when we add tests)
+coverage = true
+
+# TypeScript compilation settings
+[bundle]
+target = "bun"
+format = "esm"
+sourcemap = "external"
+minify = false
+
+# Development settings
+[serve]
+port = 3002

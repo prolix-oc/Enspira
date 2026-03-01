@@ -1,0 +1,22 @@
+{
+  "name": "enspira-extension-template",
+  "version": "1.0.0",
+  "description": "Template for Enspira extensions",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "enspira",
+    "extension",
+    "twitch"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  }
+}
